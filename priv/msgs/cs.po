@@ -1,0 +1,2489 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: 2.1.0-alpha\n"
+"POT-Creation-Date: \n"
+"PO-Revision-Date: \n"
+"Last-Translator: Jan Pinkas\n"
+"Language-Team: \n"
+"Language: cs\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Language: Czech (čeština)\n"
+"X-Additional-Translator: Lukáš Polívka [spike411] xmpp:spike411@jabber.cz\n"
+"X-Additional-Translator: Milos Svasek [DuxforD] from openheads.net\n"
+"X-Generator: Poedit 2.0.1\n"
+
+#: mod_muc_log:413 mod_muc_log:587
+msgid " has set the subject to: "
+msgstr " změnil(a) téma na: "
+
+#: mod_muc_room:1891
+msgid "A password is required to enter this room"
+msgstr "Pro vstup do místnosti musíte zadat heslo"
+
+#: ejabberd_oauth:448
+msgid "Accept"
+msgstr "Přijmout"
+
+#: mod_configure:1109
+msgid "Access Configuration"
+msgstr "Konfigurace přístupů"
+
+#: mod_configure:1091
+msgid "Access Control List Configuration"
+msgstr "Konfigurace seznamu přístupových práv (ACL)"
+
+#: ejabberd_web_admin:472 ejabberd_web_admin:511 mod_configure:185
+#: mod_configure:514
+msgid "Access Control Lists"
+msgstr "Seznamy přístupových práv (ACL)"
+
+#: ejabberd_web_admin:577 ejabberd_web_admin:610 mod_configure:187
+#: mod_configure:515
+msgid "Access Rules"
+msgstr "Pravidla přístupů"
+
+#: mod_configure:1095
+msgid "Access control lists"
+msgstr "Seznamy přístupových práv (ACL)"
+
+#: ejabberd_c2s:410 ejabberd_c2s:659 ejabberd_s2s:389 ejabberd_service:210
+#: mod_announce:255 mod_announce:273 mod_announce:275 mod_announce:277
+#: mod_announce:279 mod_announce:281 mod_announce:283 mod_announce:285
+#: mod_announce:287 mod_announce:289 mod_announce:291 mod_announce:351
+#: mod_announce:353 mod_announce:355 mod_announce:357 mod_announce:359
+#: mod_announce:361 mod_announce:363 mod_announce:365 mod_announce:367
+#: mod_announce:369 mod_announce:420 mod_announce:848 mod_configure:206
+#: mod_configure:219 mod_configure:220 mod_configure:221 mod_configure:222
+#: mod_configure:224 mod_configure:225 mod_configure:226 mod_configure:227
+#: mod_configure:229 mod_configure:231 mod_configure:233 mod_configure:235
+#: mod_configure:237 mod_configure:239 mod_configure:241 mod_configure:243
+#: mod_configure:245 mod_configure:247 mod_configure:249 mod_configure:251
+#: mod_configure:253 mod_configure:255 mod_configure:257 mod_configure:259
+#: mod_configure:261 mod_configure:263 mod_configure:265 mod_configure:267
+#: mod_configure:313 mod_configure:435 mod_configure:780 mod_configure:782
+#: mod_configure:784 mod_configure:786 mod_configure:788 mod_configure:790
+#: mod_configure:792 mod_configure:794 mod_configure:1743 mod_http_upload:567
+#: mod_irc:249 mod_legacy_auth:141 mod_muc:394 mod_proxy65_service:175
+#: mod_proxy65_service:224 mod_register:119 mod_register:262 mod_register:314
+#: mod_register:315 mod_roster:180 mod_s2s_dialback:322
+msgid "Access denied by service policy"
+msgstr "Přístup byl zamítnut nastavením služby"
+
+#: mod_configure:1113
+msgid "Access rules"
+msgstr "Pravidla přístupů"
+
+#: mod_configure:1775
+msgid "Action on user"
+msgstr "Akce aplikovaná na uživatele"
+
+#: mod_roster:974
+msgid "Add Jabber ID"
+msgstr "Přidat Jabber ID"
+
+#: ejabberd_web_admin:991 mod_shared_roster:761
+msgid "Add New"
+msgstr "Přidat nový"
+
+#: ejabberd_web_admin:1158 mod_configure:166 mod_configure:521
+#: mod_configure:1118
+msgid "Add User"
+msgstr "Přidat uživatele"
+
+#: ejabberd_web_admin:401 ejabberd_web_admin:412
+msgid "Administration"
+msgstr "Administrace"
+
+#: mod_configure:1770
+msgid "Administration of "
+msgstr "Administrace "
+
+#: mod_groupchat_restrictions:277
+#, fuzzy
+msgid "Administrator"
+msgstr "Administrace"
+
+#: mod_muc_room:2534
+msgid "Administrator privileges required"
+msgstr "Potřebujete práva administrátora"
+
+#: mod_configure:507
+msgid "All Users"
+msgstr "Všichni uživatelé"
+
+#: ejabberd_web_admin:724
+msgid "All activity"
+msgstr "Všechny aktivity"
+
+#: mod_muc_log:808
+msgid "Allow users to change the subject"
+msgstr "Povolit uživatelům měnit téma místnosti"
+
+#: mod_muc_log:814
+msgid "Allow users to query other users"
+msgstr "Povolit uživatelům odesílat požadavky (query) ostatním uživatelům"
+
+#: mod_muc_log:816
+msgid "Allow users to send invites"
+msgstr "Povolit uživatelům posílání pozvánek"
+
+#: mod_muc_log:810
+msgid "Allow users to send private messages"
+msgstr "Povolit uživatelům odesílat soukromé zprávy"
+
+#: mod_muc_log:819
+msgid "Allow visitors to change nickname"
+msgstr "Povolit návštěvníkům měnit přezdívku"
+
+#: mod_muc_log:812
+msgid "Allow visitors to send private messages to"
+msgstr "Povolit návštěvníkům odesílat soukromé zprávy"
+
+#: mod_muc_log:821
+msgid "Allow visitors to send status text in presence updates"
+msgstr "Povolit návštěvníkům posílat stavové zprávy ve statusu"
+
+#: mod_announce:611
+msgid "Announcements"
+msgstr "Oznámení"
+
+#: mod_muc_log:476
+msgid "April"
+msgstr ". dubna"
+
+#: mod_muc_log:480
+msgid "August"
+msgstr ". srpna"
+
+#: mod_pubsub:1863
+msgid "Automatic node creation is not enabled"
+msgstr "Automatické vytváření uzlů není povoleno"
+
+#: ejabberd_web_admin:1581 mod_configure:148 mod_configure:617
+msgid "Backup"
+msgstr "Zálohovat"
+
+#: mod_configure:584
+msgid "Backup Management"
+msgstr "Správa zálohování"
+
+#: ejabberd_web_admin:1693
+msgid "Backup of ~p"
+msgstr "Záloha ~p"
+
+#: mod_configure:948
+msgid "Backup to File at "
+msgstr "Záloha do souboru na "
+
+#: ejabberd_web_admin:477 ejabberd_web_admin:516 ejabberd_web_admin:582
+#: ejabberd_web_admin:615 ejabberd_web_admin:651 ejabberd_web_admin:1136
+#: ejabberd_web_admin:1419 ejabberd_web_admin:1575 ejabberd_web_admin:1859
+#: ejabberd_web_admin:1888 mod_roster:964 mod_shared_roster:767
+#: mod_shared_roster:862
+msgid "Bad format"
+msgstr "Nesprávný formát"
+
+#: mod_vcard_ldap:334 mod_vcard_ldap:347 mod_vcard_mnesia:106
+#: mod_vcard_mnesia:120 mod_vcard_sql:163 mod_vcard_sql:177
+msgid "Birthday"
+msgstr "Datum narození"
+
+#: mod_groupchat_restrictions:279
+#, fuzzy
+msgid "Block participants"
+msgstr "Účastník"
+
+#: mod_legacy_auth:107
+msgid "Both the username and the resource are required"
+msgstr "Uživatelské jméno i zdroj jsou požadované položky"
+
+#: mod_proxy65_service:215
+msgid "Bytestream already activated"
+msgstr "Bytestream již byl aktivován"
+
+#: ejabberd_captcha:137
+msgid "CAPTCHA web page"
+msgstr "Webová stránka CAPTCHA"
+
+#: ejabberd_web_admin:1921
+msgid "CPU Time:"
+msgstr "Čas procesoru:"
+
+#: mod_privacy:326
+msgid "Cannot remove active list"
+msgstr "Aktivní seznam nelze odebrat"
+
+#: mod_privacy:333
+msgid "Cannot remove default list"
+msgstr "Výchozí seznam nelze odebrat"
+
+#: ejabberd_web_admin:1393 mod_register_web:212 mod_register_web:373
+#: mod_register_web:381 mod_register_web:406
+msgid "Change Password"
+msgstr "Změnit heslo"
+
+#: mod_configure:174 mod_configure:528
+msgid "Change User Password"
+msgstr "Změnit heslo uživatele"
+
+#: mod_groupchat_restrictions:280
+#, fuzzy
+msgid "Change badges"
+msgstr "Změnit heslo"
+
+#: mod_groupchat_restrictions:281
+#, fuzzy
+msgid "Change nicknames"
+msgstr "Přezdívka"
+
+#: mod_register:284
+msgid "Changing password is not allowed"
+msgstr "Změna hesla není povolena"
+
+#: mod_muc_room:2770
+msgid "Changing role/affiliation is not allowed"
+msgstr "Změna role/příslušnosti není povolena"
+
+#: mod_register_web:258
+msgid "Characters not allowed:"
+msgstr "Nepřípustné znaky:"
+
+#: mod_muc_log:358 mod_muc_log:367
+msgid "Chatroom configuration modified"
+msgstr "Nastavení diskuzní místnosti bylo změněno"
+
+#: mod_muc_log:453
+msgid "Chatroom is created"
+msgstr "Místnost vytvořena"
+
+#: mod_muc_log:455
+msgid "Chatroom is destroyed"
+msgstr "Místnost zrušena"
+
+#: mod_muc_log:457
+msgid "Chatroom is started"
+msgstr "Místnost spuštěna"
+
+#: mod_muc_log:459
+msgid "Chatroom is stopped"
+msgstr "Místnost zastavena"
+
+#: mod_muc:975 mod_muc_admin:497
+msgid "Chatrooms"
+msgstr "Místnosti"
+
+#: mod_register:200
+msgid "Choose a username and password to register with this server"
+msgstr "Zadejte jméno uživatele a heslo pro registraci na tomto serveru"
+
+#: mod_configure:920
+msgid "Choose modules to stop"
+msgstr "Vyberte moduly, které mají být zastaveny"
+
+#: mod_configure:881
+msgid "Choose storage type of tables"
+msgstr "Vyberte typ úložiště pro tabulky"
+
+#: mod_pubsub:1353
+msgid "Choose whether to approve this entity's subscription."
+msgstr "Zvolte, zda chcete schválit odebírání touto entitou."
+
+#: mod_vcard_ldap:336 mod_vcard_ldap:349 mod_vcard_mnesia:108
+#: mod_vcard_mnesia:122 mod_vcard_sql:165 mod_vcard_sql:179
+msgid "City"
+msgstr "Město"
+
+#: mod_stream_mgmt:458
+msgid "Client acknowledged more stanzas than sent by server"
+msgstr ""
+
+#: mod_adhoc:108 mod_adhoc:136 mod_adhoc:152 mod_adhoc:168
+msgid "Commands"
+msgstr "Příkazy"
+
+#: mod_muc:454
+msgid "Conference room does not exist"
+msgstr "Místnost neexistuje"
+
+#: mod_configure:129 mod_configure:286 mod_configure:306 mod_configure:504
+msgid "Configuration"
+msgstr "Konfigurace"
+
+#: mod_muc_room:3166
+msgid "Configuration of room ~s"
+msgstr "Konfigurace místnosti ~s"
+
+#: ejabberd_web_admin:1425
+msgid "Connected Resources:"
+msgstr "Připojené zdroje:"
+
+#: mod_irc:511
+msgid "Connections parameters"
+msgstr "Parametry spojení"
+
+#: mod_vcard_ldap:335 mod_vcard_ldap:348 mod_vcard_mnesia:107
+#: mod_vcard_mnesia:121 mod_vcard_sql:164 mod_vcard_sql:178
+msgid "Country"
+msgstr "Země"
+
+#: ejabberd_web_admin:1580 mod_configure:139 mod_configure:580
+msgid "Database"
+msgstr "Databáze"
+
+#: mod_configure:879
+msgid "Database Tables Configuration at "
+msgstr "Konfigurace databázových tabulek "
+
+#: ejabberd_web_admin:1655
+msgid "Database Tables at ~p"
+msgstr "Databázové tabulky na ~p"
+
+#: mod_blocking:261 mod_carboncopy:130 mod_irc:471 mod_irc:559 mod_irc:723
+#: mod_last:207 mod_mam:579 mod_muc:749 mod_offline:282 mod_offline:573
+#: mod_privacy:178 mod_privacy:196 mod_privacy:290 mod_privacy:306
+#: mod_privacy:339 mod_privacy:356 mod_private:96 mod_private:103
+#: mod_proxy65_service:220 mod_pubsub:3547 mod_pubsub:3626 mod_pubsub:3629
+#: mod_push:268 mod_push:283 mod_vcard:225 node_flat_sql:770
+#: nodetree_tree_sql:124 nodetree_tree_sql:138 nodetree_tree_sql:264
+msgid "Database failure"
+msgstr "Chyba databáze"
+
+#: mod_muc_log:484
+msgid "December"
+msgstr ". prosince"
+
+#: mod_muc_log:806
+msgid "Default users as participants"
+msgstr "Uživatelé jsou implicitně členy"
+
+#: ejabberd_web_admin:525 ejabberd_web_admin:625 mod_offline:696
+#: mod_shared_roster:775
+msgid "Delete Selected"
+msgstr "Smazat vybrané"
+
+#: mod_configure:168 mod_configure:522 mod_configure:1135
+msgid "Delete User"
+msgstr "Smazat uživatele"
+
+#: mod_announce:629
+msgid "Delete message of the day"
+msgstr "Smazat zprávu dne"
+
+#: mod_announce:631
+msgid "Delete message of the day on all hosts"
+msgstr "Smazat zprávu dne na všech hostitelích"
+
+#: mod_groupchat_restrictions:282
+#, fuzzy
+msgid "Delete messages"
+msgstr "Smazat zprávu dne"
+
+#: mod_shared_roster:836
+msgid "Description:"
+msgstr "Popis:"
+
+#: mod_configure:889
+msgid "Disc only copy"
+msgstr "Jen kopie disku"
+
+#: mod_shared_roster:850
+msgid "Displayed Groups:"
+msgstr "Zobrazené skupiny:"
+
+#: mod_register_web:270
+msgid ""
+"Don't tell your password to anybody, not even the administrators of the "
+"Jabber server."
+msgstr ""
+"Nikdy nikomu nesdělujte své heslo, ani administrátorovi serveru Jabberu."
+
+#: mod_configure:971
+msgid "Dump Backup to Text File at "
+msgstr "Uložit zálohu do textového souboru na "
+
+#: mod_configure:154 mod_configure:621
+msgid "Dump to Text File"
+msgstr "Uložit do textového souboru"
+
+#: mod_roster:173
+msgid "Duplicated groups are not allowed by RFC6121"
+msgstr "Duplicitní skupiny nejsou povoleny dle RFC6121"
+
+#: mod_configure:1779
+msgid "Edit Properties"
+msgstr "Upravit vlastnosti"
+
+#: mod_muc_room:3930
+msgid "Either approve or decline the voice request."
+msgstr "Povolit nebo odmítnout voice žádost."
+
+#: ejabberd_web_admin:1667
+msgid "Elements"
+msgstr "Položek"
+
+#: mod_vcard_ldap:337 mod_vcard_ldap:350 mod_vcard_mnesia:109
+#: mod_vcard_mnesia:123 mod_vcard_sql:166 mod_vcard_sql:180
+msgid "Email"
+msgstr "E-mail"
+
+#: mod_register:281
+msgid "Empty password"
+msgstr "Prázdné heslo"
+
+#: mod_muc_log:817
+msgid "Enable logging"
+msgstr "Zaznamenávat konverzace"
+
+#: mod_push:256
+msgid "Enabling push without 'node' attribute is not supported"
+msgstr "Aktivováno push bez atributu 'node' není podporováno"
+
+#: mod_irc:818
+msgid "Encoding for server ~b"
+msgstr "Kódování pro server ~b"
+
+#: mod_configure:170 mod_configure:524 mod_configure:1145
+msgid "End User Session"
+msgstr "Ukončit sezení uživatele"
+
+#: mod_configure:938
+msgid "Enter list of {Module, [Options]}"
+msgstr "Vložte seznam modulů {Modul, [Parametry]}"
+
+#: mod_muc:723
+msgid "Enter nickname you want to register"
+msgstr "Zadejte přezdívku, kterou chcete zaregistrovat"
+
+#: mod_configure:950 mod_configure:962
+msgid "Enter path to backup file"
+msgstr "Zadajte cestu k souboru se zálohou"
+
+#: mod_configure:996
+msgid "Enter path to jabberd14 spool dir"
+msgstr "Zadejte cestu k jabberd14 spool adresáři"
+
+#: mod_configure:985
+msgid "Enter path to jabberd14 spool file"
+msgstr "Zadejte cestu k spool souboru jabberd14"
+
+#: mod_configure:974
+msgid "Enter path to text file"
+msgstr "Zadajte cestu k textovému souboru"
+
+#: ejabberd_captcha:72
+msgid "Enter the text you see"
+msgstr "Zadejte text, který vidíte"
+
+#: mod_irc:743
+msgid ""
+"Enter username and encodings you wish to use for connecting to IRC servers.  "
+"Press 'Next' to get more fields to fill in.  Press 'Complete' to save "
+"settings."
+msgstr ""
+"Zadejte přezdívku a kódování, které chcete používat pro připojení k serverům "
+"IRC. Stiskněte 'Další' pro více políček k vyplnění. Stiskněte 'Dokončit' pro "
+"uložení nastavení."
+
+#: mod_irc:525
+msgid ""
+"Enter username, encodings, ports and passwords you wish to use for "
+"connecting to IRC servers"
+msgstr ""
+"Zadejte přezdívku, kódování, porty a hesla, které chcete používat pro "
+"připojení k serverům IRC"
+
+#: mod_vcard:200
+msgid "Erlang Jabber Server"
+msgstr "Erlang Jabber Server"
+
+#: ejabberd_web_admin:1690 ejabberd_web_admin:1861
+msgid "Error"
+msgstr "Chyba"
+
+#: mod_irc:505
+msgid ""
+"Example: [{\"irc.lucky.net\", \"koi8-r\", 6667, \"secret\"}, {\"vendetta.fef."
+"net\", \"iso8859-1\", 7000}, {\"irc.sometestserver.net\", \"utf-8\"}]."
+msgstr ""
+"Příklad: [{\"irc.lucky.net\", \"koi8-r\", 6667, \"secret\"}, {\"vendetta.fef."
+"net\", \"iso8859-1\", 7000}, {\"irc.sometestserver.net\", \"utf-8\"}].2\"}]."
+
+#: ejabberd_web_admin:1798
+msgid "Export all tables as SQL queries to a file:"
+msgstr "Zálohovat všechny tabulky jako SQL dotazy do souboru:"
+
+#: ejabberd_web_admin:1770
+msgid "Export data of all users in the server to PIEFXIS files (XEP-0227):"
+msgstr "Exportovat všechny uživatele do souboru ve formátu PIEFXIS (XEP-0227):"
+
+#: ejabberd_web_admin:1782
+msgid "Export data of users in a host to PIEFXIS files (XEP-0227):"
+msgstr ""
+"Exportovat uživatele na hostiteli do souboru ve formátu PIEFXIS (XEP-0227):"
+
+#: mod_delegation:273
+msgid "External component failure"
+msgstr "Chyba externí komponenty"
+
+#: mod_delegation:281
+msgid "External component timeout"
+msgstr "Timeout externí komponenty"
+
+#: mod_proxy65_service:207
+msgid "Failed to activate bytestream"
+msgstr "Chyba při aktivaci bytestreamu"
+
+#: mod_muc_room:929
+msgid "Failed to extract JID from your voice request approval"
+msgstr "Došlo k chybě při získávání Jabber ID z vaší žádosti o voice práva"
+
+#: mod_delegation:254
+msgid "Failed to map delegated namespace to external component"
+msgstr "Chyba při mapování namespace pro externí komponentu"
+
+#: mod_http_upload:624
+msgid "Failed to parse HTTP response"
+msgstr "Chyba parsování HTTP odpovědi"
+
+#: mod_irc:410
+msgid "Failed to parse chanserv"
+msgstr "Chyba při parsování chanserv"
+
+#: mod_muc_room:3302
+msgid "Failed to process option '~s'"
+msgstr "Chyba při zpracování možnosti '~s'"
+
+#: mod_vcard_ldap:332 mod_vcard_ldap:345 mod_vcard_mnesia:104
+#: mod_vcard_mnesia:118 mod_vcard_sql:161 mod_vcard_sql:175
+msgid "Family Name"
+msgstr "Příjmení"
+
+#: mod_muc_log:474
+msgid "February"
+msgstr ". února"
+
+#: mod_http_upload:577
+msgid "File larger than ~w bytes"
+msgstr "Soubor větší než ~w bytů"
+
+#: mod_vcard:440
+msgid ""
+"Fill in the form to search for any matching Jabber User (Add * to the end of "
+"field to match substring)"
+msgstr ""
+"Pro vyhledání uživatele Jabberu vyplňte formulář (na konec přidejte znak * "
+"pro vyhledání podřetězce)"
+
+#: mod_muc_log:467
+msgid "Friday"
+msgstr "Pátek"
+
+#: mod_offline:684
+msgid "From"
+msgstr "Od"
+
+#: mod_configure:723
+msgid "From ~s"
+msgstr "Od  ~s"
+
+#: mod_vcard_ldap:329 mod_vcard_ldap:342 mod_vcard_mnesia:101
+#: mod_vcard_mnesia:115 mod_vcard_sql:158 mod_vcard_sql:172
+msgid "Full Name"
+msgstr "Celé jméno"
+
+#: mod_configure:183 mod_configure:536
+msgid "Get Number of Online Users"
+msgstr "Získat počet online uživatelů"
+
+#: mod_configure:180 mod_configure:534
+msgid "Get Number of Registered Users"
+msgstr "Získat počet registrovaných uživatelů"
+
+#: mod_configure:176 mod_configure:530 mod_configure:1179
+msgid "Get User Last Login Time"
+msgstr "Získat čas podleního přihlášení uživatele"
+
+#: mod_configure:172 mod_configure:526 mod_configure:1155 mod_configure:1165
+msgid "Get User Password"
+msgstr "Získat heslo uživatele"
+
+#: mod_configure:178 mod_configure:532 mod_configure:1188
+msgid "Get User Statistics"
+msgstr "Získat statistiky uživatele"
+
+#: mod_vcard_ldap:330 mod_vcard_ldap:343
+msgid "Given Name"
+msgstr "Křestní jméno"
+
+#: mod_shared_roster:859
+msgid "Group "
+msgstr "Skupina "
+
+#: mod_roster:908
+msgid "Groups"
+msgstr "Skupiny"
+
+#: mod_http_upload:223
+msgid "HTTP File Upload"
+msgstr ""
+
+#: ejabberd_web_admin:1079
+msgid "Host"
+msgstr "Hostitel"
+
+#: mod_s2s_dialback:324
+msgid "Host unknown"
+msgstr "Neznámý hostitel"
+
+#: ejabberd_web_admin:2177
+msgid "IP"
+msgstr "IP"
+
+#: mod_configure:1676
+msgid "IP addresses"
+msgstr "IP adresy"
+
+#: mod_irc:991
+msgid "IRC Transport"
+msgstr "IRC transport"
+
+#: mod_irc:481
+msgid "IRC Username"
+msgstr "IRC přezdívka"
+
+#: mod_irc:653
+msgid "IRC channel (don't put the first #)"
+msgstr "IRC kanál (bez počátečního #)"
+
+#: mod_irc:401
+msgid "IRC connection not found"
+msgstr "IRC spojení nebylo nalezeno"
+
+#: mod_irc:657
+msgid "IRC server"
+msgstr "IRC přezdívka"
+
+#: mod_irc:740
+msgid "IRC settings"
+msgstr "Nastavení IRC"
+
+#: mod_irc:750
+msgid "IRC username"
+msgstr "IRC přezdívka"
+
+#: ejabberd_s2s_out:261 xmpp_stream_in:375 xmpp_stream_out:384
+#, fuzzy
+msgid "Idle connection"
+msgstr "Nahrazeno novým spojením"
+
+#: ejabberd_captcha:128
+msgid "If you don't see the CAPTCHA image here, visit the web page."
+msgstr "Pokud zde nevidíte obrázek CAPTCHA, přejděte na webovou stránku."
+
+#: mod_irc:488
+msgid ""
+"If you want to specify different ports, passwords, encodings for IRC "
+"servers, fill this list with values in format '{\"irc server\", \"encoding"
+"\", port, \"password\"}'.  By default this service use \"~s\" encoding, port "
+"~p, empty password."
+msgstr ""
+"Pokud chcete zadat jiné kódování pro IRC servery, vyplňte seznam s hodnotami "
+"ve formátu '{\"irc server\",\"encoding\", port, \"password\"}'. Výchozí "
+"kódování pro tuto službu je \"~s\", port ~p, empty password."
+
+#: mod_configure:160 mod_configure:634
+msgid "Import Directory"
+msgstr "Import adresáře"
+
+#: mod_configure:157 mod_configure:632
+msgid "Import File"
+msgstr "Import souboru"
+
+#: mod_configure:982
+msgid "Import User from File at "
+msgstr "Importovat uživatele ze souboru na "
+
+#: mod_configure:586
+msgid "Import Users From jabberd14 Spool Files"
+msgstr "Importovat uživatele z jabberd14 spool souborů"
+
+#: mod_configure:993
+msgid "Import Users from Dir at "
+msgstr "Importovat uživatele z adresáře na "
+
+#: ejabberd_web_admin:1814
+msgid "Import user data from jabberd14 spool file:"
+msgstr "Importovat uživatele z jabberd14 spool souborů:"
+
+#: ejabberd_web_admin:1757
+msgid "Import users data from a PIEFXIS file (XEP-0227):"
+msgstr "Importovat uživatele ze souboru ve formátu PIEFXIS (XEP-0227):"
+
+#: ejabberd_web_admin:1825
+msgid "Import users data from jabberd14 spool directory:"
+msgstr "Importovat uživatele z jabberd14 spool souborů:"
+
+#: xmpp_stream_in:1029
+msgid "Improper 'from' attribute"
+msgstr "Nesprávný atribut 'from'"
+
+#: xmpp_stream_in:503
+msgid "Improper 'to' attribute"
+msgstr "Nesprávný atribut 'to'"
+
+#: ejabberd_service:197
+msgid "Improper domain part of 'from' attribute"
+msgstr "Nesprávná část s doménou atributu 'from'"
+
+#: mod_muc_room:262
+msgid "Improper message type"
+msgstr "Nesprávný typ zprávy"
+
+#: ejabberd_web_admin:1300
+msgid "Incoming s2s Connections:"
+msgstr "Příchozí s2s spojení:"
+
+#: ejabberd_captcha:224 mod_muc_room:3718 mod_register:176
+msgid "Incorrect CAPTCHA submit"
+msgstr "Nesprávné odeslání CAPTCHA"
+
+#: mod_muc:772 mod_muc_room:3058 mod_pubsub:1209 mod_register:172 mod_vcard:255
+msgid "Incorrect data form"
+msgstr "Nesprávný datový formulář"
+
+#: mod_muc_room:1941 mod_register:289 mod_register:344
+msgid "Incorrect password"
+msgstr "Nesprávné heslo"
+
+#: mod_irc:570
+msgid "Incorrect value in data form"
+msgstr "Nesprávná hodnota v datovém formuláři"
+
+#: mod_adhoc:265
+msgid "Incorrect value of 'action' attribute"
+msgstr "Nesprávná hodnota atributu 'action'"
+
+#: mod_configure:1809
+msgid "Incorrect value of 'action' in data form"
+msgstr "Nesprávná hodnota atributu 'action' v datovém formuláři"
+
+#: mod_configure:1335 mod_configure:1367 mod_configure:1399 mod_configure:1419
+#: mod_configure:1439
+msgid "Incorrect value of 'path' in data form"
+msgstr "Nesprávná hodnota atributu 'path' v datovém formuláři"
+
+#: mod_irc:315
+msgid "Incorrect value of 'type' attribute"
+msgstr "Nesprávná hodnota atributu 'type'"
+
+#: mod_privilege:102
+msgid "Insufficient privilege"
+msgstr "Nedostatečné oprávnění"
+
+#: mod_privilege:289
+msgid "Invalid 'from' attribute in forwarded message"
+msgstr "Nesprávný atribut 'from' v přeposlané zprávě"
+
+#: mod_muc_room:3975
+msgid "Invitations are not allowed in this conference"
+msgstr "Pozvánky nejsou povoleny v této místnosti"
+
+#: mod_muc_room:235 mod_muc_room:378 mod_muc_room:1080
+msgid ""
+"It is not allowed to send error messages to the room. The participant (~s) "
+"has sent an error message (~s) and got kicked from the room"
+msgstr ""
+"Není povoleno posílat chybové zprávy do místnosti. Účastník (~s) odeslal "
+"chybovou zprávu (~s) a byl vyhozen z místnosti"
+
+#: mod_muc_room:421 mod_muc_room:432
+msgid "It is not allowed to send private messages"
+msgstr "Je zakázáno posílat soukromé zprávy"
+
+#: mod_muc_room:391
+msgid "It is not allowed to send private messages of type \"groupchat\""
+msgstr "Není dovoleno odeslání soukromé zprávy typu \"skupinová zpráva\" "
+
+#: mod_muc_room:246
+msgid "It is not allowed to send private messages to the conference"
+msgstr "Není povoleno odesílat soukromé zprávy v této místnosti"
+
+#: mod_register_web:199 mod_register_web:207
+msgid "Jabber Account Registration"
+msgstr "Registrace účtu Jabberu"
+
+#: mod_configure:1122 mod_configure:1139 mod_configure:1149 mod_configure:1159
+#: mod_configure:1169 mod_configure:1183 mod_configure:1192 mod_configure:1603
+#: mod_configure:1647 mod_configure:1672 mod_roster:904 mod_vcard_mnesia:114
+#: mod_vcard_sql:171
+msgid "Jabber ID"
+msgstr "Jabber ID"
+
+#: mod_muc_log:473
+msgid "January"
+msgstr ". ledna"
+
+#: mod_irc:649
+msgid "Join IRC channel"
+msgstr "Vstoupit do IRC kanálu"
+
+#: mod_irc:673
+msgid "Join the IRC channel here."
+msgstr "Vstoupit do tohoto IRC kanálu."
+
+#: mod_irc:674
+msgid "Join the IRC channel in this Jabber ID: ~s"
+msgstr "Vstupte do IRC kanálu s tímto Jabber ID: ~s"
+
+#: mod_muc_log:479
+msgid "July"
+msgstr ". července"
+
+#: mod_muc_log:478
+msgid "June"
+msgstr ". června"
+
+#: ejabberd_web_admin:1202 ejabberd_web_admin:1429
+msgid "Last Activity"
+msgstr "Poslední aktivita"
+
+#: mod_configure:1649
+msgid "Last login"
+msgstr "Poslední přihlášení"
+
+#: ejabberd_web_admin:721
+msgid "Last month"
+msgstr "Poslední měsíc"
+
+#: ejabberd_web_admin:722
+msgid "Last year"
+msgstr "Poslední rok"
+
+#: mod_configure:941
+msgid "List of modules to start"
+msgstr "Seznam modulů, které mají být spuštěné"
+
+#: mod_muc_admin:430
+msgid "List of rooms"
+msgstr "Seznam místností"
+
+#: ejabberd_web_admin:1583
+msgid "Listened Ports"
+msgstr "Otevřené porty"
+
+#: ejabberd_web_admin:1853
+msgid "Listened Ports at "
+msgstr "Otevřené porty na "
+
+#: ejabberd_web_admin:1995
+msgid "Low level update script"
+msgstr "Nízkoúrovňový aktualizační skript"
+
+#: mod_muc_log:795
+msgid "Make participants list public"
+msgstr "Nastavit seznam účastníků jako veřejný"
+
+#: mod_muc_log:824
+msgid "Make room CAPTCHA protected"
+msgstr "Chránit místnost pomocí CAPTCHA"
+
+#: mod_muc_log:802
+msgid "Make room members-only"
+msgstr "Zpřístupnit místnost jen členům"
+
+#: mod_muc_log:804
+msgid "Make room moderated"
+msgstr "Nastavit místnost jako moderovanou"
+
+#: mod_muc_log:797
+msgid "Make room password protected"
+msgstr "Chránit místnost heslem"
+
+#: mod_muc_log:791
+msgid "Make room persistent"
+msgstr "Nastavit místnost jako stálou"
+
+#: mod_muc_log:793
+msgid "Make room public searchable"
+msgstr "Nastavit místnost jako veřejnou"
+
+#: mod_register:306
+msgid "Malformed username"
+msgstr "Chybně formátováné jméno uživatele"
+
+#: mod_muc_log:475
+msgid "March"
+msgstr ". března"
+
+#: mod_muc_log:830
+msgid "Maximum Number of Occupants"
+msgstr "Počet účastníků"
+
+#: mod_muc_log:477
+msgid "May"
+msgstr ". května"
+
+#: mod_shared_roster:843
+msgid "Members:"
+msgstr "Členové:"
+
+#: mod_muc_room:1834
+msgid "Membership is required to enter this room"
+msgstr "Pro vstup do místnosti musíte být členem"
+
+#: mod_register_web:281
+msgid ""
+"Memorize your password, or write it in a paper placed in a safe place. In "
+"Jabber there isn't an automated way to recover your password if you forget "
+"it."
+msgstr ""
+"Svoje heslo si zapamatujte, nebo si jej poznamenejte na papírek a ten "
+"uschovejte v bezpečí. Jabber nemá žádný automatizovaný způsob obnovy hesla."
+
+#: ejabberd_web_admin:1668
+msgid "Memory"
+msgstr "Paměť"
+
+#: mod_announce:520 mod_configure:1039 mod_configure:1079
+msgid "Message body"
+msgstr "Tělo zprávy"
+
+#: mod_privilege:294
+msgid "Message not found in forwarded payload"
+msgstr "Zpráva nebyla nalezena v přeposlaném obsahu"
+
+#: mod_block_strangers:169
+msgid "Messages from strangers are rejected"
+msgstr ""
+
+#: mod_vcard_ldap:331 mod_vcard_ldap:344 mod_vcard_mnesia:103
+#: mod_vcard_mnesia:117 mod_vcard_sql:160 mod_vcard_sql:174
+msgid "Middle Name"
+msgstr "Druhé jméno"
+
+#: mod_irc:688
+msgid "Missing 'channel' or 'server' in the data form"
+msgstr "Chybějící atribut 'channel' nebo 'server' v datovém formuláři"
+
+#: xmpp_stream_in:1036
+msgid "Missing 'from' attribute"
+msgstr "Chybějící atribut 'from'"
+
+#: xmpp_stream_in:498 xmpp_stream_in:1039
+msgid "Missing 'to' attribute"
+msgstr "Chybějící atribut 'to'"
+
+#: mod_muc_room:2542 mod_muc_room:3770 mod_muc_room:3814 mod_muc_room:3848
+msgid "Moderator privileges required"
+msgstr "Potřebujete práva moderátora"
+
+#: ejabberd_web_admin:1993
+msgid "Modified modules"
+msgstr "Aktualizované moduly"
+
+#: ejabberd_web_admin:2179 ejabberd_web_admin:2334
+msgid "Module"
+msgstr "Modul"
+
+#: gen_iq_handler:81
+msgid "Module failed to handle the query"
+msgstr "Modul chyboval při zpracování dotazu"
+
+#: ejabberd_web_admin:1599 mod_configure:582 mod_configure:595
+msgid "Modules"
+msgstr "Moduly"
+
+#: ejabberd_web_admin:1882
+msgid "Modules at ~p"
+msgstr "Moduly v ~p"
+
+#: mod_muc_log:463
+msgid "Monday"
+msgstr "Pondělí"
+
+#: mod_muc_admin:403 mod_muc_admin:406 mod_muc_admin:422 mod_muc_admin:496
+msgid "Multi-User Chat"
+msgstr "Víceuživatelský chat"
+
+#: mod_multicast:1139
+msgid "Multicast"
+msgstr "Multicast"
+
+#: mod_roster:188
+msgid "Multiple <item/> elements are not allowed by RFC6121"
+msgstr "Vícenásobný element <item/> není povolen dle RFC6121"
+
+#: ejabberd_web_admin:1665 mod_vcard_mnesia:102 mod_vcard_mnesia:116
+#: mod_vcard_sql:159 mod_vcard_sql:173
+msgid "Name"
+msgstr "Jméno"
+
+#: mod_shared_roster:832
+msgid "Name:"
+msgstr "Jméno:"
+
+#: mod_muc_room:2702
+msgid "Neither 'jid' nor 'nick' attribute found"
+msgstr "Nebyl nalezen atribut 'jid' ani 'nick'"
+
+#: mod_muc_room:2524 mod_muc_room:2707
+msgid "Neither 'role' nor 'affiliation' attribute found"
+msgstr "Nebyl nalezen atribut 'role'  ani 'affiliation'"
+
+#: ejabberd_web_admin:1220 ejabberd_web_admin:1401 mod_configure:1632
+msgid "Never"
+msgstr "Nikdy"
+
+#: mod_register_web:397
+msgid "New Password:"
+msgstr "Nové heslo:"
+
+#: mod_roster:905 mod_vcard_ldap:333 mod_vcard_ldap:346 mod_vcard_mnesia:105
+#: mod_vcard_mnesia:119 mod_vcard_sql:162 mod_vcard_sql:176
+msgid "Nickname"
+msgstr "Přezdívka"
+
+#: mod_muc:722
+msgid "Nickname Registration at "
+msgstr "Registrace přezdívky na "
+
+#: mod_muc_room:2719
+msgid "Nickname ~s does not exist in the room"
+msgstr "Přezdívka ~s v místnosti neexistuje"
+
+#: mod_configure:1496
+msgid "No 'access' found in data form"
+msgstr "Chybějící atribut 'access' v datovém formuláři"
+
+#: mod_configure:1455
+msgid "No 'acls' found in data form"
+msgstr "Chybějící atribut 'acls' v datovém formuláři"
+
+#: mod_muc_room:3081
+msgid "No 'affiliation' attribute found"
+msgstr "Chybějící atribut 'affiliation'"
+
+#: mod_muc_room:2511
+msgid "No 'item' element found"
+msgstr "Element 'item' nebyl nalezen"
+
+#: mod_configure:1280
+msgid "No 'modules' found in data form"
+msgstr "Chybějící atribut 'modules' v datovém formuláři"
+
+#: mod_configure:1802
+msgid "No 'password' found in data form"
+msgstr "Chybějící atribut 'password' v datovém formuláři"
+
+#: mod_register:137
+msgid "No 'password' found in this query"
+msgstr "Chybějící atribut 'password' v tomto dotazu"
+
+#: mod_configure:1319 mod_configure:1350 mod_configure:1382 mod_configure:1413
+#: mod_configure:1433
+msgid "No 'path' found in data form"
+msgstr "Chybějící atribut 'path' v datovém formuláři"
+
+#: mod_muc_room:3971
+msgid "No 'to' attribute found in the invitation"
+msgstr "Chybějící atribut 'to' v pozvánce"
+
+#: mod_privilege:303
+#, fuzzy
+msgid "No <forwarded/> element found"
+msgstr "Nesprávný element <forwarded/>"
+
+#: ejabberd_web_admin:1481
+msgid "No Data"
+msgstr "Žádná data"
+
+#: ejabberd_local:131
+msgid "No available resource found"
+msgstr "Nebyl nalezen žádný dostupný zdroj"
+
+#: mod_announce:575
+msgid "No body provided for announce message"
+msgstr "Zpráva neobsahuje text"
+
+#: mod_irc:319 mod_pubsub:1198 mod_pubsub:3328
+msgid "No data form found"
+msgstr "Nebyl nalezen datový formulář"
+
+#: mod_disco:210 mod_vcard:281
+msgid "No features available"
+msgstr "Žádné funce nejsou dostupné"
+
+#: mod_adhoc:228
+msgid "No hook has processed this command"
+msgstr "Žádný hook nebyl zpracován tímto příkazem"
+
+#: mod_last:210
+msgid "No info about last activity found"
+msgstr "Nebyla žádná informace o poslední aktivitě"
+
+#: mod_blocking:92
+msgid "No items found in this query"
+msgstr "Žádné položky nebyly nalezeny v tomto dotazu"
+
+#: ejabberd_captcha:235 ejabberd_local:84 ejabberd_sm:896 mod_blocking:85
+#: mod_blocking:103 mod_groupchat_discovery:109 mod_groupchat_discovery:148
+#: mod_http_upload:535 mod_muc:475 mod_muc:528 mod_muc:549 mod_muc:573
+#: mod_offline:294 mod_privacy:160 mod_privacy:277 mod_roster:200
+msgid "No module is handling this query"
+msgstr "Žádný modul neobsluhuje tento dotaz"
+
+#: mod_pubsub:1559
+msgid "No node specified"
+msgstr "Žádný uzel nebyl specifikován"
+
+#: mod_pubsub:1441
+msgid "No pending subscriptions found"
+msgstr "Žádné čekající předplatné nebylo nalezeno"
+
+#: mod_privacy:193 mod_privacy:287 mod_privacy:303 mod_privacy:336
+msgid "No privacy list with this name found"
+msgstr "Žádný privacy list s tímto jménem nebyl nalezen"
+
+#: mod_private:89
+msgid "No private data found in this query"
+msgstr "Žádná soukromá data nebyla nalezena tímto dotazem"
+
+#: mod_configure:869 mod_configure:908 mod_configure:1222 mod_configure:1254
+#: mod_configure:1275 mod_configure:1314 mod_configure:1345 mod_configure:1377
+#: mod_configure:1408 mod_configure:1428 mod_stats:93
+msgid "No running node found"
+msgstr "Nebyl nalezen žádný běžící uzel"
+
+#: mod_disco:238 mod_vcard:264
+msgid "No services available"
+msgstr "Žádné služby nejsou dostupné"
+
+#: mod_stats:101
+msgid "No statistics found for this item"
+msgstr "Nebyly nalezeny statistiky pro uvedenou položku"
+
+#: nodetree_dag:72 nodetree_tree:192 nodetree_tree_sql:262
+msgid "Node already exists"
+msgstr "Uzel již existuje"
+
+#: nodetree_tree_sql:96
+msgid "Node index not found"
+msgstr "Index uzlu nebyl nalezen"
+
+#: ejabberd_web_admin:760 mod_groupchat_discovery:107 mod_irc:287 mod_irc:350
+#: mod_muc:526 mod_muc:673 nodetree_dag:78 nodetree_dag:102 nodetree_dag:118
+#: nodetree_dag:142 nodetree_dag:229 nodetree_tree:74 nodetree_tree:80
+#: nodetree_tree_sql:126 nodetree_tree_sql:140
+msgid "Node not found"
+msgstr "Uzel nenalezen"
+
+#: ejabberd_web_admin:1571 ejabberd_web_admin:1596
+msgid "Node ~p"
+msgstr "Uzel ~p"
+
+#: mod_vcard:388
+msgid "Nodeprep has failed"
+msgstr "Nodeprep chyboval"
+
+#: ejabberd_web_admin:1551
+msgid "Nodes"
+msgstr "Uzly"
+
+#: ejabberd_web_admin:1336 ejabberd_web_admin:1532 ejabberd_web_admin:1542
+#: ejabberd_web_admin:1952 mod_roster:899
+msgid "None"
+msgstr "Nic"
+
+#: ejabberd_web_admin:747
+msgid "Not Found"
+msgstr "Nenalezeno"
+
+#: mod_disco:282 mod_disco:356 mod_last:149
+msgid "Not subscribed"
+msgstr "Není odebíráno"
+
+#: mod_muc_log:483
+msgid "November"
+msgstr ". listopadu"
+
+#: mod_configure:1212
+msgid "Number of online users"
+msgstr "Počet online uživatelů"
+
+#: mod_configure:1202
+msgid "Number of registered users"
+msgstr "Počet registrovaných uživatelů"
+
+#: ejabberd_web_admin:1714 ejabberd_web_admin:1724 ejabberd_web_admin:1735
+#: ejabberd_web_admin:1744 ejabberd_web_admin:1754 ejabberd_web_admin:1767
+#: ejabberd_web_admin:1779 ejabberd_web_admin:1795 ejabberd_web_admin:1811
+#: ejabberd_web_admin:1822 ejabberd_web_admin:1832
+msgid "OK"
+msgstr "OK"
+
+#: mod_muc_log:482
+msgid "October"
+msgstr ". října"
+
+#: ejabberd_web_admin:1201
+msgid "Offline Messages"
+msgstr "Offline zprávy"
+
+#: mod_offline:754
+msgid "Offline Messages:"
+msgstr "Offline zprávy:"
+
+#: mod_register_web:393
+msgid "Old Password:"
+msgstr "Současné heslo:"
+
+#: ejabberd_web_admin:1238 ejabberd_web_admin:1412 mod_configure:1642
+msgid "Online"
+msgstr "Online"
+
+#: ejabberd_web_admin:688 ejabberd_web_admin:1081 mod_configure:506
+msgid "Online Users"
+msgstr "Připojení uživatelé"
+
+#: ejabberd_web_admin:1294 ejabberd_web_admin:1313 ejabberd_web_admin:1925
+msgid "Online Users:"
+msgstr "Připojení uživatelé:"
+
+#: mod_carboncopy:134
+msgid "Only <enable/> or <disable/> tags are allowed"
+msgstr "Pouze značky <enable/> nebo <disable/>jsou povoleny"
+
+#: mod_privacy:146
+msgid "Only <list/> element is allowed in this query"
+msgstr "Pouze element <list/> je povolen v tomto dotazu"
+
+#: mod_mam:461
+msgid "Only members may query archives of this room"
+msgstr "Pouze moderátoři mají povoleno měnit téma místnosti"
+
+#: mod_muc_room:792
+msgid ""
+"Only moderators and participants are allowed to change the subject in this "
+"room"
+msgstr "Jen moderátoři a účastníci mají povoleno měnit téma této místnosti"
+
+#: mod_muc_room:797
+msgid "Only moderators are allowed to change the subject in this room"
+msgstr "Jen moderátoři mají povoleno měnit téma místnosti"
+
+#: mod_muc_room:936
+msgid "Only moderators can approve voice requests"
+msgstr "Pouze moderátoři mohou schválit žádosti o voice práva"
+
+#: mod_muc_room:427 mod_muc_room:811 mod_muc_room:4038
+msgid "Only occupants are allowed to send messages to the conference"
+msgstr "Jen členové mají povolené zasílat zprávy do místnosti"
+
+#: mod_muc_room:464
+msgid "Only occupants are allowed to send queries to the conference"
+msgstr "Jen členové mohou odesílat požadavky (query) do místnosti"
+
+#: mod_muc:415
+msgid "Only service administrators are allowed to send service messages"
+msgstr "Pouze správci služby smí odesílat servisní zprávy"
+
+#: ejabberd_web_admin:2180 ejabberd_web_admin:2335
+msgid "Options"
+msgstr "Nastavení"
+
+#: mod_vcard_ldap:338 mod_vcard_ldap:351 mod_vcard_mnesia:110
+#: mod_vcard_mnesia:124 mod_vcard_sql:167 mod_vcard_sql:181
+msgid "Organization Name"
+msgstr "Název firmy"
+
+#: mod_vcard_ldap:339 mod_vcard_ldap:352 mod_vcard_mnesia:111
+#: mod_vcard_mnesia:125 mod_vcard_sql:168 mod_vcard_sql:182
+msgid "Organization Unit"
+msgstr "Oddělení"
+
+#: mod_configure:508
+msgid "Outgoing s2s Connections"
+msgstr "Odchozí s2s spojení"
+
+#: ejabberd_web_admin:1297
+msgid "Outgoing s2s Connections:"
+msgstr "Odchozí s2s spojení:"
+
+#: mod_groupchat_restrictions:276
+msgid "Owner"
+msgstr ""
+
+#: mod_muc_room:3029 mod_muc_room:3073 mod_muc_room:3746 mod_pubsub:1317
+#: mod_pubsub:1409 mod_pubsub:1571 mod_pubsub:2143 mod_pubsub:2209
+#: mod_pubsub:2404 mod_pubsub:2485 mod_pubsub:3089 mod_pubsub:3248
+msgid "Owner privileges required"
+msgstr "Jsou vyžadována práva vlastníka"
+
+#: mod_offline:686
+msgid "Packet"
+msgstr "Paket"
+
+#: mod_irc:563
+msgid "Parse error"
+msgstr "Chyba parsování"
+
+#: mod_configure:1299 mod_configure:1468 mod_configure:1513
+msgid "Parse failed"
+msgstr "Došlo k chybě při parsování"
+
+#: ejabberd_oauth:431 ejabberd_web_admin:1149 mod_configure:1126
+#: mod_configure:1173 mod_configure:1605 mod_configure:1784 mod_muc_log:798
+#: mod_register:218
+msgid "Password"
+msgstr "Heslo"
+
+#: mod_configure:1130
+msgid "Password Verification"
+msgstr "Ověření hesla"
+
+#: mod_register_web:287 mod_register_web:401
+msgid "Password Verification:"
+msgstr "Ověření hesla:"
+
+#: mod_irc:806
+msgid "Password ~b"
+msgstr "Heslo ~b"
+
+#: ejabberd_web_admin:1427 mod_register_web:264 mod_register_web:504
+msgid "Password:"
+msgstr "Heslo:"
+
+#: mod_configure:998
+msgid "Path to Dir"
+msgstr "Cesta k adresáři"
+
+#: mod_configure:952 mod_configure:964 mod_configure:976 mod_configure:987
+msgid "Path to File"
+msgstr "Cesta k souboru"
+
+#: xmpp_stream_out:566
+msgid ""
+"Peer provided no SASL mechanisms; most likely it doesn't accept our "
+"certificate"
+msgstr ""
+
+#: mod_roster:907
+msgid "Pending"
+msgstr "Čekající"
+
+#: ejabberd_web_admin:708
+msgid "Period: "
+msgstr "Čas: "
+
+#: mod_muc_admin:426
+msgid "Permanent rooms"
+msgstr "Stálé místnosti"
+
+#: mod_adhoc:157 mod_adhoc:248
+msgid "Ping"
+msgstr "Ping"
+
+#: mod_ping:170
+msgid "Ping query is incorrect"
+msgstr "Ping dotaz je nesprávný"
+
+#: ejabberd_web_admin:1697
+msgid ""
+"Please note that these options will only backup the builtin Mnesia database. "
+"If you are using the ODBC module, you also need to backup your SQL database "
+"separately."
+msgstr ""
+"Podotýkáme, že tato nastavení budou zálohována do zabudované databáze "
+"Mnesia. Pokud používáte ODBC modul, musíte zálohovat svoji SQL databázi "
+"samostatně."
+
+#: mod_muc_room:897
+msgid "Please, wait for a while before sending new voice request"
+msgstr "Prosím, počkejte chvíli před posláním nové žádosti o voice práva"
+
+#: mod_adhoc:263
+msgid "Pong"
+msgstr "Pong"
+
+#: ejabberd_web_admin:2177
+msgid "Port"
+msgstr "Port"
+
+#: mod_irc:812
+msgid "Port ~b"
+msgstr "Port ~b"
+
+#: mod_roster:166
+msgid "Possessing 'ask' attribute is not allowed by RFC6121"
+msgstr "Atribut 'ask' není povolen dle RFC6121"
+
+#: ejabberd_web_admin:2178
+msgid "Protocol"
+msgstr "Protokol"
+
+#: mod_pubsub:1350
+msgid "PubSub subscriber request"
+msgstr "Žádost odběratele PubSub"
+
+#: mod_pubsub:3887
+msgid "Publish-Subscribe"
+msgstr "Publish-Subscribe"
+
+#: node_dag:81
+msgid "Publishing items to collection node is not allowed"
+msgstr "Publikování položek do collection uzlu není povoleno"
+
+#: mod_push:286
+#, fuzzy
+msgid "Push record not found"
+msgstr "Uzel nenalezen"
+
+#: mod_muc_room:469
+msgid "Queries to the conference members are not allowed in this room"
+msgstr ""
+"Požadavky (queries) na členy místnosti nejsou v této místnosti povolené"
+
+#: mod_blocking:78 mod_disco:311 mod_disco:379 mod_offline:261 mod_privacy:138
+#: mod_private:111 mod_roster:156 mod_sic:77
+msgid "Query to another users is forbidden"
+msgstr "Dotaz na jiné uživatele je zakázán"
+
+#: mod_configure:889
+msgid "RAM and disc copy"
+msgstr "Kopie RAM a disku"
+
+#: mod_configure:889
+msgid "RAM copy"
+msgstr "Kopie RAM"
+
+#: ejabberd_web_admin:1604
+msgid "RPC Call Error"
+msgstr "Chyba RPC volání"
+
+#: ejabberd_web_admin:520 ejabberd_web_admin:619
+msgid "Raw"
+msgstr "Zdroj"
+
+#: mod_groupchat_restrictions:270
+#, fuzzy
+msgid "Read messages"
+msgstr "Offline zprávy"
+
+#: mod_announce:511
+msgid "Really delete message of the day?"
+msgstr "Skutečně smazat zprávu dne?"
+
+#: mod_muc_room:398 mod_muc_room:446
+msgid "Recipient is not in the conference room"
+msgstr "Příjemce se nenachází v místnosti"
+
+#: mod_register_web:294
+msgid "Register"
+msgstr "Zaregistrovat se"
+
+#: mod_register_web:210 mod_register_web:229 mod_register_web:237
+msgid "Register a Jabber account"
+msgstr "Zaregistrujte si účet Jabberu"
+
+#: ejabberd_web_admin:1080
+msgid "Registered Users"
+msgstr "Registrovaní uživatelé"
+
+#: ejabberd_web_admin:1291 ejabberd_web_admin:1310
+msgid "Registered Users:"
+msgstr "Registrovaní uživatelé:"
+
+#: mod_muc_admin:427
+msgid "Registered nicknames"
+msgstr "Registrované přezdívky"
+
+#: mod_irc:520
+msgid "Registration in mod_irc for "
+msgstr "Registrace do mod_irc na "
+
+#: mod_configure:889
+msgid "Remote copy"
+msgstr "Vzdálená kopie"
+
+#: mod_roster:955
+msgid "Remove"
+msgstr "Odstranit"
+
+#: mod_offline:758
+msgid "Remove All Offline Messages"
+msgstr "Odstranit všechny offline zprávy"
+
+#: ejabberd_web_admin:1434 mod_configure:1782
+msgid "Remove User"
+msgstr "Odstranit uživatele"
+
+#: ejabberd_sm:414
+msgid "Replaced by new connection"
+msgstr "Nahrazeno novým spojením"
+
+#: mod_muc_room:678
+msgid "Request has timed out"
+msgstr ""
+
+#: mod_configure:1678
+msgid "Resources"
+msgstr "Zdroje"
+
+#: ejabberd_web_admin:1590 ejabberd_web_admin:2208 ejabberd_web_admin:2352
+msgid "Restart"
+msgstr "Restart"
+
+#: mod_configure:162 mod_configure:588 mod_configure:1009
+msgid "Restart Service"
+msgstr "Restartovat službu"
+
+#: mod_configure:151 mod_configure:619
+msgid "Restore"
+msgstr "Obnovit"
+
+#: mod_configure:959
+msgid "Restore Backup from File at "
+msgstr "Obnovit zálohu ze souboru na "
+
+#: ejabberd_web_admin:1727
+msgid ""
+"Restore binary backup after next ejabberd restart (requires less memory):"
+msgstr ""
+"Obnovit binární zálohu při následujícím restartu ejabberd (vyžaduje méně "
+"paměti):"
+
+#: ejabberd_web_admin:1717
+msgid "Restore binary backup immediately:"
+msgstr "Okamžitě obnovit binární zálohu:"
+
+#: ejabberd_web_admin:1747
+msgid "Restore plain text backup immediately:"
+msgstr "Okamžitě obnovit zálohu z textového souboru:"
+
+#: mod_groupchat_restrictions:278
+#, fuzzy
+msgid "Restrict participants"
+msgstr "Uživatelé jsou implicitně členy"
+
+#: mod_muc_log:634
+msgid "Room Configuration"
+msgstr "Nastavení místnosti"
+
+#: mod_muc_log:654
+msgid "Room Occupants"
+msgstr "Počet účastníků"
+
+#: mod_muc:448
+msgid "Room creation is denied by service policy"
+msgstr "Pravidla služby nepovolují vytvořit místnost"
+
+#: mod_muc_log:826
+msgid "Room description"
+msgstr "Popis místnosti"
+
+#: mod_muc_log:789
+msgid "Room title"
+msgstr "Název místnosti"
+
+#: mod_roster:1074
+msgid "Roster"
+msgstr "Seznam kontaktů"
+
+#: mod_roster:327
+msgid "Roster module has failed"
+msgstr "Modul Roster chyboval"
+
+#: mod_roster:960
+msgid "Roster of "
+msgstr "Seznam kontaktů "
+
+#: mod_configure:1674
+msgid "Roster size"
+msgstr "Velikost seznamu kontaktů"
+
+#: ejabberd_web_admin:1552 mod_configure:510
+msgid "Running Nodes"
+msgstr "Běžící uzly"
+
+#: xmpp_stream_in:567 xmpp_stream_in:575
+msgid "SASL negotiation is not allowed in this state"
+msgstr "SASL vyjednávání není povoleno v tomto stavu"
+
+#: mod_proxy65:151
+#, fuzzy
+msgid "SOCKS5 Bytestreams"
+msgstr "ejabberd SOCKS5 Bytestreams modul"
+
+#: mod_muc_log:468
+msgid "Saturday"
+msgstr "Sobota"
+
+#: mod_irc:567
+msgid "Scan error"
+msgstr "Chyba skenování"
+
+#: mod_configure:1303 mod_configure:1472 mod_configure:1517
+msgid "Scan failed"
+msgstr "Při skenování došlo k chybě"
+
+#: ejabberd_web_admin:1996
+msgid "Script check"
+msgstr "Kontrola skriptu"
+
+#: mod_vcard:456
+msgid "Search Results for "
+msgstr "Výsledky hledání pro "
+
+#: mod_vcard:430
+msgid "Search users in "
+msgstr "Hledat uživatele v "
+
+#: mod_announce:617
+msgid "Send announcement to all online users"
+msgstr "Odeslat oznámení všem online uživatelům"
+
+#: mod_announce:619 mod_configure:1032 mod_configure:1072
+msgid "Send announcement to all online users on all hosts"
+msgstr "Odeslat oznámení všem online uživatelům na všech hostitelích"
+
+#: mod_announce:613
+msgid "Send announcement to all users"
+msgstr "Odeslat oznámení všem uživatelům"
+
+#: mod_announce:615
+msgid "Send announcement to all users on all hosts"
+msgstr "Odeslat oznámení všem uživatelům na všech hostitelích"
+
+#: mod_groupchat_restrictions:273
+msgid "Send audio"
+msgstr ""
+
+#: mod_groupchat_restrictions:272
+msgid "Send images"
+msgstr ""
+
+#: mod_groupchat_restrictions:274
+#, fuzzy
+msgid "Send invitations"
+msgstr "Administrace"
+
+#: mod_groupchat_restrictions:271
+#, fuzzy
+msgid "Send messages"
+msgstr "Offline zprávy"
+
+#: mod_muc_log:481
+msgid "September"
+msgstr ". září"
+
+#: mod_irc_connection:648
+msgid "Server Connect Failed"
+msgstr "Připojení serveru selhalo"
+
+#: ejabberd_s2s:386
+msgid "Server connections to local subdomains are forbidden"
+msgstr "Serverová spojení k lokálním subdoménám je zakázáno"
+
+#: mod_irc:826
+msgid "Server ~b"
+msgstr "Server ~b"
+
+#: mod_register_web:261 mod_register_web:390 mod_register_web:501
+msgid "Server:"
+msgstr "Server:"
+
+#: mod_announce:621
+msgid "Set message of the day and send to online users"
+msgstr "Nastavit zprávu dne a odeslat ji online uživatelům"
+
+#: mod_announce:623
+msgid "Set message of the day on all hosts and send to online users"
+msgstr "Nastavit zprávu dne a odeslat ji online uživatelům"
+
+#: mod_shared_roster:720 mod_shared_roster:762 mod_shared_roster:856
+msgid "Shared Roster Groups"
+msgstr "Skupiny pro sdílený seznam kontaktů"
+
+#: ejabberd_web_admin:730
+msgid "Show Integral Table"
+msgstr "Zobrazit kompletní tabulku"
+
+#: ejabberd_web_admin:727
+msgid "Show Ordinary Table"
+msgstr "Zobrazit běžnou tabulku"
+
+#: mod_configure:164 mod_configure:590 mod_configure:1049
+msgid "Shut Down Service"
+msgstr "Vypnout službu"
+
+#: mod_register_web:277
+msgid ""
+"Some Jabber clients can store your password in the computer, but you should "
+"do this only in your personal computer for safety reasons."
+msgstr ""
+"Někteří klienti umí uložit vaše heslo na disk počítače. Tuto funkci "
+"používejte, pouze pokud věříte zabezpečení svého počítače."
+
+#: ejabberd_web_admin:2232 ejabberd_web_admin:2368
+msgid "Start"
+msgstr "Start"
+
+#: mod_configure:142 mod_configure:605
+msgid "Start Modules"
+msgstr "Spustit moduly"
+
+#: mod_configure:936
+msgid "Start Modules at "
+msgstr "Spustit moduly na "
+
+#: ejabberd_web_admin:737 ejabberd_web_admin:1585 mod_muc_admin:423
+msgid "Statistics"
+msgstr "Statistiky"
+
+#: ejabberd_web_admin:1913
+msgid "Statistics of ~p"
+msgstr "Statistiky ~p"
+
+#: ejabberd_web_admin:1592 ejabberd_web_admin:2212 ejabberd_web_admin:2356
+msgid "Stop"
+msgstr "Stop"
+
+#: mod_configure:145 mod_configure:607
+msgid "Stop Modules"
+msgstr "Zastavit moduly"
+
+#: mod_configure:918
+msgid "Stop Modules at "
+msgstr "Zastavit moduly na "
+
+#: ejabberd_web_admin:1553 mod_configure:511
+msgid "Stopped Nodes"
+msgstr "Zastavené uzly"
+
+#: ejabberd_web_admin:1666
+msgid "Storage Type"
+msgstr "Typ úložiště"
+
+#: ejabberd_web_admin:1707
+msgid "Store binary backup:"
+msgstr "Uložit binární zálohu:"
+
+#: ejabberd_web_admin:1737
+msgid "Store plain text backup:"
+msgstr "Uložit zálohu do textového souboru:"
+
+#: mod_announce:516 mod_configure:1036 mod_configure:1076
+msgid "Subject"
+msgstr "Předmět"
+
+#: ejabberd_web_admin:488 ejabberd_web_admin:528 ejabberd_web_admin:593
+#: ejabberd_web_admin:658 ejabberd_web_admin:1677 mod_shared_roster:869
+msgid "Submit"
+msgstr "Odeslat"
+
+#: ejabberd_web_admin:476 ejabberd_web_admin:515 ejabberd_web_admin:581
+#: ejabberd_web_admin:614 ejabberd_web_admin:650 ejabberd_web_admin:1135
+#: ejabberd_web_admin:1418 ejabberd_web_admin:1574 ejabberd_web_admin:1608
+#: ejabberd_web_admin:1688 ejabberd_web_admin:1858 ejabberd_web_admin:1887
+#: ejabberd_web_admin:1984 mod_offline:674 mod_roster:963 mod_shared_roster:766
+#: mod_shared_roster:861
+msgid "Submitted"
+msgstr "Odeslané"
+
+#: mod_roster:906
+msgid "Subscription"
+msgstr "Přihlášení"
+
+#: mod_muc_room:3757
+msgid "Subscriptions are not allowed"
+msgstr "Předplatné není povoleno"
+
+#: mod_muc_log:469
+msgid "Sunday"
+msgstr "Neděle"
+
+#: mod_muc_room:1025 mod_muc_room:1844 mod_muc_room:3786
+msgid "That nickname is already in use by another occupant"
+msgstr "Přezdívka je již používána jiným členem"
+
+#: mod_muc:745 mod_muc_room:1032 mod_muc_room:1853 mod_muc_room:3789
+msgid "That nickname is registered by another person"
+msgstr "Přezdívka je zaregistrována jinou osobou"
+
+#: ejabberd_captcha:277
+msgid "The CAPTCHA is valid."
+msgstr "CAPTCHA souhlasí."
+
+#: ejabberd_captcha:227 mod_block_strangers:143 mod_muc_room:660
+#: mod_muc_room:3721 mod_register:179
+msgid "The CAPTCHA verification has failed"
+msgstr "Ověření CAPTCHA se nezdařilo"
+
+#: mod_muc_room:304
+msgid "The feature requested is not supported by the conference"
+msgstr "Požadovaná vlastnost není podporována touto místností"
+
+#: mod_register:297 mod_register:360
+msgid "The password contains unacceptable characters"
+msgstr "Heslo obsahuje nepovolené znaky"
+
+#: mod_register:300 mod_register:364
+msgid "The password is too weak"
+msgstr "Heslo je příliš slabé"
+
+#: mod_register_web:141
+msgid "The password of your Jabber account was successfully changed."
+msgstr "Heslo vašeho účtu Jabberu bylo úspěšně změněno."
+
+#: mod_register:149 mod_vcard:218
+msgid "The query is only allowed from local users"
+msgstr "Dotaz je povolen pouze pro místní uživatele"
+
+#: mod_roster:196
+msgid "The query must not contain <item/> elements"
+msgstr "Dotaz nesmí obsahovat elementy <item/>"
+
+#: mod_privacy:272
+msgid ""
+"The stanza MUST contain only one <active/> element, one <default/> element, "
+"or one <list/> element"
+msgstr ""
+"Stanza MUSÍ obsahovat pouze jeden element  <active/>, jeden element <default/"
+"> nebo jeden element <list/>"
+
+#: mod_register_web:146
+msgid "There was an error changing the password: "
+msgstr "Při změně hesla došlo k chybě: "
+
+#: mod_register_web:116
+msgid "There was an error creating the account: "
+msgstr "Při vytváření účtu došlo k chybě:"
+
+#: mod_register_web:130
+msgid "There was an error deleting the account: "
+msgstr "Při mazání účtu došlo k chybě: "
+
+#: mod_register_web:255
+msgid "This is case insensitive: macbeth is the same that MacBeth and Macbeth."
+msgstr ""
+"Zde nezáleží na velikosti písmen: macbeth je stejný jako MacBeth a Macbeth."
+
+#: mod_register_web:239
+msgid ""
+"This page allows to create a Jabber account in this Jabber server. Your JID "
+"(Jabber IDentifier) will be of the form: username@server. Please read "
+"carefully the instructions to fill correctly the fields."
+msgstr ""
+"Na této stránce si můžete vytvořit účet na tomto serveru Jabberu. Vaše JID "
+"(Jabber IDentifikátor) bude mít tvar: uživatelskéjméno@server. Přečtěte si "
+"prosím pozorně instrukce pro vyplnění údajů."
+
+#: mod_register_web:491
+msgid "This page allows to unregister a Jabber account in this Jabber server."
+msgstr "Zde můžete zrušit registraci účtu na tomto serveru Jabberu."
+
+#: mod_muc_log:800
+msgid "This room is not anonymous"
+msgstr "Tato místnost není anonymní"
+
+#: mod_muc_log:466
+msgid "Thursday"
+msgstr "Čtvrtek"
+
+#: mod_offline:683
+msgid "Time"
+msgstr "Čas"
+
+#: mod_configure:1014 mod_configure:1054
+msgid "Time delay"
+msgstr "Časový posun"
+
+#: mod_stream_mgmt:260
+msgid "Timed out waiting for stream resumption"
+msgstr ""
+
+#: mod_offline:685
+msgid "To"
+msgstr "Pro"
+
+#: mod_register:204
+msgid "To register, visit ~s"
+msgstr "Pokud se chcete zaregistrovat, navštivte ~s"
+
+#: mod_configure:709
+msgid "To ~s"
+msgstr "Pro ~s"
+
+#: ejabberd_oauth:439
+msgid "Token TTL"
+msgstr "Token TTL"
+
+#: xmpp_stream_in:489
+msgid "Too long value of 'xml:lang' attribute"
+msgstr "Příliš dlouhá hodnota atributu 'xml:lang'"
+
+#: mod_muc_room:2547 mod_muc_room:3087
+msgid "Too many <item/> elements"
+msgstr "Příliš mnoho elementů <item/>"
+
+#: mod_privacy:156
+msgid "Too many <list/> elements"
+msgstr "Přilíš mnoho elementů <list/>"
+
+#: mod_block_strangers:121 mod_muc_room:1922 mod_register:229
+msgid "Too many CAPTCHA requests"
+msgstr "Přiliš mnoho CAPTCHA žádostí"
+
+#: mod_proxy65_service:212
+msgid "Too many active bytestreams"
+msgstr "Příliš mnoho aktivních bytestreamů"
+
+#: mod_stream_mgmt:215
+msgid "Too many unacked stanzas"
+msgstr "Příliš mnoho nepotvrzených stanz"
+
+#: mod_muc_room:1803
+msgid "Too many users in this conference"
+msgstr "Přiliš mnoho uživatelů v této místnosti"
+
+#: mod_register:349
+msgid "Too many users registered"
+msgstr "Příliš mnoho registrovaných uživatelů"
+
+#: mod_muc_admin:425
+msgid "Total rooms"
+msgstr "Celkem místností"
+
+#: mod_muc_room:175
+msgid "Traffic rate limit is exceeded"
+msgstr "Byl překročen limit"
+
+#: ejabberd_web_admin:1933
+msgid "Transactions Aborted:"
+msgstr "Transakcí zrušených:"
+
+#: ejabberd_web_admin:1929
+msgid "Transactions Committed:"
+msgstr "Transakcí potvrzených:"
+
+#: ejabberd_web_admin:1941
+msgid "Transactions Logged:"
+msgstr "Transakcí zaznamenaných:"
+
+#: ejabberd_web_admin:1937
+msgid "Transactions Restarted:"
+msgstr "Transakcí restartovaných:"
+
+#: mod_muc_log:464
+msgid "Tuesday"
+msgstr "Úterý"
+
+#: mod_block_strangers:125 mod_muc_room:1931 mod_register:233
+msgid "Unable to generate a CAPTCHA"
+msgstr "Nebylo možné vygenerovat CAPTCHA"
+
+#: ejabberd_service:124
+msgid "Unable to register route on existing local domain"
+msgstr "Není možné zaregistrovat routu na existující místní doménu"
+
+#: ejabberd_web_admin:197 ejabberd_web_admin:209 ejabberd_web_admin:229
+#: ejabberd_web_admin:241
+msgid "Unauthorized"
+msgstr "Nemáte oprávnění"
+
+#: mod_announce:485 mod_configure:830 mod_configure:1761
+msgid "Unexpected action"
+msgstr "Neočekávaná akce"
+
+#: mod_register_web:509
+msgid "Unregister"
+msgstr "Zrušit registraci"
+
+#: mod_register_web:215 mod_register_web:481 mod_register_web:489
+msgid "Unregister a Jabber account"
+msgstr "Zrušte registraci účtu Jabberu"
+
+#: mod_mam:612
+msgid "Unsupported <index/> element"
+msgstr "Nepodporovaný <index/> element"
+
+#: mod_mix:119
+msgid "Unsupported MIX query"
+msgstr "Nepodporovaný MIX dotaz"
+
+#: ejabberd_web_admin:1586 ejabberd_web_admin:1999
+msgid "Update"
+msgstr "Aktualizovat"
+
+#: mod_announce:625
+msgid "Update message of the day (don't send)"
+msgstr "Aktualizovat zprávu dne (neodesílat)"
+
+#: mod_announce:627
+msgid "Update message of the day on all hosts (don't send)"
+msgstr "Aktualizovat zprávu dne pro všechny hostitele (neodesílat)"
+
+#: ejabberd_web_admin:1992
+msgid "Update plan"
+msgstr "Aktualizovat plán"
+
+#: ejabberd_web_admin:1994
+msgid "Update script"
+msgstr "Aktualizované skripty"
+
+#: ejabberd_web_admin:1981
+msgid "Update ~p"
+msgstr "Aktualizovat ~p"
+
+#: ejabberd_web_admin:1917
+msgid "Uptime:"
+msgstr "Čas běhu:"
+
+#: xmpp_stream_out:549
+msgid "Use of STARTTLS forbidden"
+msgstr "Použití STARTTLS je zakázáno"
+
+#: xmpp_stream_in:597 xmpp_stream_out:543 xmpp_stream_out:627
+msgid "Use of STARTTLS required"
+msgstr "Je vyžadováno STARTTLS"
+
+#: ejabberd_web_admin:1144 ejabberd_web_admin:1200 mod_register:214
+#: mod_vcard_ldap:328 mod_vcard_mnesia:100 mod_vcard_sql:157
+msgid "User"
+msgstr "Uživatel"
+
+#: ejabberd_oauth:428
+msgid "User (jid)"
+msgstr "Uživatel (JID)"
+
+#: mod_configure:308 mod_configure:505
+msgid "User Management"
+msgstr "Správa uživatelů"
+
+#: mod_register:339
+msgid "User already exists"
+msgstr "Uživatel již existuje"
+
+#: mod_echo:137
+msgid "User part of JID in 'from' is empty"
+msgstr "Uživatelská část Jabber ID v elementu 'from' je prázdná"
+
+#: ejabberd_sm:200 ejabberd_sm:669 ejabberd_sm:705 ejabberd_sm:713 mod_push:271
+#: mod_sic:93
+msgid "User session not found"
+msgstr "Sezení uživatele nebylo nalezeno"
+
+#: mod_stream_mgmt:583 mod_stream_mgmt:605
+msgid "User session terminated"
+msgstr "Sezení uživatele bylo ukončeno"
+
+#: ejabberd_web_admin:1414
+msgid "User ~s"
+msgstr "Uživatel ~s"
+
+#: mod_register_web:249 mod_register_web:386 mod_register_web:497
+msgid "Username:"
+msgstr "Uživatelské jméno:"
+
+#: ejabberd_web_admin:673 ejabberd_web_admin:681
+msgid "Users"
+msgstr "Uživatelé"
+
+#: ejabberd_web_admin:704
+msgid "Users Last Activity"
+msgstr "Poslední aktivita uživatele"
+
+#: mod_register:369
+msgid "Users are not allowed to register accounts so quickly"
+msgstr "Je zakázáno registrovat účty v tak rychlém sledu"
+
+#: mod_roster:946
+msgid "Validate"
+msgstr "Ověřit"
+
+#: ejabberd_captcha:231 mod_carboncopy:137 mod_irc:329 mod_muc_room:3711
+#: mod_muc_room:3852 mod_pubsub:895 mod_push:253
+msgid "Value 'get' of 'type' attribute is not allowed"
+msgstr "Hodnota 'get' atrubutu 'type' není povolena"
+
+#: mod_disco:140 mod_disco:159 mod_disco:265 mod_disco:332
+#: mod_groupchat_discovery:92 mod_groupchat_discovery:114 mod_irc:254
+#: mod_irc:269 mod_irc:323 mod_last:108 mod_last:130 mod_muc:472 mod_muc:497
+#: mod_muc:533 mod_muc:554 mod_muc:564 mod_muc_room:3639 mod_muc_room:3690
+#: mod_proxy65_service:132 mod_proxy65_service:149 mod_proxy65_service:156
+#: mod_pubsub:820 mod_pubsub:839 mod_pubsub:877 mod_sic:68 mod_sic:80
+#: mod_stats:55 mod_time:55 mod_vcard:197 mod_vcard:235 mod_version:54
+msgid "Value 'set' of 'type' attribute is not allowed"
+msgstr "Hodnota 'set' atrubutu 'type' není povolena"
+
+#: pubsub_subscription:237 pubsub_subscription_sql:202
+msgid "Value of '~s' should be boolean"
+msgstr "Hodnota  '~s' by měla být boolean"
+
+#: pubsub_subscription:215 pubsub_subscription_sql:180
+msgid "Value of '~s' should be datetime string"
+msgstr "Hodnota  '~s' by měla být datetime řetězec"
+
+#: pubsub_subscription:209 pubsub_subscription:227 pubsub_subscription_sql:174
+#: pubsub_subscription_sql:192
+msgid "Value of '~s' should be integer"
+msgstr "Hodnota '~s' by měla být celé číslo"
+
+#: ejabberd_web_admin:664
+msgid "Virtual Hosts"
+msgstr "Virtuální hostitelé"
+
+#: mod_muc_room:1018
+msgid "Visitors are not allowed to change their nicknames in this room"
+msgstr "Návštěvníkům této místnosti je zakázáno měnit přezdívku"
+
+#: mod_muc_room:804
+msgid "Visitors are not allowed to send messages to all occupants"
+msgstr ""
+"Návštevníci nemají povoleno zasílat zprávy všem účastníkům v této místnosti"
+
+#: mod_muc_room:3928
+msgid "Voice request"
+msgstr "Žádost o voice práva"
+
+#: mod_muc_room:904
+msgid "Voice requests are disabled in this conference"
+msgstr "Voice žádosti jsou v této místnosti zakázány"
+
+#: mod_muc_log:465
+msgid "Wednesday"
+msgstr "Středa"
+
+#: mod_groupchat_vcard:176
+#, fuzzy
+msgid "You are not allowed to do it"
+msgstr "Nemáte povoleno vytvářet uzly"
+
+#: mod_register_web:274
+msgid "You can later change your password using a Jabber client."
+msgstr "Později můžete své heslo změnit pomocí klienta Jabberu."
+
+#: mod_muc_room:1831
+msgid "You have been banned from this room"
+msgstr "Byl jste vyloučen z této místnosti"
+
+#: mod_muc_room:1812
+msgid "You have joined too many conferences"
+msgstr "Vstoupil jste do příliš velkého množství místností"
+
+#: mod_groupchat_iq_handler:267
+msgid "You have no permission to invite"
+msgstr ""
+
+#: mod_groupchat_iq_handler:287 mod_groupchat_iq_handler:318
+msgid "You have no permission to see list of invited users"
+msgstr ""
+
+#: mod_muc:777
+msgid "You must fill in field \"Nickname\" in the form"
+msgstr "Musíte vyplnit políčko \"Přezdívka\" ve formuláři"
+
+#: mod_register:211
+msgid "You need a client that supports x:data and CAPTCHA to register"
+msgstr "Pro registraci potřebujete klienta s podporou x:data a CAPTCHA"
+
+#: mod_muc:731
+msgid "You need a client that supports x:data to register the nickname"
+msgstr "Pro registraci přezdívky potřebujete klienta s podporou x:data"
+
+#: mod_irc:532
+msgid "You need an x:data capable client to configure mod_irc settings"
+msgstr "Pro konfiguraci mod_irc potřebujete klienta s podporou x:data"
+
+#: mod_vcard:446
+msgid "You need an x:data capable client to search"
+msgstr "K vyhledávání potřebujete klienta podporujícího x:data"
+
+#: mod_pubsub:1522
+msgid "You're not allowed to create nodes"
+msgstr "Nemáte povoleno vytvářet uzly"
+
+#: mod_register_web:111
+msgid "Your Jabber account was successfully created."
+msgstr "Váš účet Jabberu byl úspěšně vytvořen."
+
+#: mod_register_web:125
+msgid "Your Jabber account was successfully deleted."
+msgstr "Váš účet Jabberu byl úspěšně smazán."
+
+#: ejabberd_c2s:669 ejabberd_c2s:818
+msgid "Your active privacy list has denied the routing of this stanza."
+msgstr "Vaše nastavení soukromí znemožnilo směrování této stance."
+
+#: mod_offline:567
+msgid ""
+"Your contact offline message queue is full. The message has been discarded."
+msgstr "Fronta offline zpráv pro váš kontakt je plná. Zpráva byla zahozena."
+
+#: ejabberd_captcha:105
+msgid "Your messages to ~s are being blocked. To unblock them, visit ~s"
+msgstr "Nesmíte posílat zprávy na ~s. Pro povolení navštivte ~s"
+
+#: mod_disco:459
+#, fuzzy
+msgid "ejabberd"
+msgstr "Webová administrace ejabberd"
+
+#: mod_irc:440
+msgid "ejabberd IRC module"
+msgstr "ejabberd IRC modul"
+
+#: mod_muc:466
+msgid "ejabberd MUC module"
+msgstr "ejabberd MUC modul"
+
+#: mod_multicast:271
+msgid "ejabberd Multicast service"
+msgstr "Služba ejabberd Multicast"
+
+#: mod_pubsub:1082
+msgid "ejabberd Publish-Subscribe module"
+msgstr "ejabberd Publish-Subscribe modul"
+
+#: mod_proxy65_service:159
+msgid "ejabberd SOCKS5 Bytestreams module"
+msgstr "ejabberd SOCKS5 Bytestreams modul"
+
+#: ejabberd_web_admin:299 ejabberd_web_admin:331
+msgid "ejabberd Web Admin"
+msgstr "Webová administrace ejabberd"
+
+#: mod_vcard:238
+msgid "ejabberd vCard module"
+msgstr "ejabberd vCard modul"
+
+#: mod_muc_log:380 mod_muc_log:383
+msgid "has been banned"
+msgstr "byl(a) zablokován(a)"
+
+#: ejabberd_sm:417 mod_configure:1562 mod_muc_log:387 mod_muc_log:390
+msgid "has been kicked"
+msgstr "byl(a) vyhozen(a) z místnosti"
+
+#: mod_muc_log:405
+msgid "has been kicked because of a system shutdown"
+msgstr "byl(a) vyhozen(a), protože dojde k vypnutí systému"
+
+#: mod_muc_log:395
+msgid "has been kicked because of an affiliation change"
+msgstr "byl(a) vyhozen(a) kvůli změně přiřazení"
+
+#: mod_muc_log:400
+msgid "has been kicked because the room has been changed to members-only"
+msgstr "byl(a) vyhozen(a), protože mísnost je nyní pouze pro členy"
+
+#: mod_muc_log:410
+msgid "is now known as"
+msgstr "se přejmenoval(a) na"
+
+#: mod_muc_log:370
+msgid "joins the room"
+msgstr "vstoupil(a) do místnosti"
+
+#: mod_muc_log:373 mod_muc_log:376
+msgid "leaves the room"
+msgstr "opustil(a) místnost"
+
+#: mod_muc_room:3907
+msgid "private, "
+msgstr "soukromá, "
+
+#: mod_muc_room:4004
+msgid "the password is"
+msgstr "heslo je"
+
+#: mod_vcard:561
+msgid "vCard User Search"
+msgstr "Hledání uživatelů ve vizitkách"
+
+#: ejabberd_web_admin:646
+msgid "~s access rule configuration"
+msgstr "~s konfigurace pravidla přístupu"
+
+#: mod_muc_room:3997
+msgid "~s invites you to the room ~s"
+msgstr "~s vás zve do místnosti ~s"
+
+#: mod_offline:670
+msgid "~s's Offline Messages Queue"
+msgstr "Fronta offline zpráv uživatele ~s"
+
+#, fuzzy
+#~ msgid "restriction"
+#~ msgstr "Popis:"
+
+#~ msgid "No resource provided"
+#~ msgstr "Nebyl poskytnut žádný zdroj"
+
+#~ msgid "Server"
+#~ msgstr "Server"
+
+#~ msgid ""
+#~ "Too many (~p) failed authentications from this IP address (~s). The "
+#~ "address will be unblocked at ~s UTC"
+#~ msgstr ""
+#~ "Příliš mnoho (~p) chybných pokusů o přihlášení z této IP adresy (~s). "
+#~ "Adresa bude zablokována do ~s UTC"
+
+#~ msgid "Please specify file size."
+#~ msgstr "Zvolit velikost souboru."
+
+#~ msgid "Please specify file name."
+#~ msgstr "Zvolit jméno souboru."
+
+#~ msgid "This IP address is blacklisted in ~s"
+#~ msgstr "IP adresa je blokována na ~s"
+
+#~ msgid "Empty Rooms"
+#~ msgstr "Prázdné konference"
+
+#~ msgid "Jabber ID ~s is invalid"
+#~ msgstr "Jabber ID ~s je neplatné"
+
+#~ msgid "Invalid affiliation: ~s"
+#~ msgstr "Neplatné přiřazení: ~s"
+
+#~ msgid "Invalid role: ~s"
+#~ msgstr "Neplatná role: ~s"
+
+#~ msgid "No limit"
+#~ msgstr "Bez limitu"
+
+#~ msgid "Present real Jabber IDs to"
+#~ msgstr "Odhalovat skutečná Jabber ID"
+
+#~ msgid "moderators only"
+#~ msgstr "moderátorům"
+
+#~ msgid "anyone"
+#~ msgstr "každému"
+
+#~ msgid "Roles for which Presence is Broadcasted"
+#~ msgstr "Role, pro které je zpráva o stavu šířena"
+
+#~ msgid "Moderator"
+#~ msgstr "Moderátor"
+
+#~ msgid "Visitor"
+#~ msgstr "Návštěvník"
+
+#~ msgid "nobody"
+#~ msgstr "nikdo"
+
+#~ msgid "Allow visitors to send voice requests"
+#~ msgstr "Povolit uživatelům posílat žádosti o voice práva"
+
+#~ msgid "Minimum interval between voice requests (in seconds)"
+#~ msgstr "Minimální interval mezi žádostmi o voice práva (v sekundách)"
+
+#~ msgid "Enable message archiving"
+#~ msgstr "Povolit ukládání historie zpráv"
+
+#~ msgid "Exclude Jabber IDs from CAPTCHA challenge"
+#~ msgstr "Vyloučit Jabber ID z procesu CAPTCHA ověřování"
+
+#~ msgid "You need an x:data capable client to configure room"
+#~ msgstr "Ke konfiguraci místnosti potřebujete klienta podporujícího x:data"
+
+#~ msgid "Number of occupants"
+#~ msgstr "Počet účastníků"
+
+#~ msgid "User JID"
+#~ msgstr "Jabber ID uživatele"
+
+#~ msgid "Grant voice to this person?"
+#~ msgstr "Udělit voice práva této osobě?"
+
+#~ msgid "Node ID"
+#~ msgstr "ID uzlu"
+
+#~ msgid "Subscriber Address"
+#~ msgstr "Adresa odběratele"
+
+#~ msgid "Allow this Jabber ID to subscribe to this pubsub node?"
+#~ msgstr "Povolit tomuto Jabber ID odebírat tento pubsub uzel?"
+
+#~ msgid "Deliver payloads with event notifications"
+#~ msgstr "Doručovat náklad s upozorněním na událost"
+
+#~ msgid "Deliver event notifications"
+#~ msgstr "Doručovat upozornění na události"
+
+#~ msgid "Notify subscribers when the node configuration changes"
+#~ msgstr "Upozornit odběratele na změnu nastavení uzlu"
+
+#~ msgid "Notify subscribers when the node is deleted"
+#~ msgstr "Upozornit odběratele na smazání uzlu"
+
+#~ msgid "Notify subscribers when items are removed from the node"
+#~ msgstr "Upozornit odběratele na odstranění položek z uzlu"
+
+#~ msgid "Persist items to storage"
+#~ msgstr "Uložit položky natrvalo do úložiště"
+
+#~ msgid "A friendly name for the node"
+#~ msgstr "Přívětivé jméno pro uzel"
+
+#~ msgid "Max # of items to persist"
+#~ msgstr "Maximální počet položek, které je možné natrvalo uložit"
+
+#~ msgid "Whether to allow subscriptions"
+#~ msgstr "Povolit odebírání"
+
+#~ msgid "Specify the access model"
+#~ msgstr "Uveďte přístupový model"
+
+#~ msgid "Roster groups allowed to subscribe"
+#~ msgstr "Skupiny kontaktů, které mohou odebírat"
+
+#~ msgid "Specify the publisher model"
+#~ msgstr "Specifikovat model pro publikování"
+
+#~ msgid "Purge all items when the relevant publisher goes offline"
+#~ msgstr "Smazat všechny položky, pokud se příslušný poskytovatel odpojí"
+
+#~ msgid "Specify the event message type"
+#~ msgstr "Zvolte typ zpráv pro události"
+
+#~ msgid "Max payload size in bytes"
+#~ msgstr "Maximální náklad v bajtech"
+
+#~ msgid "When to send the last published item"
+#~ msgstr "Kdy odeslat poslední publikovanou položku"
+
+#~ msgid "Only deliver notifications to available users"
+#~ msgstr "Doručovat upozornění jen právě přihlášeným uživatelům"
+
+#~ msgid "The collections with which a node is affiliated"
+#~ msgstr "Kolekce, se kterými je uzel spřízněn"
+
+#~ msgid "Fill in fields to search for any matching Jabber User"
+#~ msgstr "Vyplňte políčka pro vyhledání uživatele Jabberu"
+
+#~ msgid "Outgoing s2s Servers:"
+#~ msgstr "Odchozí s2s servery:"
+
+#~ msgid "Delete"
+#~ msgstr "Smazat"
+
+#~ msgid ""
+#~ "This participant is kicked from the room because he sent an error message"
+#~ msgstr "Tento účastník byl vyhozen, protože odeslal chybovou zprávu"
+
+#~ msgid ""
+#~ "This participant is kicked from the room because he sent an error message "
+#~ "to another participant"
+#~ msgstr ""
+#~ "Tento účastník byl vyhozen, protože odeslal chybovou zprávu jinému "
+#~ "účastníkovi"
+
+#~ msgid ""
+#~ "This participant is kicked from the room because he sent an error presence"
+#~ msgstr "Tento účastník byl vyhozen, protože odeslal chybový status"

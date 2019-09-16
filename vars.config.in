@@ -1,0 +1,73 @@
+%%%----------------------------------------------------------------------
+%%%
+%%% ejabberd, Copyright (C) 2002-2017   ProcessOne
+%%%
+%%% This program is free software; you can redistribute it and/or
+%%% modify it under the terms of the GNU General Public License as
+%%% published by the Free Software Foundation; either version 2 of the
+%%% License, or (at your option) any later version.
+%%%
+%%% This program is distributed in the hope that it will be useful,
+%%% but WITHOUT ANY WARRANTY; without even the implied warranty of
+%%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+%%% General Public License for more details.
+%%%
+%%% You should have received a copy of the GNU General Public License along
+%%% with this program; if not, write to the Free Software Foundation, Inc.,
+%%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+%%%
+%%%----------------------------------------------------------------------
+
+%% Macros
+{roster_gateway_workaround, @roster_gateway_workaround@}.
+{full_xml, @full_xml@}.
+{db_type, @db_type@}.
+{debug, @debug@}.
+{hipe, @hipe@}.
+{erlang_deprecated_types, @erlang_deprecated_types@}.
+{new_sql_schema, @new_sql_schema@}.
+
+%% Ad-hoc directories with source files
+{tools, @tools@}.
+
+%% Dependencies
+{odbc, @odbc@}.
+{mysql, @mysql@}.
+{pgsql, @pgsql@}.
+{sqlite, @sqlite@}.
+{pam, @pam@}.
+{zlib, @zlib@}.
+{riak, @riak@}.
+{redis, @redis@}.
+{elixir, @elixir@}.
+{iconv, @iconv@}.
+{stun, @stun@}.
+{sip, @sip@}.
+
+%% Version
+{vsn, "@PACKAGE_VERSION@"}.
+
+%% Variables for overlay template files
+
+%% Platform-specific installation paths
+{release, true}.
+{release_dir, "${SCRIPT_DIR%/*}"}.
+{sysconfdir, "{{release_dir}}/etc"}.
+{installuser, "@INSTALLUSER@"}.
+{erl, "{{release_dir}}/{{erts_vsn}}/bin/erl"}.
+{epmd, "{{release_dir}}/{{erts_vsn}}/bin/epmd"}.
+{localstatedir, "{{release_dir}}/var"}.
+{libdir, "{{release_dir}}/lib"}.
+{docdir, "{{release_dir}}/doc"}.
+
+{latest_deps, @latest_deps@}.
+{system_deps, @system_deps@}.
+
+{ldflags, "@LDFLAGS@"}.
+{cflags, "@CFLAGS@"}.
+{cppflags, "@CPPFLAGS@"}.
+
+%% Local Variables:
+%% mode: erlang
+%% End:
+%% vim: set filetype=erlang tabstop=8:

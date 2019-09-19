@@ -238,6 +238,8 @@ handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els =
   end,
   case Reject of
     #jingle_reject{} ->
+      Conversation = jid:to_string(jid:remove_resource(From)),
+      store_special_message_id(LServer,LUser,Conversation,TS,<<"reject">>),
       delete_last_call(From, LUser, LServer);
     _ ->
       ok
@@ -268,13 +270,16 @@ handle_cast({sm,#message{type = chat, from = Peer, to = To, sub_els = SubELs, me
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
   case Type of
     _ when Invite =/= false ->
-%%      BareJID = jid:remove_resource(To),
       #xabbergroupchat_invite{jid = ChatJID} = Invite,
-      Chat = jid:to_string(jid:remove_resource(ChatJID)),
-%%      UserJIDString = jid:to_string(BareJID),
-      store_special_message_id(LServer,LUser,Chat,TS,<<"invite">>),
-%%      store_special_message_id(LServer,LUser,Conversation,TS,<<"invite">>),
-      update_metainfo(<<"groupchat">>, LServer,LUser,Chat,TS);
+      case ChatJID of
+        undefined ->
+          store_special_message_id(LServer,LUser,Conversation,TS,<<"invite">>),
+          update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,TS);
+        _ ->
+          Chat = jid:to_string(jid:remove_resource(ChatJID)),
+          store_special_message_id(LServer,LUser,Chat,TS,<<"invite">>),
+          update_metainfo(<<"groupchat">>, LServer,LUser,Chat,TS)
+      end;
     _ when XEl =/= false ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
@@ -1143,7 +1148,13 @@ get_last_message(LServer,LUser,PUser) ->
     {selected,[<<>>]} ->
       undefined;
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
-      convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer);
+      Reject = get_reject(LServer,LUser,PUser),
+      case Reject of
+        {TSReject,RejectMessage} when TSReject > TS ->
+          RejectMessage;
+        _ ->
+          convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer)
+      end;
     _ ->
       undefined
   end.
@@ -1163,7 +1174,6 @@ get_last_previous_message(LServer,LUser,PUser,TS) ->
       undefined
   end.
 
-%%make_archive_el(TS, XML, Peer, Kind, Nick, MsgType, JidRequestor, JidArchive)
 
 get_count_messages(LServer,LUser,PUser,TS) ->
   case ejabberd_sql:sql_query(
@@ -1214,6 +1224,33 @@ get_invite(LServer,LUser,Chat) ->
           undefined;
         {selected,[{TS, XML, Peer, Kind, Nick}]}->
           convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer);
+        _ ->
+          undefined
+      end;
+    _ ->
+      undefined
+  end.
+
+get_reject(LServer,LUser,Conversation) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    @(timestamp)d
+     from special_messages"
+    " where username=%(LUser)s and conversation = %(Conversation)s and type = 'reject' and %(LServer)H order by timestamp desc limit 1")) of
+    {selected,[<<>>]} ->
+      undefined;
+    {selected,[{TS}]} ->
+      case ejabberd_sql:sql_query(
+        LServer,
+        ?SQL("select
+    @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
+     from archive"
+        " where username = %(LUser)s and timestamp = %(TS)d and %(LServer)H order by timestamp desc limit 1")) of
+        {selected,[<<>>]} ->
+          undefined;
+        {selected,[{TS, XML, Peer, Kind, Nick}]}->
+          {TS,convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer)};
         _ ->
           undefined
       end;

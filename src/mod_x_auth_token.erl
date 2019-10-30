@@ -946,7 +946,7 @@ rand_bytes(N) ->
     ?MODULE:strong_rand_bytes_proxy(N)
   catch
     throw:low_entropy ->
-      crypto:rand_bytes(N)
+      crypto:strong_rand_bytes(N)
   end.
 
 %% @equiv crypto:strong_rand_bytes(N)

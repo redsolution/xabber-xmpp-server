@@ -126,7 +126,7 @@ check_replace_permission(_Acc, {Server,User,Chat,ID,_X,_Replace,_V}) ->
 replace_message(_Acc, {Server,_User,Chat,ID,X,Replace,_V}) ->
   replace_message_from_archive(Server,Chat,ID,X,Replace).
 
-store_event_replace(Acc, {Server,_User,Chat,_ID,_X, Replace, Version}) ->
+store_event_replace(Acc, {Server,_User,Chat,_ID,_X, _Replace, Version}) ->
   XR = xmpp:encode(Acc),
   Txt = fxml:element_to_binary(XR),
   insert_event(Server,Chat,Txt,Version),

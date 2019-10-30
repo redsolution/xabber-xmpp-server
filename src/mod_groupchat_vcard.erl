@@ -386,7 +386,6 @@ get_pubsub_meta() ->
     }
     ]
   }.
-%%  #iq{type = get, sub_els = [#pubsub{items = [#ps_items{node = <<"urn:xmpp:avatar:metadata">>}]}], id = randoms:get_string()}.
 
 get_pubsub_data() ->
   #xmlel{
@@ -434,7 +433,6 @@ get_pubsub_data(ID) ->
     }
     ]
   }.
-%%  #iq{type = get, sub_els = [#pubsub{items = [#ps_items{node = <<"urn:xmpp:avatar:data">>}]}], id = randoms:get_string()}.
 
 handle(#iq{from = From, to = To, sub_els = Els}) ->
   Server = To#jid.lserver,
@@ -505,15 +503,6 @@ update_vcard(Server,User,D,_Chat) ->
   LF = get_lf(D#vcard_temp.n),
   NickName = set_value(D#vcard_temp.nickname),
   case Status of
-%%    <<"true">> when D#vcard_temp.photo =/= undefined ->
-%%      {Hash,PhotoType,AvatarSize,AvatarUrl} = save_on_disk(Server,Photo),
-%%      OldMeta = get_image_metadata(Server, User, Chat),
-%%      check_old_meta(Server, OldMeta),
-%%      update_vcard_info(Server,User,LF,FN,NickName,Hash),
-%%      update_id_in_chats(Server,User,Hash,PhotoType,AvatarSize,AvatarUrl),
-%%      {selected,ChatAndIds} = updated_chats(Server,User),
-%%      send_notifications(ChatAndIds,Hash,AvatarSize,AvatarUrl,PhotoType),
-%%      set_update_status(Server,User,<<"false">>);
     null ->
       set_update_status(Server,User,<<"true">>);
     <<"null">> ->
@@ -522,11 +511,12 @@ update_vcard(Server,User,D,_Chat) ->
       update_vcard_info(Server,User,LF,FN,NickName)
   end.
 
-send_notifications_about_nick_change(Server,User,OldNick) ->
-  {selected,ChatAndIds} = updated_chats(Server,User),
+send_notifications_about_nick_change(Server,User) ->
+  ChatAndIds = select_chat_for_update_nick(Server,User),
+  change_user_updated_at(Server,User),
   lists:foreach(fun(El) ->
-    {Chat,_UserID} = El,
-    M = notification_message_about_nick(User, Server, Chat, OldNick),
+    {Chat} = El,
+    M = notification_message_about_nick(User, Server, Chat),
     mod_groupchat_service_message:send_to_all(Chat,M) end, ChatAndIds).
 
 send_notifications(ChatAndIds,User,Server) ->
@@ -538,38 +528,18 @@ send_notifications(ChatAndIds,User,Server) ->
 notification_message(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
-  UserID = case mod_groupchat_service_message:anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
-             public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
-             anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
-           end,
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
-  MsgTxt = <<UserID/binary, " updated avatar">>,
-  Body = [#text{lang = <<>>,data = MsgTxt}],
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [ByUserCard]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
-  #message{from = ChatJID, to = ChatJID, type = headline, id = randoms:get_string(), body = Body, sub_els = [X,By], meta = #{}}.
+  #message{from = ChatJID, to = ChatJID, type = headline, id = randoms:get_string(), body = [], sub_els = [X,By], meta = #{}}.
 
-notification_message_about_nick(User, Server, Chat, OldNick) ->
+notification_message_about_nick(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
-  UserID = case mod_groupchat_service_message:anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
-             public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
-             anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
-           end,
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
-  MsgTxt = <<OldNick/binary, " is now known as ", UserID/binary>>,
-  Body = [#text{lang = <<>>,data = MsgTxt}],
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [ByUserCard]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
-  #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [X,By], meta = #{}}.
+  #message{from = ChatJID, to = ChatJID, type = headline, id = randoms:get_string(), body = [], sub_els = [X,By], meta = #{}}.
 
 get_chat_meta_nodeid(Server,Chat)->
   Node = <<"urn:xmpp:avatar:metadata">>,
@@ -906,64 +876,63 @@ select_chat_for_update(Server,User,AvatarUrl,Hash,AvatarSize) ->
       []
   end.
 
-updated_chats(Server,User) ->
+select_chat_for_update_nick(Server,User) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(chatgroup)s from groupchat_users
+    where username = %(User)s and nickname='' and
+    chatgroup not in (select jid from groupchats where anonymous = 'incognito')
+    ")) of
+    {selected, Chats} ->
+      Chats;
+    _ ->
+      []
+  end.
+
+change_user_updated_at(Server,User) ->
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(chatgroup)s,@(id)s from groupchat_users
-    where username = %(User)s and subscription = 'both' and
+    ?SQL("update groupchat_users set user_updated_at = now()
+    where username = %(User)s and nickname='' and
     chatgroup not in (select jid from groupchats where anonymous = 'incognito')
-     and parse_avatar = 'yes' ")).
+    ")).
 
-update_vcard_info(Server,User,GIVENFAMILY,FN,NICKNAME) ->
-  OldNick = choose_nick(Server,User),
-  case  ejabberd_sql:sql_query(
-    Server,
-    ?SQL("update groupchat_users_vcard set givenfamily=%(GIVENFAMILY)s, fn=%(FN)s, nickname=%(NICKNAME)s
+update_vcard_info(Server,User,GIVENFAMILYRaw,FNRaw,NICKNAMERaw) ->
+  NICKNAME = trim(NICKNAMERaw),
+  FN = trim(FNRaw),
+  GIVENFAMILY = trim(GIVENFAMILYRaw),
+  NickLength = string:length(NICKNAME),
+  FNLength = string:length(FN),
+  GivenLength = string:length(GIVENFAMILY),
+  case NickLength of
+    _ when NickLength > 0 orelse FNLength > 0 orelse GivenLength > 0 ->
+      case  ejabberd_sql:sql_query(
+        Server,
+        ?SQL("update groupchat_users_vcard set givenfamily=%(GIVENFAMILY)s, fn=%(FN)s, nickname=%(NICKNAME)s
     where jid = %(User)s and (givenfamily !=%(GIVENFAMILY)s or fn!=%(FN)s or nickname!=%(NICKNAME)s)")) of
-    {updated,0} ->
-      ?SQL_UPSERT(Server, "groupchat_users_vcard",
-        ["!jid=%(User)s",
-          "givenfamily=%(GIVENFAMILY)s",
-          "fn=%(FN)s",
-          "nickname=%(NICKNAME)s"
-        ]);
-    {updated,Num} when Num > 0 ->
-%%      send_notifications_about_nick_change(Server,User,OldNick);
-      ok;
-    _ ->
+        {updated,0} ->
+          ?SQL_UPSERT(Server, "groupchat_users_vcard",
+            ["!jid=%(User)s",
+              "givenfamily=%(GIVENFAMILY)s",
+              "fn=%(FN)s",
+              "nickname=%(NICKNAME)s"
+            ]);
+        {updated,Num} when Num > 0 ->
+          send_notifications_about_nick_change(Server,User),
+          ok;
+        _ ->
+          ok
+      end;
+    _  ->
       ok
   end.
 
-choose_nick(Server,User) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(givenfamily)s,@(fn)s,@(nickname)s from groupchat_users_vcard
-    where jid = %(User)s")) of
-    {selected,[{GV,FN,NickName}]} ->
-      case nick(GV,FN,NickName) of
-        {ok,Value} ->
-          Value;
-        _ ->
-          User
-      end;
+trim(String) ->
+  case String of
+    _ when String =/= undefined ->
+      string:trim(String);
     _ ->
-      User
-  end.
-
-nick(GV,FN,NickVcard) ->
-  case NickVcard of
-    _ when (GV == null orelse GV == <<>>)
-      andalso (FN == null orelse FN == <<>>)
-      andalso (NickVcard == null orelse NickVcard == <<>>) ->
-      empty;
-    _  when NickVcard =/= null andalso NickVcard =/= <<>>->
-      {ok,NickVcard};
-    _  when FN =/= null andalso FN =/= <<>>->
-      {ok,FN};
-    _  when GV =/= null andalso GV =/= <<>>->
-      {ok,GV};
-    _ ->
-      {bad_request}
+      <<"">>
   end.
 
 check_old_meta(_Server,not_exist)->

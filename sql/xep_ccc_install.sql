@@ -7,7 +7,7 @@ CREATE TABLE conversation_metadata(
     read_until text NOT NULL DEFAULT '0',
     delivered_until text NOT NULL DEFAULT '0',
     displayed_until text NOT NULL DEFAULT '0',
-    updated_at bigint NOT NULL,
+    updated_at bigint,
     CONSTRAINT uc_conversation_metadata UNIQUE (username,conversation,conversation_thread),
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
     );

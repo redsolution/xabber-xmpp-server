@@ -275,7 +275,7 @@ do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headlin
           ok
       end
   end;
-do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline} = Message) ->
+do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline}) ->
   Event = lists:keyfind(ps_event,1,Sub),
   Chat = jid:to_string(jid:remove_resource(To)),
   User = jid:to_string(jid:remove_resource(From)),
@@ -309,13 +309,13 @@ do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline}
 do_route(#message{body=[], from = From, type = chat, to = To} = Msg) ->
   Displayed = xmpp:get_subtag(Msg, #message_displayed{}),
   case Displayed of
-    #message_displayed{id = MessageID,sub_els = _Sub} ->
+    #message_displayed{id = OriginID,sub_els = _Sub} ->
       {LName,LServer,_} = jid:tolower(To),
       ChatJID = jid:make(LName,LServer),
       Displayed2 = filter_packet(Displayed,ChatJID),
-      StanzaID = get_stanza_id(Displayed2,ChatJID),
+      StanzaID = get_stanza_id(Displayed2,ChatJID,LServer,OriginID),
       ejabberd_hooks:run(groupchat_got_displayed,LServer,[From,ChatJID,StanzaID]),
-      send_displayed(ChatJID,StanzaID,MessageID);
+      send_displayed(ChatJID,StanzaID,OriginID);
     _ ->
       ok
   end;
@@ -331,6 +331,8 @@ do_route(#message{body=Body} = Message) ->
       ok
   end.
 
+send_displayed(_ChatJID,empty,_MessageID) ->
+  ok;
 send_displayed(ChatJID,StanzaID,MessageID) ->
   #jid{lserver = LServer, luser = LName} = ChatJID,
   Msgs = get_displayed_msg(LName,LServer,StanzaID, MessageID),
@@ -362,10 +364,25 @@ delete_old_messages(LName,LServer,StanzaID) ->
   lists:foreach(fun(M) ->
     mnesia:dirty_delete_object(M) end, MsgToDel).
 
-get_stanza_id(Pkt,BareJID) ->
+get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
   case xmpp:get_subtag(Pkt, #stanza_id{}) of
     #stanza_id{by = BareJID, id = StanzaID} ->
       StanzaID;
+    _ ->
+      get_stanza_id_by_origin_id(LServer,OriginID)
+  end.
+
+get_stanza_id_by_origin_id(LServer,OriginID) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    @(stanza_id)d
+     from origin_id"
+    " where id=%(OriginID)s and %(LServer)H")) of
+    {selected,[<<>>]} ->
+      empty;
+    {selected,[{StanzaID}]} ->
+      integer_to_binary(StanzaID);
     _ ->
       empty
   end.

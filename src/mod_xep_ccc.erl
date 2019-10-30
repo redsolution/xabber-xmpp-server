@@ -58,7 +58,7 @@
 
 %%
 -export([get_stanza_id/2, update_retract/4, check_user_for_sync/5, try_to_sync/5, make_responce_to_sync/5, iq_result_from_remote_server/1]).
--export([get_last_sync/4, make_responce_to_sync/3, get_last_ccc_state/3]).
+-export([get_last_sync/4, make_responce_to_sync/3, get_last_ccc_state/3, get_stanza_id_from_counter/5]).
 -type c2s_state() :: ejabberd_c2s:state().
 %% records
 -record(state, {host = <<"">> :: binary()}).
@@ -67,7 +67,7 @@
 {
   us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
   bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_',
-  id = <<>>                       :: binary() | '_',
+  id = <<>>                            :: binary() | '_',
   user_id = <<>>                       :: binary() | '_',
   packet = #xmlel{}                    :: xmlel() | message() | '_'
 }
@@ -96,6 +96,7 @@
   us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
   bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_',
   user_id = <<>>                       :: binary() | '_',
+  origin_id = <<>>                     :: binary() | '_',
   id = <<>>                            :: binary() | '_'
 }).
 
@@ -184,6 +185,7 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
   Invite = xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}),
   Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
   Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
+  Conversation = jid:to_string(jid:make(PUser,PServer)),
   case Accept of
     #jingle_accept{} ->
       delete_last_call(To, LUser, LServer);
@@ -192,13 +194,13 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
   end,
   case Reject of
     #jingle_reject{} ->
+      store_special_message_id(LServer,LUser,Conversation,TS,<<"reject">>),
       delete_last_call(To, LUser, LServer);
     _ ->
       ok
   end,
   case Invite of
     false ->
-      Conversation = jid:to_string(jid:make(PUser,PServer)),
       update_metainfo(message, LServer,LUser,Conversation,TS),
       update_metainfo(read, LServer,LUser,Conversation,TS);
     _ ->
@@ -207,14 +209,19 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
   {noreply, State};
 handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver = LServer}, to = #jid{luser =  PUser,lserver = PServer}} = Pkt}, State) ->
   Displayed = xmpp:get_subtag(Pkt, #message_displayed{}),
+  IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
+  Conversation = jid:to_string(jid:make(PUser,PServer)),
+  Type = get_conversation_type(LServer,LUser,Conversation),
   case Displayed of
-    #message_displayed{} ->
-      BareJID = jid:make(LUser,LServer),
-      Displayed2 = filter_packet(Displayed,BareJID),
-      StanzaID = get_stanza_id(Displayed2,BareJID),
-      Conversation = jid:to_string(jid:make(PUser,PServer)),
+    #message_displayed{id = OriginID} when IsLocal == false andalso Type == <<"groupchat">> ->
+      StanzaID = get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID),
       update_metainfo(read, LServer,LUser,Conversation,StanzaID),
       delete_msg(LUser, LServer, PUser, PServer, StanzaID);
+    #message_displayed{id = OriginID} ->
+      BareJID = jid:make(LUser,LServer),
+      Displayed2 = filter_packet(Displayed,BareJID),
+      StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
+      update_metainfo(read, LServer,LUser,Conversation,StanzaID);
     _ ->
       ok
   end,
@@ -292,7 +299,8 @@ handle_cast({sm,#message{type = chat, from = Peer, to = To, sub_els = SubELs, me
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
       TSGroupchat = StanzaID#stanza_id.id,
-      store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat),
+      OriginID = xmpp:get_subtag(Pkt, #origin_id{}),
+      store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID),
       update_metainfo(message, LServer,LUser,Conversation,binary_to_integer(TSGroupchat));
     <<"groupchat">> ->
       update_metainfo(message, LServer,LUser,Conversation,TS);
@@ -799,6 +807,48 @@ get_actual_last_call(LUser, LServer, PUser, PServer) ->
     _ -> undefined
   end.
 
+store_last_msg(Pkt, Peer, LUser, LServer, TS, OriginIDRecord) ->
+  case {mnesia:table_info(last_msg, disc_only_copies),
+    mnesia:table_info(last_msg, memory)} of
+    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
+      ?ERROR_MSG("Last messages too large, won't store message id for ~s@~s",
+        [LUser, LServer]),
+      {error, overflow};
+    _ ->
+      {PUser, PServer, _} = jid:tolower(Peer),
+      UserID = get_user_id(Pkt),
+      case UserID of
+        false -> ok;
+        _ ->
+          F1 = fun() ->
+            mnesia:write(
+              #last_msg{us = {LUser, LServer},
+                bare_peer = {PUser, PServer, <<>>},
+                id = TS,
+                user_id = UserID,
+                packet = Pkt
+              })
+               end,
+          delete_last_msg(Peer, LUser, LServer),
+          case mnesia:transaction(F1) of
+            {atomic, ok} ->
+              ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
+              OriginID = get_origin_id(OriginIDRecord),
+              store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID),
+              ok;
+            {aborted, Err1} ->
+              ?DEBUG("Cannot add last msg for ~s@~s: ~s",
+                [LUser, LServer, Err1]),
+              Err1
+          end
+      end
+  end.
+
+get_origin_id(#origin_id{id = OriginID}) ->
+  OriginID;
+get_origin_id(_OriginID) ->
+  <<>>.
+
 store_last_msg(Pkt, Peer, LUser, LServer, TS) ->
   case {mnesia:table_info(last_msg, disc_only_copies),
     mnesia:table_info(last_msg, memory)} of
@@ -825,7 +875,6 @@ store_last_msg(Pkt, Peer, LUser, LServer, TS) ->
           case mnesia:transaction(F1) of
             {atomic, ok} ->
               ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
-              store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS),
               ok;
             {aborted, Err1} ->
               ?DEBUG("Cannot add last msg for ~s@~s: ~s",
@@ -852,7 +901,7 @@ get_user_id(Pkt) ->
       end
   end.
 
-store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS) ->
+store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID) ->
   case {mnesia:table_info(last_msg, disc_only_copies),
     mnesia:table_info(last_msg, memory)} of
     {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
@@ -865,6 +914,7 @@ store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS) ->
         mnesia:write(
           #unread_msg_counter{us = {LUser, LServer},
             bare_peer = {PUser, PServer, <<>>},
+            origin_id = OriginID,
             user_id = UserID,
             id = TS
           })
@@ -891,7 +941,7 @@ delete_last_msg(Peer, LUser, LServer) ->
 get_count(LUser, LServer, PUser, PServer) ->
   FN = fun()->
     mnesia:match_object(unread_msg_counter,
-      {unread_msg_counter, {LUser, LServer}, {PUser, PServer,<<>>},'_','_'},
+      {unread_msg_counter, {LUser, LServer}, {PUser, PServer,<<>>},'_','_','_'},
       read)
        end,
   {atomic,Msgs} = mnesia:transaction(FN),
@@ -982,6 +1032,25 @@ delete_all_msgs(LUser, LServer, PUser, PServer) ->
 get_stanza_id(Pkt,BareJID) ->
   case xmpp:get_subtag(Pkt, #stanza_id{}) of
     #stanza_id{by = BareJID, id = StanzaID} ->
+      StanzaID;
+    _ ->
+      empty
+  end.
+
+get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
+  case xmpp:get_subtag(Pkt, #stanza_id{}) of
+    #stanza_id{by = BareJID, id = StanzaID} ->
+      StanzaID;
+    _ ->
+      LUser = BareJID#jid.luser,
+      get_stanza_id_by_origin_id(LServer,OriginID,LUser)
+  end.
+
+get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID) ->
+  Msgs = get_count(LUser, LServer, PUser, PServer),
+  Msg = [X || X <- Msgs, X#unread_msg_counter.origin_id == OriginID],
+  case Msg of
+    [#unread_msg_counter{id = StanzaID}] ->
       StanzaID;
     _ ->
       empty
@@ -1353,11 +1422,26 @@ convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer) ->
       undefined
   end.
 
+get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    @(stanza_id)d
+     from origin_id"
+    " where id=%(OriginID)s and username=%(LUser)s and %(LServer)H")) of
+    {selected,[<<>>]} ->
+      empty;
+    {selected,[{StanzaID}]} ->
+      StanzaID;
+    _ ->
+      empty
+  end.
+
 %%%===================================================================
 %%% Handle sub_els
 %%%===================================================================
 
-handle_sub_els(chat, [#message_displayed{} = Displayed], From, To) ->
+handle_sub_els(chat, [#message_displayed{id = OriginID} = Displayed], From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
@@ -1367,20 +1451,20 @@ handle_sub_els(chat, [#message_displayed{} = Displayed], From, To) ->
   case Type of
     <<"groupchat">> ->
       Displayed2= filter_packet(Displayed,PeerJID),
-      StanzaID = get_stanza_id(Displayed2,PeerJID),
+      StanzaID = get_stanza_id(Displayed2,PeerJID,LServer,OriginID),
       update_metainfo(displayed, LServer,LUser,Conversation,StanzaID);
     _ ->
       Displayed2 = filter_packet(Displayed,BareJID),
-      StanzaID = get_stanza_id(Displayed2,BareJID),
+      StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
       update_metainfo(displayed, LServer,LUser,Conversation,StanzaID)
   end;
-handle_sub_els(chat, [#message_received{} = Delivered], From, To) ->
+handle_sub_els(chat, [#message_received{id = OriginID} = Delivered], From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
   BareJID = jid:make(LUser,LServer),
   Delivered2 = filter_packet(Delivered,BareJID),
-  StanzaID1 = get_stanza_id(Delivered2,BareJID),
+  StanzaID1 = get_stanza_id(Delivered2,BareJID,LServer,OriginID),
   update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1);
 handle_sub_els(headline, [#unique_received{} = UniqueReceived], From, To) ->
   case UniqueReceived of

@@ -36,7 +36,7 @@
   start/2, stop/1, depends/2, mod_options/1
 ]).
 -export([
-  remove_request/2, get_message/3
+  remove_request/2, get_message/3, store_origin_id/4, receive_message_stored/1
 ]).
 
 %% Hooks
@@ -60,6 +60,8 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(disco_sm_features, Host, ?MODULE, disco_sm_features, 50),
     ejabberd_hooks:add(sent_message_stored,
         Host, ?MODULE, sent_message_stored, 50),
+  ejabberd_hooks:add(receive_message_stored,
+    Host, ?MODULE, receive_message_stored, 88),
     ejabberd_hooks:add(user_send_packet,
         Host, ?MODULE, user_send_packet, 1),
     ok.
@@ -67,6 +69,8 @@ start(Host, _Opts) ->
 stop(Host) ->
     ejabberd_hooks:delete(sent_message_stored,
         Host, ?MODULE, sent_message_stored, 50),
+  ejabberd_hooks:delete(receive_message_stored,
+    Host, ?MODULE, receive_message_stored, 88),
     ejabberd_hooks:delete(user_send_packet,
         Host, ?MODULE, user_send_packet, 1),
   ejabberd_hooks:delete(disco_local_features, Host, ?MODULE,
@@ -78,6 +82,21 @@ depends(_Host, _Opts) ->
     [{mod_mam, hard}].
 
 mod_options(_) -> [].
+
+-spec receive_message_stored({ok, message()} | any())
+      -> {ok, message()} | any().
+receive_message_stored({ok, #message{ meta = #{sm_copy := true, mam_archived := true}} = Pkt}) ->
+  {ok,Pkt};
+receive_message_stored({ok, #message{to = #jid{luser = LUser, lserver = LServer},meta = #{stanza_id := StanzaID}} = Pkt}) ->
+  case xmpp:get_subtag(Pkt, #origin_id{}) of
+    #origin_id{id = OriginID} ->
+      store_origin_id(LServer, LUser, StanzaID, OriginID);
+    _ ->
+      ok
+  end,
+  {ok, Pkt};
+receive_message_stored(Acc) ->
+  Acc.
 
 sent_message_stored({ok, Pkt}, LServer, JID, StanzaID, Request) ->
     case Request of
@@ -131,7 +150,8 @@ add_request(Pkt,Request) ->
 check_origin_id(Pkt, LServer, JID, StanzaID) ->
   case xmpp:get_subtag(Pkt, #origin_id{}) of
     #origin_id{id = OriginID} ->
-      case store_origin_id(LServer, StanzaID, OriginID) of
+      LUser = JID#jid.luser,
+      case store_origin_id(LServer, LUser, StanzaID, OriginID) of
         ok ->
           send_received(Pkt, JID, OriginID),
           {ok, Pkt};
@@ -159,12 +179,13 @@ send_received(
         sub_els = [NewUniqueReceived]},
     ejabberd_router:route(jlib:make_jid(<<"">>, LServer, <<"">>), JID, Confirmation).
 
-store_origin_id(LServer, StanzaID, OriginID) ->
+store_origin_id(LServer, LUser, StanzaID, OriginID) ->
     case ejabberd_sql:sql_query(
            LServer,
            ?SQL_INSERT(
               "origin_id",
               ["id=%(OriginID)s",
+                "username=%(LUser)s",
                 "server_host=%(LServer)s",
                "stanza_id=%(StanzaID)d"])) of
 	{updated, _} ->

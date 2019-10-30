@@ -8,6 +8,7 @@ ALTER TABLE archive ADD CONSTRAINT unique_timestamp UNIQUE (timestamp);
 
 CREATE TABLE origin_id (
     id text NOT NULL,
+    username text,
     stanza_id BIGINT
       UNIQUE
       REFERENCES archive (timestamp) ON DELETE CASCADE

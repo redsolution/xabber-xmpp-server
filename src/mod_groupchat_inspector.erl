@@ -229,11 +229,13 @@ invite_right(_Acc, {Admin,Chat,_Server,
 
 user_exist(_Acc, {_Admin,Chat,Server,
   #xabbergroupchat_invite{invite_jid =  User, reason = _Reason, send = _Send}}) ->
-  Status = mod_groupchat_inspector_sql:check_user(User,Server,Chat),
+  Status = mod_groupchat_users:check_user_if_exist(Server,User,Chat),
   case Status of
-    exist ->
+    <<"both">> ->
       {stop,exist};
-    not_exist ->
+    <<"wait">> ->
+      {stop,exist};
+    _ ->
       ok
   end.
 
@@ -257,9 +259,17 @@ send_invite(_Acc, {Admin,Chat,_Server,
 
 message_invite(User,Chat,Admin,Reason) ->
   U = #xabbergroup_invite_user{jid = Admin},
+  ChatJID = jid:from_string(Chat),
+  LServer = ChatJID#jid.lserver,
+  Anonymous = case mod_groupchat_chats:is_anonim(LServer,Chat) of
+                yes ->
+                  <<"incognito">>;
+                _ ->
+                  <<"public">>
+              end,
   Text = <<"Add ",Chat/binary," to the contacts to join a group chat">>,
     #message{type = chat,to = jid:from_string(User), from = jid:from_string(Chat), id = randoms:get_string(),
-      sub_els = [#xabbergroupchat_invite{user = U, reason = Reason}], body = [#text{lang = <<>>,data = Text}], meta = #{}}.
+      sub_els = [#xabbergroupchat_invite{user = U, reason = Reason}, #xabbergroupchat_x{anonymous = Anonymous}], body = [#text{lang = <<>>,data = Text}], meta = #{}}.
 
 
 insert_nickname(Server,User,Chat,Nick) ->

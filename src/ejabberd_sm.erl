@@ -672,11 +672,11 @@ do_route(#presence{to = To, type = T} = Packet)
 do_route(#presence{to = #jid{lresource = <<"">>} = To} = Packet) ->
     ?DEBUG("processing presence to bare JID:~n~s", [xmpp:pp(Packet)]),
     {LUser, LServer, _} = jid:tolower(To),
-    mod_groupchat_presence:process_presence(Packet),
     lists:foreach(
       fun({_, R}) ->
 	      do_route(Packet#presence{to = jid:replace_resource(To, R)})
-      end, get_user_present_resources(LUser, LServer));
+      end, get_user_present_resources(LUser, LServer)),
+  mod_groupchat_presence:process_presence(Packet);
 do_route(#message{to = #jid{lresource = <<"">>}, type = T} = Packet) ->
     ?DEBUG("processing message to bare JID:~n~s", [xmpp:pp(Packet)]),
     if T == chat; T == headline; T == normal ->

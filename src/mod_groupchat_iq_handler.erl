@@ -306,7 +306,7 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"invite">>,
   Chat = jid:to_string(jid:remove_resource(To)),
   DecEls = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
   Invite = lists:keyfind(xabbergroupchat_invite,1,DecEls),
-  #xabbergroupchat_invite{jid = User, reason = _Reason, send = _Send} = Invite,
+  #xabbergroupchat_invite{invite_jid = User, reason = _Reason, send = _Send} = Invite,
   Result = ejabberd_hooks:run_fold(groupchat_invite_hook, Server, [], [{Admin,Chat,Server,Invite}]),
   case Result of
     forbidden ->
@@ -314,10 +314,21 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"invite">>,
     ok ->
       ejabberd_router:route(xmpp:make_iq_result(Iq));
     exist ->
-      ResIq = xmpp:make_error(Iq,xmpp:err_conflict(<<"User ",User/binary," was already invited">>,<<>>)),
+      ResIq = case User of
+                undefined ->
+                  xmpp:make_error(Iq,xmpp:err_conflict(<<"User was already invited">>,<<>>));
+                _ ->
+                  xmpp:make_error(Iq,xmpp:err_conflict(<<"User ",User/binary," was already invited">>,<<>>))
+              end,
       ejabberd_router:route(ResIq);
     not_ok ->
-      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed(<<"User ",User/binary," is in ban list">>,<<>>)))
+      ResIq = case User of
+                undefined ->
+                  xmpp:make_error(Iq,xmpp:err_not_allowed(<<"User is in ban list">>,<<>>));
+                _ ->
+                  xmpp:make_error(Iq,xmpp:err_not_allowed(<<"User ",User/binary," is in ban list">>,<<>>))
+              end,
+      ejabberd_router:route(ResIq)
   end;
 make_action(#iq{type = get, lang = Lang, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#invite">>}]}]} = Iq) ->
@@ -581,7 +592,7 @@ make_action(#iq{from = From, to = To, type = get,
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;
-make_action(#iq{from = UserJID, to = ChatJID, type = result, sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:metadata">>, items = [#ps_item{id = Hash, sub_els = Subs}]}}]}) ->
+make_action(#iq{from = UserJID, to = ChatJID, type = result, sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:metadata">>, items = [#ps_item{id = _Hash, sub_els = Subs}]}}]}) ->
   ?DEBUG("Catch pubsub meta ~p",[Subs]),
   MD = lists:map(fun(E) -> xmpp:decode(E) end, Subs),
   Meta = lists:keyfind(avatar_meta,1,MD),

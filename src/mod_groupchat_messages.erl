@@ -78,7 +78,6 @@ mod_options(_Opts) -> [].
 init([Host, _Opts]) ->
   ejabberd_hooks:add(groupchat_message_hook, Host, ?MODULE, check_invite, 5),
   ejabberd_hooks:add(groupchat_message_hook, Host, ?MODULE, check_permission_write, 10),
-  ejabberd_hooks:add(groupchat_message_hook, Host, ?MODULE, check_permission_media, 15),
   init_db(),
   {ok, #state{host = Host}}.
 
@@ -105,8 +104,7 @@ handle_info(Info, State) ->
 
 terminate(_Reason, #state{host = Host}) ->
   ejabberd_hooks:delete(groupchat_message_hook, Host, ?MODULE, check_invite, 5),
-  ejabberd_hooks:delete(groupchat_message_hook, Host, ?MODULE, check_permission_write, 10),
-  ejabberd_hooks:delete(groupchat_message_hook, Host, ?MODULE, check_permission_media, 15).
+  ejabberd_hooks:delete(groupchat_message_hook, Host, ?MODULE, check_permission_write, 10).
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
@@ -157,7 +155,7 @@ check_invite(Pkt, {_User,_Chat,_UserExits,_Els}) ->
       {stop, do_nothing}
   end.
 
-check_permission_write(_Acc, {User,Chat,UserExits,_Els}) ->
+check_permission_write(_Acc, {User,Chat,UserExits,Els}) ->
   ChatJID = jid:from_string(Chat),
   UserJId =  jid:from_string(User),
   Domain = UserJId#jid.lserver,
@@ -165,7 +163,7 @@ check_permission_write(_Acc, {User,Chat,UserExits,_Els}) ->
   Block = mod_groupchat_block:check_block(Server,Chat,User,Domain),
   case mod_groupchat_restrictions:is_restricted(<<"send-messages">>,User,Chat) of
     no when UserExits == exist ->
-      ok;
+      {stop,{ok,Els}};
     _  when UserExits == exist->
       {stop,not_ok};
     _ when Block == {stop,not_ok} ->

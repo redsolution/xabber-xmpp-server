@@ -116,6 +116,7 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
   Server = To#jid.lserver,
   UserExits = mod_groupchat_inspector_sql:check_user(User,Server,Chat),
   Result = ejabberd_hooks:run_fold(groupchat_message_hook, Server, Pkt, [{User,Chat,UserExits,Els}]),
+  ChatStatus = mod_groupchat_chats:get_chat_active(Server,Chat),
   case Result of
     not_ok ->
       Text = <<"You have no permission to write in this chat">>,
@@ -139,9 +140,19 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
       MetaSer = #{},
       MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
       send_message_no_permission_to_write(UserID,MessageNew);
-    {ok,Sub} ->
+    {ok,Sub} when ChatStatus == <<"active">> ->
       Message = change_message(Id,Type,Body,Sub,Meta,To,From),
       transform_message(Message);
+    _ when ChatStatus == <<"inactive">> ->
+      Text = <<"Chat is inactive.">>,
+      IdSer = randoms:get_string(),
+      TypeSer = chat,
+      BodySer = [#text{lang = <<>>,data = Text}],
+      ElsSer = [#xabbergroupchat_x{no_permission = <<>>}],
+      MetaSer = #{},
+      MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
+      UserID = mod_groupchat_inspector:get_user_id(Server,User,Chat),
+      send_message_no_permission_to_write(UserID,MessageNew);
     _ ->
       ok
   end.
@@ -312,6 +323,7 @@ do_route(#message{body=[], from = From, type = chat, to = To} = Msg) ->
       ChatJID = jid:make(LName,LServer),
       Displayed2 = filter_packet(Displayed,ChatJID),
       StanzaID = get_stanza_id(Displayed2,ChatJID,LServer,OriginID),
+      ?INFO_MSG("Try to get stanza_id Chat ~p~nOriginID ~p~nStanzaID ~p~n",[ChatJID,OriginID,StanzaID]),
       ejabberd_hooks:run(groupchat_got_displayed,LServer,[From,ChatJID,StanzaID]),
       send_displayed(ChatJID,StanzaID,OriginID);
     _ ->
@@ -376,7 +388,7 @@ get_stanza_id_by_origin_id(LServer,OriginID) ->
     ?SQL("select
     @(stanza_id)d
      from origin_id"
-    " where id=%(OriginID)s and %(LServer)H")) of
+    " where id=%(OriginID)s and %(LServer)H order by stanza_id asc limit 1")) of
     {selected,[<<>>]} ->
       empty;
     {selected,[{StanzaID}]} ->
@@ -462,11 +474,11 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
         user_send_packet, Server, {Pkt1, #{jid => To}}, []),
       ejabberd_hooks:run(groupchat_send_message,Server,[From,To,Pkt2]),
       case RequestReceive of
-        false ->
-%%          send_received(Pkt2,From,OriginID,To),
-          send_message(Pkt2,Users,To);
-        _ when OriginID /= false ->
+        _ when OriginID =/= false ->
           send_received(Pkt2,From,OriginID,To),
+          send_message(Pkt2,Users,To);
+        _ ->
+%%          send_received(Pkt2,From,OriginID,To),
           send_message(Pkt2,Users,To)
       end
   end.

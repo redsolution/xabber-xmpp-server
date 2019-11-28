@@ -35,7 +35,16 @@
 -export([start/2, stop/1, depends/2, mod_options/1]).
 -export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all/1, get_all_info/3, get_count_chats/1, get_depended_chats/2, get_detailed_information_of_chat/2]).
 -export([check_creator/4, check_user/4, check_chat/4,create_peer_to_peer/4, send_invite/4, check_if_peer_to_peer_exist/4, groupchat_exist/2]).
+-export([check_user_rights/4, decode/1, check_user_permission/5, validate_fs/5, change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5, get_chat_active/2]).
 start(Host, _Opts) ->
+  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_localpart, 10),
+  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_unsupported_stanzas, 15),
+  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_params, 25),
+  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, create_chat, 35),
+  ejabberd_hooks:add(groupchat_info, Host, ?MODULE, check_user_rights, 10),
+  ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, check_user_permission, 10),
+  ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, validate_fs, 15),
+  ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, change_chat, 20),
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_creator, 10),
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_chat, 15),
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_user, 20),
@@ -45,6 +54,14 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_chat, 35).
 
 stop(Host) ->
+  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_localpart, 10),
+  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_unsupported_stanzas, 15),
+  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_params, 25),
+  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, create_chat, 35),
+  ejabberd_hooks:delete(groupchat_info, Host, ?MODULE, check_user_rights, 10),
+  ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, check_user_permission, 10),
+  ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, validate_fs, 15),
+  ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, change_chat, 20),
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_creator, 10),
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_chat, 15),
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_user, 20),
@@ -56,6 +73,128 @@ stop(Host) ->
 depends(_Host, _Opts) ->  [].
 
 mod_options(_Opts) -> [].
+
+check_localpart(_Acc,Server,_CreatorLUser,_CreatorLServer,SubEls) ->
+  LocalPart = get_value(xabbergroupchat_localpart,SubEls),
+  case LocalPart of
+    undefined ->
+      ok;
+    _ ->
+      case groupchat_exist(LocalPart,Server) of
+        false ->
+          ok;
+        true ->
+          {stop,exist}
+      end
+  end.
+
+check_unsupported_stanzas(_Acc,_Server,_CreatorLUser,_CreatorLServer,SubEls) ->
+  case lists:keyfind(xmlel,1,SubEls) of
+    false ->
+      ok;
+    _ ->
+      {stop,bad_request}
+  end.
+
+check_params(_Acc,_Server,_CreatorLUser,_CreatorLServer,SubEls) ->
+  Privacy = set_value(<<"public">>,get_value(xabbergroupchat_privacy,SubEls)),
+  Membership = set_value(<<"open">>,get_value(xabbergroupchat_membership,SubEls)),
+  Index = set_value(<<"local">>,get_value(xabbergroupchat_index,SubEls)),
+  IsPrivacyValid = validate_privacy(Privacy),
+  IsMembershipValid = validate_membership(Membership),
+  IsIndexValid = validate_index(Index),
+  Length = str:len(list_to_binary(string:to_lower(binary_to_list(set_value(create_jid(),get_value(xabbergroupchat_localpart,SubEls)))))),
+  case IsPrivacyValid of
+    true when IsMembershipValid =/= false andalso IsIndexValid =/= false andalso Length > 0 ->
+      ok;
+    _ ->
+      {stop, bad_request}
+  end.
+
+create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
+  LocalPart = list_to_binary(string:to_lower(binary_to_list(set_value(create_jid(),get_value(xabbergroupchat_localpart,SubEls))))),
+  Name = set_value(LocalPart,get_value(xabbergroupchat_name,SubEls)),
+  Desc = set_value(<<>>,get_value(xabbergroupchat_description,SubEls)),
+  Privacy = set_value(<<"public">>,get_value(xabbergroupchat_privacy,SubEls)),
+  Membership = set_value(<<"open">>,get_value(xabbergroupchat_membership,SubEls)),
+  Index = set_value(<<"local">>,get_value(xabbergroupchat_index,SubEls)),
+  Contacts = list_to_binary(set_value([],get_value(xabbergroup_contacts,SubEls))),
+  Domains = list_to_binary(set_value([],get_value(xabbergroup_domains,SubEls))),
+  Chat = jid:to_string(jid:make(LocalPart,Server)),
+  Creator = jid:to_string(jid:make(CreatorLUser,CreatorLServer)),
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL_INSERT(
+      "groupchats",
+      ["name=%(Name)s",
+        "server_host=%(Server)s",
+        "anonymous=%(Privacy)s",
+        "localpart=%(LocalPart)s",
+        "jid=%(Chat)s",
+        "searchable=%(Index)s",
+        "model=%(Membership)s",
+        "description=%(Desc)s",
+        "contacts=%(Contacts)s",
+        "domains=%(Domains)s",
+        "owner=%(Creator)s"])) of
+    {updated,_N} ->
+      mod_groupchat_inspector:add_user(Server,Creator,<<"owner">>,Chat,<<"wait">>),
+      Expires = <<"1000 years">>,
+      IssuedBy = <<"server">>,
+      Permissions = get_permissions(Server),
+      lists:foreach(fun(N)->
+        {Rule} = N,
+        mod_groupchat_restrictions:insert_rule(Server,Chat,Creator,Rule,Expires,IssuedBy) end,
+        Permissions
+      ),
+    {stop,{ok,create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,Contacts,Domains),Chat,Creator}};
+    _ ->
+      {stop,exist}
+  end.
+
+check_user_rights(_Acc,User,Chat,Server) ->
+  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
+    yes ->
+      {stop, {ok,form_chat_information(Chat,Server,form)}};
+    _ ->
+      {stop, {ok,form_fixed_chat_information(Chat,Server)}}
+  end.
+
+
+%% groupchat_info_change hook
+check_user_permission(_Acc,User,Chat,_Server,_FS) ->
+  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
+    yes ->
+      ok;
+    _ ->
+      {stop, not_allowed}
+  end.
+
+validate_fs(_Acc,_User,_Chat,_Server,FS) ->
+  Decoded = decode(FS),
+  case lists:member(false, Decoded) of
+    true ->
+      {stop, not_ok};
+    _ when Decoded == [] ->
+      {stop, not_ok};
+    _ ->
+      Decoded
+  end.
+
+change_chat(Acc,_User,Chat,Server,_FS) ->
+  ?INFO_MSG("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!~nNew params ~p~n!!!!!!!!!!!!!!!!!!",[Acc]),
+  {selected,[{Name,_Anonymous,Search,Model,Desc,ChatMessage,_ContactList,_DomainList,Status}]} =
+    get_information_of_chat(Chat,Server),
+  NewName = set_value(Name,get_value(name,Acc)),
+  NewDesc = set_value(Desc,get_value(description,Acc)),
+  NewMessage = set_message(ChatMessage,get_value(message,Acc)),
+  NewStatus = set_value(Status,get_value(status,Acc)),
+  NewMembership = set_value(Model,get_value(membership,Acc)),
+  NewIndex = set_value(Search,get_value(index,Acc)),
+  update_groupchat(Server,Chat,NewName,NewDesc,NewMessage,NewStatus,NewMembership,NewIndex),
+  {stop, {ok,form_chat_information(Chat,Server,result),NewStatus}}.
+
+%%
 
 check_creator(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
   ?DEBUG("start fold ~p ~p ~p", [LServer,Creator, ChatJID]),
@@ -391,7 +530,220 @@ get_detailed_information_of_chat(Chat,Server) ->
     ?SQL("select @(name)s,@(anonymous)s,@(searchable)s,@(model)s,@(description)s,@(message)d,@(contacts)s,@(domains)s,@(parent_chat)s
     from groupchats where jid=%(Chat)s and %(Server)H")).
 
+get__all_information_chat(Chat,Server) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(name)s,@(anonymous)s,@(searchable)s,@(model)s,@(description)s,@(message)d,@(contacts)s,@(domains)s,
+    @(parent_chat)s,@(status)s
+    from groupchats where jid=%(Chat)s and %(Server)H")).
+
 created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList) ->
   #xmlel{name = <<"created">>, attrs = [{<<"xmlns">>,?NS_GROUPCHAT}],
     children = mod_groupchat_inspector:chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)
   }.
+
+
+form_fixed_chat_information(Chat,LServer) ->
+  Fields = get_fixed_chat_fields(Chat,LServer),
+  #xdata{type = form, title = <<"Groupchat change">>, instructions = [<<"Fill out this form to change the group chat">>], fields = Fields}.
+
+get_fixed_chat_fields(Chat,LServer) ->
+  {selected,[{Name,Anonymous,Search,Model,Desc,Message,ContactList,DomainList,_ParentChat,Status}]} =
+    get__all_information_chat(Chat,LServer),
+  [
+    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
+    #xdata_field{var = <<"name">>, type = 'fixed', values = [Name], label = <<"Name">>},
+    #xdata_field{var = <<"privacy">>, type = fixed, values = [Anonymous], label = <<"Privacy">>},
+    #xdata_field{var = <<"index">>, type = fixed, values = [Search], label = <<"Index">>},
+    #xdata_field{var = <<"membership">>, type = fixed, values = [Model], label = <<"Membership">>},
+    #xdata_field{var = <<"description">>, type = 'fixed', values = [Desc], label = <<"Description">>},
+    #xdata_field{var = <<"pinned-message">>, type = 'fixed', values = [integer_to_binary(Message)], label = <<"Pinned message">>},
+    #xdata_field{var = <<"contacts">>, type = 'fixed', values = [ContactList], label = <<"Contacts">>},
+    #xdata_field{var = <<"domains">>, type = 'fixed', values = [DomainList], label = <<"Domains">>},
+    #xdata_field{var = <<"status">>, type = 'fixed', values = [Status], label = <<"Status">>}
+  ].
+
+form_chat_information(Chat,LServer,Type) ->
+  Fields = get_chat_fields(Chat,LServer),
+  #xdata{type = Type, title = <<"Groupchat change">>, instructions = [<<"Fill out this form to change the group chat">>], fields = Fields}.
+
+get_chat_fields(Chat,LServer) ->
+  {selected,[{Name,_Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,Status}]} =
+    get__all_information_chat(Chat,LServer),
+  [
+    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
+    #xdata_field{var = <<"pinned-message">>, type = hidden, values = [<<"true">>], label = <<"Change pinned message">>},
+    #xdata_field{var = <<"change-avatar">>, type = hidden, values = [<<"true">>], label = <<"Change avatar">>},
+    #xdata_field{var = <<"name">>, type = 'text-single', values = [Name], label = <<"Name">>},
+    #xdata_field{var = <<"index">>, type = 'list-single', values = [Search], label = <<"Index">>, options = index_options()},
+    #xdata_field{var = <<"membership">>, type = 'list-single', values = [Model], label = <<"Membership">>, options = membership_options()},
+    #xdata_field{var = <<"description">>, type = 'text-multi', values = [Desc], label = <<"Description">>},
+    #xdata_field{var = <<"contacts">>, type = 'fixed', values = [ContactList], label = <<"Contacts">>},
+    #xdata_field{var = <<"domains">>, type = 'fixed', values = [DomainList], label = <<"Domains">>},
+    #xdata_field{var = <<"status">>, type = 'list-single', values = [Status], label = <<"Status">>, options = status_options()}
+    ].
+
+-spec decode(list()) -> list().
+decode(FS) ->
+  decode([],filter_fixed_fields(FS)).
+
+decode(Acc,[#xdata_field{var = Var, values = Values} | RestFS]) ->
+  decode([get_and_validate(Var,Values)| Acc], RestFS);
+decode(Acc, []) ->
+  Acc.
+
+filter_fixed_fields(FS) ->
+  lists:filter(fun(F) ->
+    #xdata_field{type = Type} = F,
+    case Type of
+      fixed ->
+        false;
+      hidden ->
+        false;
+      _ ->
+        true
+    end
+  end, FS).
+
+-spec get_and_validate(binary(),list()) -> binary().
+get_and_validate(<<"description">>,Desc) ->
+  {description,list_to_binary(Desc)};
+get_and_validate(<<"name">>,Name) ->
+  {name,list_to_binary(Name)};
+get_and_validate(<<"pinned-message">>,PinnedMessage) ->
+  {message,list_to_binary(PinnedMessage)};
+get_and_validate(<<"status">>,Status) ->
+  validate_status(list_to_binary(Status));
+get_and_validate(<<"index">>,Index) ->
+  validate_index(list_to_binary(Index));
+get_and_validate(<<"membership">>,Membership) ->
+  validate_membership(list_to_binary(Membership));
+get_and_validate(Var,Values) ->
+  ?INFO_MSG("Var ~p~nValues ~p~n",[Var,Values]),
+  false.
+
+validate_status(<<"active">>) ->
+  {status,<<"active">>};
+validate_status(<<"inactive">>) ->
+  {status,<<"inactive">>};
+validate_status(_Status) ->
+  false.
+
+validate_privacy(<<"public">>) ->
+  true;
+validate_privacy(<<"incognito">>) ->
+  true;
+validate_privacy(_Value) ->
+  false.
+
+validate_membership(<<"open">>) ->
+  {membership,<<"open">>};
+validate_membership(<<"member-only">>) ->
+  {membership,<<"member-only">>};
+validate_membership(_Value) ->
+  false.
+
+validate_index(<<"none">>) ->
+  {index,<<"none">>};
+validate_index(<<"local">>) ->
+  {index,<<"local">>};
+validate_index(<<"global">>) ->
+  {index,<<"global">>};
+validate_index(_Value) ->
+  false.
+
+
+-spec get_value(atom(), list()) -> term().
+get_value(Atom,FS) ->
+  case lists:keyfind(Atom,1,FS) of
+    {Atom,Value} ->
+      Value;
+    _ ->
+      undefined
+  end.
+
+set_value(Default,Value) ->
+  case Value of
+    undefined ->
+      Default;
+    _ ->
+      Value
+  end.
+
+set_message(Default,Value) ->
+  case Value of
+    undefined ->
+      Default;
+    <<>> ->
+      0;
+    _ ->
+      binary_to_integer(Value)
+  end.
+
+get_information_of_chat(Chat,Server) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(name)s,@(anonymous)s,@(searchable)s,@(model)s,@(description)s,@(message)d,@(contacts)s,@(domains)s,@(status)s
+    from groupchats where jid=%(Chat)s and %(Server)H")).
+
+update_groupchat(Server,Jid,Name,Desc,Message,Status,Membership,Index) ->
+  case ?SQL_UPSERT(Server, "groupchats",
+    ["name=%(Name)s",
+      "description=%(Desc)s",
+      "message=%(Message)d",
+      "status=%(Status)s",
+      "model=%(Membership)s",
+      "searchable=%(Index)s",
+      "!jid=%(Jid)s"]) of
+    ok ->
+      ok;
+    _Err ->
+      {error, db_failure}
+  end.
+
+create_jid() ->
+  list_to_binary(
+    [randoms:get_alphanum_string(2),randoms:get_string(),randoms:get_alphanum_string(3)]).
+
+get_permissions(Server) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(name)s from groupchat_rights where type = 'permission' ")) of
+    {selected,[]} ->
+      [];
+    {selected,[{}]} ->
+      [];
+    {selected,Permissions} ->
+      Permissions
+  end.
+
+get_chat_active(Server,Chat) ->
+  case   ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(status)s
+    from groupchats where jid=%(Chat)s and %(Server)H")) of
+    {selected,[{Status}]} ->
+      Status;
+    _ ->
+      <<"inactive">>
+  end.
+
+create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,Contacts,Domains) ->
+  SubEls = [
+    #xabbergroupchat_localpart{cdata = LocalPart},
+    #xabbergroupchat_name{cdata = Name},
+    #xabbergroupchat_description{cdata = Desc},
+    #xabbergroupchat_privacy{cdata = Privacy},
+    #xabbergroupchat_membership{cdata = Membership},
+    #xabbergroupchat_index{cdata = Index}
+  ],
+  #xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE,sub_els = SubEls}.
+
+status_options() ->
+  [#xdata_option{label = <<"Active">>, value = [<<"active">>]},#xdata_option{label = <<"Inactive">>, value = [<<"inactive">>]}].
+
+membership_options() ->
+  [#xdata_option{label = <<"Member-only">>, value = <<"member-only">>}, #xdata_option{label = <<"Open">>, value = <<"open">>}].
+
+index_options() ->
+  [#xdata_option{label = <<"None">>, value = [<<"none">>]},#xdata_option{label = <<"Local">>, value = [<<"local">>]},#xdata_option{label = <<"Global">>, value = [<<"global">>]}].

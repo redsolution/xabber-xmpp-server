@@ -42,13 +42,16 @@
          form_unsubscribed_presence/0,
          form_updated_presence/1,
          process_presence/1,
-  send_info_to_index/2, get_global_index/1, send_message_to_index/2
+  send_info_to_index/2, get_global_index/1, send_message_to_index/2,
+  chat_created/4, groupchat_changed/3
         ]).
-start(_Host, _Opts) ->
-    ok.
+start(Host, _Opts) ->
+  ejabberd_hooks:add(groupchat_created, Host, ?MODULE, chat_created, 15),
+  ejabberd_hooks:add(groupchat_changed, Host, ?MODULE, groupchat_changed, 10).
 
-stop(_Host) ->
-    ok.
+stop(Host) ->
+  ejabberd_hooks:delete(groupchat_created, Host, ?MODULE, chat_created, 15),
+  ejabberd_hooks:delete(groupchat_changed, Host, ?MODULE, groupchat_changed, 10).
 
 depends(_Host, _Opts) ->  [].
 
@@ -59,12 +62,33 @@ mod_options(_Host) -> [
   {xabber_global_indexs, []}
 ].
 
+groupchat_changed(LServer,Chat,Status) ->
+  ChatJID = jid:from_string(Chat),
+  FromChat = jid:replace_resource(ChatJID,<<"Groupchat">>),
+  Users = mod_groupchat_users:user_list_to_send(LServer,Chat),
+  case Status of
+    <<"active">> ->
+      mod_groupchat_messages:send_message(form_presence(Chat),Users,FromChat);
+    <<"inactive">> ->
+      mod_groupchat_messages:send_message(form_presence_unavailable(),Users,FromChat)
+  end.
+
+chat_created(LServer,User,Chat,_Lang) ->
+  ChatJID = jid:from_string(Chat),
+  send_info_to_index(LServer,ChatJID),
+  From = jid:replace_resource(ChatJID,<<"Groupchat">>),
+  To = jid:from_string(User),
+  Presence = #presence{from = From, to = To, type = subscribe, id = randoms:get_string()},
+  ejabberd_router:route(Presence).
+
 process_presence(#presence{to=To} = Packet) ->
   Server = To#jid.lserver,
-  ChatJid = jid:to_string(jid:make(To#jid.luser,Server,<<>>)),
-  process_presence(mod_groupchat_sql:search_for_chat(Server,ChatJid),Packet).
+  Chat = jid:to_string(jid:remove_resource(To)),
+  process_presence(mod_groupchat_chats:get_chat_active(Server,Chat),Packet).
 
 process_presence({selected,[]},Packet) ->
+  Packet;
+process_presence(<<"inactive">>, Packet) ->
   Packet;
 process_presence(_,Packet) ->
   answer_presence(Packet).
@@ -158,6 +182,7 @@ answer_presence(#presence{to = To, from = From, type = available,
       PresentNum = get_present(ChatJid),
       case Present of
         false when NotPresent == false andalso Status == exist ->
+          mod_groupchat_vcard:make_chat_notification_message(Server,ChatJid,From),
           ejabberd_router:route(FromChat,From,form_presence(ChatJid,User));
         _  when Present =/= false andalso NotPresent == false andalso Status == exist ->
           mod_groupchat_sql:update_last_seen(Server,User,ChatJid),
@@ -170,7 +195,6 @@ answer_presence(#presence{to = To, from = From, type = available,
         _  when Present == false andalso NotPresent =/= false andalso Status == exist->
           change_present_state(To,From);
         _ ->
-          mod_groupchat_vcard:make_chat_notification_message(Server,ChatJid,To),
           ok
       end
   end;

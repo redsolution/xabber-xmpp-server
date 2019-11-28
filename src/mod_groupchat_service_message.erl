@@ -32,10 +32,20 @@
 
 %% API
 
--export([user_left/2, user_join/2, users_kicked/2, user_updated/2, created_chat/4, user_change_own_avatar/3, user_change_avatar/4, anon/1, send_to_all/2 ]).
+-export([user_left/2,
+  user_join/2,
+  users_kicked/2,
+  user_updated/2,
+  created_chat/4,
+  user_change_own_avatar/3,
+  user_change_avatar/4,
+  anon/1,
+  send_to_all/2,
+  chat_created/4 ]).
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 start(Host, _Opts) ->
+  ejabberd_hooks:add(groupchat_created, Host, ?MODULE, chat_created, 10),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
   ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, users_kicked, 35),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 55),
@@ -44,6 +54,7 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, user_left, 25).
 
 stop(Host) ->
+  ejabberd_hooks:delete(groupchat_created, Host, ?MODULE, chat_created, 10),
   ejabberd_hooks:delete(groupchat_user_change_own_avatar, Host, ?MODULE, user_change_own_avatar, 10),
   ejabberd_hooks:delete(groupchat_user_change_some_avatar, Host, ?MODULE, user_change_avatar, 10),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
@@ -100,7 +111,9 @@ user_change_own_avatar(User, Server, Chat) ->
   Body = [#text{lang = <<>>,data = MsgTxt}],
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [ByUserCard]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
-  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [X,By], meta = #{}},
+  SubEls = [X,By],
+  M = form_message(ChatJID,Body,SubEls),
+%%  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [X,By], meta = #{}},
   send_to_all(Chat,M),
   {stop,ok}.
 
@@ -138,7 +151,38 @@ created_chat(Created,User,ChatJID,Lang) ->
     contacts = Contacts
   },
   By = #xmppreference{type = <<"groupchat">>, sub_els = [X]},
-  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [XEl,By], meta = #{}},
+  SubEls = [XEl,By],
+  M = form_message(ChatJID,Body,SubEls),
+%%  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [XEl,By], meta = #{}},
+  send_to_all(Chat,M).
+
+chat_created(LServer,User,Chat,Lang) ->
+  Txt = <<"created chat">>,
+  X = mod_groupchat_users:form_user_card(User,Chat),
+  UserID = case anon(X) of
+             public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
+               X#xabbergroupchat_user_card.nickname;
+             public ->
+               jid:to_string(X#xabbergroupchat_user_card.jid);
+             anonim ->
+               X#xabbergroupchat_user_card.nickname
+           end,
+  MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
+  Body = [#text{lang = <<>>,data = MsgTxt}],
+  {selected,[{Name,Anonymous,Search,Model,Desc,_Message,_ContactList,_DomainList,_ParentChat}]} =
+    mod_groupchat_chats:get_detailed_information_of_chat(Chat,LServer),
+  XEl = #xabbergroupchat_x{
+    xmlns = ?NS_GROUPCHAT_CREATE,
+    name = Name,
+    description = Desc,
+    searchable = Search,
+    model = Model,
+    anonymous = Anonymous
+  },
+  By = #xmppreference{type = <<"groupchat">>, sub_els = [X]},
+  SubEls = [XEl,By],
+  M = form_message(jid:from_string(Chat),Body,SubEls),
+%%  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [XEl,By], meta = #{}},
   send_to_all(Chat,M).
 
 users_kicked(Acc, #iq{lang = Lang,to = To, from = From}) ->
@@ -154,9 +198,9 @@ users_kicked(Acc, #iq{lang = Lang,to = To, from = From}) ->
                X#xabbergroupchat_user_card.nickname
            end,
   KickedUsers = lists:map(fun(Card) ->
-    case anon(X) of
-      public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
-        [X#xabbergroupchat_user_card.nickname, <<" ">>];
+    case anon(Card) of
+      public when Card#xabbergroupchat_user_card.nickname =/= undefined andalso Card#xabbergroupchat_user_card.nickname =/= <<" ">> andalso Card#xabbergroupchat_user_card.nickname =/= <<"">> andalso Card#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(Card#xabbergroupchat_user_card.nickname) > 1 ->
+        [Card#xabbergroupchat_user_card.nickname, <<" ">>];
       public ->
         [jid:to_string(Card#xabbergroupchat_user_card.jid),<<" ">>];
       anonim ->
@@ -173,9 +217,11 @@ users_kicked(Acc, #iq{lang = Lang,to = To, from = From}) ->
   end,
   MsgTxt = text_for_msg(Lang,Txt,UserID,KickedUsers,AddTxt),
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  XEl = #xabbergroupchat_x{sub_els = Acc},
+  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_KICK, sub_els = Acc},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [X]},
-  M = #message{from = To, to = To, type = chat, id = randoms:get_string(), body = Body, sub_els = [XEl,By], meta = #{}},
+  SubEls = [XEl,By],
+  M = form_message(To,Body,SubEls),
+%%  M = #message{from = To, to = To, type = chat, id = randoms:get_string(), body = Body, sub_els = [XEl,By], meta = #{}},
   send_to_all(Chat,M),
   send_presences(To#jid.lserver,Chat),
   {stop,ok}.
@@ -196,7 +242,8 @@ user_left(_Acc,{Server,_User,Chat,X,Lang})->
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_LEFT, version = Version},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [X]},
-  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [XEl,By], meta = #{}},
+  SubEls = [XEl,By],
+  M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M),
   send_presences(Server,Chat),
   ok.
@@ -219,7 +266,8 @@ user_join(_Acc,{Server,To,Chat,Lang}) ->
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_JOIN, version = Version},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
-  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [X,By], meta = #{}},
+  SubEls = [X,By],
+  M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M),
   send_presences(Server,Chat),
   {stop,ok}.
@@ -295,7 +343,8 @@ user_updated({Accum,OldCard},{Server,Chat,Admin,E,Lang}) ->
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [UpdatedUser]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
-  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [X,By], meta = #{}},
+  SubEls = [X,By],
+  M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M),
   {stop,ok}.
 
@@ -352,6 +401,7 @@ send_presences(Server,Chat) ->
   FromChat = jid:replace_resource(To,<<"Groupchat">>),
   mod_groupchat_messages:send_message(mod_groupchat_presence:form_presence(Chat),Users,FromChat).
 
+-spec send_to_all(binary(), binary()) -> ok.
 send_to_all(Chat,Stanza) ->
   ChatJID = jid:from_string(Chat),
   FromChat = jid:replace_resource(ChatJID,<<"Groupchat">>),
@@ -384,3 +434,19 @@ text_for_msg(Lang,Txt,UserName,Additional1,Additional2) ->
   translate:translate(Lang, Txt),
   MsgList = [UserName," ",Txt,Additional1,Additional2],
   list_to_binary(MsgList).
+
+form_message(From,Body,SubEls) ->
+  ID = create_id(),
+  OriginID = #origin_id{id = ID},
+  NewEls = [OriginID | SubEls],
+  #message{from = From, to = From, type = chat, id = ID, body = Body, sub_els = NewEls, meta = #{}}.
+
+-spec create_id() -> binary().
+create_id() ->
+  A = randoms:get_alphanum_string(10),
+  B = randoms:get_alphanum_string(4),
+  C = randoms:get_alphanum_string(4),
+  D = randoms:get_alphanum_string(4),
+  E = randoms:get_alphanum_string(10),
+  ID = <<A/binary, "-", B/binary, "-", C/binary, "-", D/binary, "-", E/binary>>,
+  list_to_binary(string:to_lower(binary_to_list(ID))).

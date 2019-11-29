@@ -45,8 +45,8 @@
   delete_message/6,
   delete_all_message/6,
   delete_all_incoming_messages/6,
-  store_event/6,
-  notificate/6,
+  store_event/6, store_replace_event/6,
+  notificate/6, notificate_replace/6,
   save_id_in_conversation/4,
   get_version/2,get_count_events/3
 ]).
@@ -239,9 +239,9 @@ register_hooks(Host) ->
   ejabberd_hooks:add(rewrite_local_message, Host, ?MODULE,
     replace_message, 15),
   ejabberd_hooks:add(rewrite_local_message, Host, ?MODULE,
-    store_event, 20),
+    store_replace_event, 20),
   ejabberd_hooks:add(rewrite_local_message, Host, ?MODULE,
-    notificate, 25),
+    notificate_replace, 25),
   %% add retract one message hooks
   ejabberd_hooks:add(retract_local_message, Host, ?MODULE,
     message_exist, 10),
@@ -479,7 +479,6 @@ process_iq(#iq{
           Replaced = #replaced{stamp = erlang:timestamp()},
           NewMessage = Message#xabber_replace_message{replaced = Replaced},
           OurReplaceAsk = #xabber_replace{by = OurUserJID, conversation = From, id = OurStanzaID, xabber_replace_message = NewMessage, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-          ?DEBUG("Replace message ~p in chat ~p by ~p~n Retract ~p",[StanzaID,jid:to_string(To),BarePeer,OurReplaceAsk]),
           start_rewrite_message(LUser, LServer, OurStanzaID, IQ, OurReplaceAsk, Version);
         _ ->
           ?DEBUG("Unknow error during retract ~p",[IQ]),
@@ -785,24 +784,36 @@ delete_message(_Acc,_RewriteAsk,LUser,LServer,StanzaID, _Version) ->
   end.
 
 replace_message(XML, RewriteAsk, LUser,LServer,StanzaID, _Version) ->
-  #xabber_replace{xabber_replace_message = ReplaceMessage, sub_els = Sub} = RewriteAsk,
+  #xabber_replace{xabber_replace_message = ReplaceMessage} = RewriteAsk,
+  Sub = ReplaceMessage#xabber_replace_message.sub_els,
   SubNewFil = filter_els(Sub),
   OldMessage = xmpp:decode(fxml_stream:parse_element(XML)),
   Lang = xmpp:get_lang(OldMessage),
   SubEls = xmpp:get_els(OldMessage),
-  RefOld = filter_els(SubEls),
-  RefReplaced = #xmppreference{type = <<"replaced">>, sub_els = RefOld},
   Replaced = ReplaceMessage#xabber_replace_message.replaced,
-  NewSubEls = filter_markup_mention(SubEls),
-  NewEls = [Replaced] ++ NewSubEls ++ [RefReplaced] ++ SubNewFil,
+  NewSubEls = strip_els(SubEls),
+  NewEls = [Replaced] ++ NewSubEls ++ SubNewFil,
   NewTXT = ReplaceMessage#xabber_replace_message.body,
   NewMessage = OldMessage#message{body = [#text{data = NewTXT,lang = Lang}], sub_els = NewEls},
   NewXML = fxml:element_to_binary(xmpp:encode(NewMessage)),
-  ?DEBUG("Try replace  msg ~p~n user ~p~n xml ~p~n txt ~p",[StanzaID,LUser,NewXML,NewTXT]),
+  NewElsWithAll = set_stanza_id(NewEls,jid:make(LUser,LServer),integer_to_binary(StanzaID)),
+  NewReplaceMessage = ReplaceMessage#xabber_replace_message{sub_els = NewElsWithAll},
   ejabberd_sql:sql_query(
     LServer,
-    ?SQL("update archive set xml = %(NewXML)s, txt = %(NewTXT)s where timestamp=%(StanzaID)d and username=%(LUser)s and %(LServer)H")).
+    ?SQL("update archive set xml = %(NewXML)s, txt = %(NewTXT)s where timestamp=%(StanzaID)d and username=%(LUser)s and %(LServer)H")),
+  RewriteAsk#xabber_replace{xabber_replace_message = NewReplaceMessage}.
 
+store_replace_event(Acc,_RewriteAsk,LUser,LServer,_StanzaID, Version) ->
+  RA = xmpp:encode(Acc),
+  Txt = fxml:element_to_binary(RA),
+  insert_event(LServer,LUser,Txt,Version),
+  Acc.
+
+notificate_replace(Acc, _RewriteAsk,LUser,LServer,_StanzaID, _Version) ->
+  BareJID = jid:make(LUser,LServer),
+  Message = #message{id = randoms:get_string(), type = headline, from = BareJID, to = BareJID, sub_els = [Acc]},
+  send_notification(LUser,LServer,Message),
+  {stop,ok}.
 
 store_event(_Acc,RewriteAsk,LUser,LServer,_StanzaID, Version) ->
   ?DEBUG("start storing ~p ",[RewriteAsk]),
@@ -1076,6 +1087,36 @@ filter_markup_mention(Els) ->
     end, Els),
   NewEls.
 
+strip_els(Els) ->
+  NewEls = lists:filter(
+    fun(El) ->
+      Name = xmpp:get_name(El),
+      NS = xmpp:get_ns(El),
+      if (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
+      (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0);
+      (Name == <<"time">> andalso NS == ?NS_UNIQUE);
+      (Name == <<"origin-id">> andalso NS == ?NS_SID_0);
+      (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
+        try xmpp:decode(El) of
+          #mam_archived{} ->
+            false;
+          #unique_time{} ->
+            false;
+          #origin_id{} ->
+            true;
+          #stanza_id{} ->
+            false;
+          #xmppreference{type = _Any} ->
+            false
+        catch _:{xmpp_codec, _} ->
+          false
+        end;
+        true ->
+          false
+      end
+    end, Els),
+  NewEls.
+
 filter_all_exept_groupchat(Pkt) ->
   Els = xmpp:get_els(Pkt),
   NewEls = lists:filter(
@@ -1096,3 +1137,20 @@ filter_all_exept_groupchat(Pkt) ->
       end
     end, Els),
   xmpp:set_els(Pkt,NewEls).
+
+-spec set_stanza_id(list(), jid(), binary()) -> list().
+set_stanza_id(SubELS, JID, ID) ->
+  TimeStamp = usec_to_now(binary_to_integer(ID)),
+  BareJID = jid:remove_resource(JID),
+  Archived = #mam_archived{by = BareJID, id = ID},
+  StanzaID = #stanza_id{by = BareJID, id = ID},
+  Time = #unique_time{by = BareJID, stamp = TimeStamp},
+  [Archived, StanzaID, Time|SubELS].
+
+-spec usec_to_now(non_neg_integer()) -> erlang:timestamp().
+usec_to_now(Int) ->
+  Secs = Int div 1000000,
+  USec = Int rem 1000000,
+  MSec = Secs div 1000000,
+  Sec = Secs rem 1000000,
+  {MSec, Sec, USec}.

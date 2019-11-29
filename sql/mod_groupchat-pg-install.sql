@@ -17,6 +17,7 @@ CREATE TABLE groupchats (
     message bigint DEFAULT 0,
     contacts text,
     domains text,
+    status text NOT NULL DEFAULT 'active',
     parent_chat text DEFAULT '0'
 );
 

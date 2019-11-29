@@ -455,6 +455,7 @@ CREATE TABLE groupchats (
     message bigint DEFAULT 0,
     contacts text,
     domains text,
+    status text NOT NULL DEFAULT 'active',
     parent_chat text DEFAULT '0',
     PRIMARY KEY (server_host, localpart),
     FOREIGN KEY (server_host, localpart) REFERENCES users (server_host, username) ON DELETE CASCADE

@@ -245,12 +245,12 @@ check_if_message_pinned(_Acc, {Server,_User,Chat,ID,_X,_V}) ->
 
 delete_message(_Acc, {Server,_User,Chat,ID,_X,_V}) ->
   NextID = select_next_id(Server,ID),
+  PreviousID = select_previous_id(Server,ID),
   case NextID of
     [] ->
       delete_message_from_archive(Server,Chat,ID),
       ok;
-    _ ->
-      PreviousID = select_previous_id(Server,ID),
+    _ when NextID =/= [] andalso PreviousID =/= [] ->
       delete_message_from_archive(Server,Chat,ID),
       ejabberd_sql:sql_query(
         Server,
@@ -260,6 +260,9 @@ delete_message(_Acc, {Server,_User,Chat,ID,_X,_V}) ->
             "server_host=%(Server)s",
             "stanza_id=%(NextID)d"
           ])),
+      ok;
+    _ ->
+      delete_message_from_archive(Server,Chat,ID),
       ok
   end.
 
@@ -344,6 +347,7 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   M = fxml_stream:parse_element(Xml),
   MD = xmpp:decode(M),
   From = MD#message.from,
+  MessageID = MD#message.id,
   To = MD#message.to,
   Meta = MD#message.meta,
   Type = MD#message.type,
@@ -352,10 +356,6 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   OldText = xmpp:get_text(Body),
   RefEls = get_references(Sub),
   [X] = [E || E <- RefEls, E#xmppreference.type == <<"groupchat">>],
-  RefElsMark = [El || El <- RefEls, El#xmppreference.type == <<"markup">>],
-  RefElsMent = [El || El <- RefEls, El#xmppreference.type == <<"mention">>],
-  RefNew = RefElsMark ++ RefElsMent ++ [#text{lang = <<>>, data = OldText}],
-  ReplacedRef = #xmppreference{type = <<"replaced">>, sub_els = RefNew},
   NewSubFiltered = filter_els(NewEls),
   UserCard = xmpp:get_subtag(X, #xabbergroupchat_user_card{}),
   UserID = UserCard#xabbergroupchat_user_card.id,
@@ -367,12 +367,13 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   NewX = #xmppreference{type = <<"groupchat">>, sub_els = [ActualCard], 'begin' = 0, 'end' = Length - 1},
   Els1 = strip_els(Sub),
   NewSubRefShift = shift_references(NewSubFiltered, Length),
-  Els2 = Els1 ++ [NewX] ++ [ReplacedRef],
+  Els2 = Els1 ++ [NewX] ++ NewSubRefShift,
   NewText = <<Username/binary, Text/binary >>,
   NewBody = [#text{lang = <<>>,data = NewText}],
   R = #replaced{stamp = erlang:timestamp(), body = OldText},
   Els3 = [R|Els2],
-  NewM = xmpp:encode(#message{id = ID, type = Type, from = From, to = To, sub_els = Els3, meta = Meta, body = NewBody}),
+  MessageDecoded = #message{id = MessageID, type = Type, from = From, to = To, sub_els = Els3, meta = Meta, body = NewBody},
+  NewM = xmpp:encode(MessageDecoded),
   XML = fxml:element_to_binary(NewM),
   ?SQL_UPSERT(
     Server,
@@ -382,7 +383,8 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
       "xml=%(XML)s",
       "txt=%(NewText)s",
       "server_host=%(Server)s"]),
-  NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{body = NewText, sub_els = NewSubRefShift},
+  Els4 =  set_stanza_id(Els3,ChatJID,ID),
+  NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{body = NewText, sub_els = Els4},
   NewReplace = Replace#xabber_replace{xabber_replace_message = NewXabberReplaceMessage},
   NewReplace.
 
@@ -559,21 +561,27 @@ strip_els(Els) ->
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
+      if (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
+      (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0);
+      (Name == <<"time">> andalso NS == ?NS_UNIQUE);
+      (Name == <<"origin-id">> andalso NS == ?NS_SID_0);
+      (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
         try xmpp:decode(El) of
-          #xmppreference{type = <<"groupchat">>} ->
+          #mam_archived{} ->
             false;
-          #xmppreference{type = <<"markup">>} ->
+          #unique_time{} ->
             false;
-          #xmppreference{type = <<"mention">>} ->
+          #origin_id{} ->
+            true;
+          #stanza_id{} ->
             false;
           #xmppreference{type = _Any} ->
-            true
+            false
         catch _:{xmpp_codec, _} ->
           false
         end;
         true ->
-          true
+          false
       end
     end, Els),
   NewEls.
@@ -619,3 +627,20 @@ shift_references(Els, Length) ->
       end
     end, Els),
   NewEls.
+
+-spec set_stanza_id(list(), jid(), binary()) -> list().
+set_stanza_id(SubELS, JID, ID) ->
+  TimeStamp = usec_to_now(binary_to_integer(ID)),
+  BareJID = jid:remove_resource(JID),
+  Archived = #mam_archived{by = BareJID, id = ID},
+  StanzaID = #stanza_id{by = BareJID, id = ID},
+  Time = #unique_time{by = BareJID, stamp = TimeStamp},
+  [Archived, StanzaID, Time|SubELS].
+
+-spec usec_to_now(non_neg_integer()) -> erlang:timestamp().
+usec_to_now(Int) ->
+  Secs = Int div 1000000,
+  USec = Int rem 1000000,
+  MSec = Secs div 1000000,
+  Sec = Secs rem 1000000,
+  {MSec, Sec, USec}.

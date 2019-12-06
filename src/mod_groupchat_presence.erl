@@ -67,10 +67,10 @@ groupchat_changed(LServer,Chat,Status) ->
   FromChat = jid:replace_resource(ChatJID,<<"Groupchat">>),
   Users = mod_groupchat_users:user_list_to_send(LServer,Chat),
   case Status of
-    <<"active">> ->
-      mod_groupchat_messages:send_message(form_presence(Chat),Users,FromChat);
     <<"inactive">> ->
-      mod_groupchat_messages:send_message(form_presence_unavailable(),Users,FromChat)
+      mod_groupchat_messages:send_message(form_presence_unavailable(Chat),Users,FromChat);
+    _ ->
+      mod_groupchat_messages:send_message(form_presence(Chat),Users,FromChat)
   end.
 
 chat_created(LServer,User,Chat,_Lang) ->
@@ -88,8 +88,13 @@ process_presence(#presence{to=To} = Packet) ->
 
 process_presence({selected,[]},Packet) ->
   Packet;
-process_presence(<<"inactive">>, Packet) ->
+process_presence(false, Packet) ->
   Packet;
+process_presence(<<"inactive">>, Packet) ->
+  #presence{from = From, to = To} = Packet,
+  Chat = jid:to_string(jid:remove_resource(To)),
+  P = form_presence_unavailable(Chat,From),
+  ejabberd_router:route(P);
 process_presence(_,Packet) ->
   answer_presence(Packet).
 
@@ -370,14 +375,7 @@ send_info_to_index(Server,ChatJID) ->
       lists:foreach(fun(Index) ->
         Info = info_about_chat(Chat),
         To = jid:from_string(Index),
-        Groupchat_x = #xmlel{
-          name = <<"x">>,
-          attrs = [
-            {<<"xmlns">>, ?NS_GROUPCHAT}
-          ],
-          children = Info
-        },
-        Presence = #presence{id = randoms:get_string(), type = available, from = ChatJID, to = To, sub_els = [Groupchat_x]},
+        Presence = #presence{id = randoms:get_string(), type = available, from = ChatJID, to = To, sub_els = [Info]},
         ejabberd_router:route(Presence) end, GlobalIndexs
       );
     _ ->
@@ -419,70 +417,121 @@ form_presence_unavailable() ->
     ]
   }.
 
-form_presence(ChatJid) ->
-  Info = info_about_chat(ChatJid),
-  InfoEl = Info,
-  Groupchat_x = #xmlel{
-    name = <<"x">>,
-    attrs = [
-      {<<"xmlns">>, ?NS_GROUPCHAT}
-    ],
-    children = InfoEl
-  },
-  Children = [Groupchat_x],
-  #xmlel{
-    name = <<"presence">>,
-    attrs = [
-      {<<"type">>, <<"available">>},
-      {<<"xmlns">>, <<"jabber:client">>}
-    ],
-    children = Children
-  }.
+form_presence_unavailable(Chat) ->
+  Groupchat_x = info_about_chat(Chat),
+  #presence{type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x]}.
 
-form_presence(ChatJid,User) ->
-  Info = detailed_about_chat(ChatJid),
-  {CollectState,P2PState} = mod_groupchat_inspector:get_collect_state(ChatJid,User),
-  Hash = mod_groupchat_inspector:get_chat_avatar_id(ChatJid),
-  VcardX = xmpp:encode(#vcard_xupdate{hash = Hash}),
-  CollectEl = #xmlel{
-    name = <<"collect">>,
-    children = [{xmlcdata,CollectState}]
-  },
-  P2PEl = #xmlel{
-    name = <<"peer-to-peer">>,
-    children = [{xmlcdata,P2PState}]
-  },
-  InfoEl = Info++[CollectEl,P2PEl],
-  Groupchat_x = #xmlel{
-    name = <<"x">>,
-    attrs = [
-      {<<"xmlns">>, ?NS_GROUPCHAT}
-    ],
-    children = InfoEl
-  },
-  Children = [VcardX,Groupchat_x],
-      #xmlel{
-         name = <<"presence">>,
-         attrs = [
-                  {<<"type">>, <<"available">>},
-                  {<<"xmlns">>, <<"jabber:client">>}
-                 ],
-         children = Children
-        }.
+form_presence_unavailable(Chat,To) ->
+  Groupchat_x = info_about_chat(Chat),
+  From = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
+  #presence{from = From, to = To, type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x]}.
+
+form_presence(ChatJid) ->
+  Groupchat_x = info_about_chat(ChatJid),
+
+  #presence{type = available, id = randoms:get_string(), sub_els = [Groupchat_x]}.
+
+form_presence(Chat,User) ->
+  ChatJID = jid:from_string(Chat),
+  LServer = ChatJID#jid.lserver,
+  {selected,[{Name,Anonymous,Search,Model,Desc,Message,ContactList,DomainList,ParentChat,Status}]} =
+    mod_groupchat_chats:get_all_information_chat(Chat,LServer),
+  {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(LServer,Chat),
+  Members = list_to_binary(MembersC),
+  ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',Chat),
+  AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
+  UniqueOnline = lists:usort(AllUsersSession),
+  Present = integer_to_binary(length(UniqueOnline)),
+  {CollectState,P2PState} = mod_groupchat_inspector:get_collect_state(Chat,User),
+  Hash = mod_groupchat_inspector:get_chat_avatar_id(Chat),
+  VcardX = #vcard_xupdate{hash = Hash},
+  Pinned = case Message of
+             null ->
+               <<>>;
+             0 ->
+               <<>>;
+             _ when is_integer(Message), Message > 0 ->
+               integer_to_binary(Message);
+             _ when is_binary(Message) ->
+               Message
+           end,
+  SubEls = case ParentChat of
+             <<"0">> ->
+               [
+                 #xabbergroupchat_x{
+                   members = Members,
+                   present = Present,
+                   sub_els = [
+                     #xabbergroupchat_description{cdata = Desc},
+                     #xabbergroupchat_membership{cdata = Model},
+                     #xabbergroupchat_index{cdata = Search},
+                     #xabbergroupchat_name{cdata = Name},
+                     #xabbergroupchat_privacy{cdata = Anonymous},
+                     #xabbergroupchat_pinned_message{cdata = Pinned},
+                     #xabbergroup_domains{domain = form_list(DomainList)},
+                     #xabbergroup_contacts{contact = form_list(ContactList)},
+                     #collect{cdata = CollectState},
+                     #xabbergroup_peer{cdata = P2PState},
+                     #xabbergroupchat_status{cdata = Status}
+                   ]
+                 },
+                 VcardX
+               ];
+             _ ->
+               [
+                 #xabbergroupchat_x{
+                   members = Members,
+                   present = Present,
+                   parent = jid:from_string(ParentChat),
+                   sub_els = [
+                     #xabbergroupchat_description{cdata = Desc},
+                     #xabbergroupchat_membership{cdata = Model},
+                     #xabbergroupchat_index{cdata = Search},
+                     #xabbergroupchat_name{cdata = Name},
+                     #xabbergroupchat_privacy{cdata = Anonymous},
+                     #xabbergroupchat_pinned_message{cdata = Pinned},
+                     #xabbergroup_domains{domain = form_list(DomainList)},
+                     #xabbergroup_contacts{contact = form_list(ContactList)},
+                     #xabbergroupchat_status{cdata = Status}
+                   ]
+                 },
+                 VcardX
+               ]
+           end,
+  #presence{type = available, id = randoms:get_string(), sub_els = SubEls}.
 
 info_about_chat(ChatJid) ->
   S = jid:from_string(ChatJid),
   Server = S#jid.lserver,
-  {selected,[{Name,Anonymous,Search,Model,Desc,Message,ContactList,DomainList}]} =
-    mod_groupchat_sql:get_information_of_chat(ChatJid,Server),
-  mod_groupchat_inspector:chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList).
+  {selected,[{Name,Anonymous,Search,Model,Desc,Message,_ContactList,_DomainList,Status}]} =
+    mod_groupchat_chats:get_information_of_chat(ChatJid,Server),
+  ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',ChatJid),
+  AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
+  UniqueOnline = lists:usort(AllUsersSession),
+  Present = integer_to_binary(length(UniqueOnline)),
+    #xabbergroupchat_x{
+      xmlns = ?NS_GROUPCHAT,
+      members = integer_to_binary(mod_groupchat_chats:count_users(Server,ChatJid)),
+      present = Present,
+      sub_els =
+      [
+        #xabbergroupchat_description{cdata = Desc},
+        #xabbergroupchat_membership{cdata = Model},
+        #xabbergroupchat_index{cdata = Search},
+        #xabbergroupchat_name{cdata = Name},
+        #xabbergroupchat_privacy{cdata = Anonymous},
+        #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)},
+        #xabbergroup_domains{domain = []},
+        #xabbergroup_contacts{contact = []},
+        #xabbergroupchat_status{cdata = Status}
+      ]}.
 
-detailed_about_chat(Chat) ->
-  ChatJID = jid:from_string(Chat),
-  LServer = ChatJID#jid.lserver,
-  {selected,[{Name,Anonymous,Search,Model,Desc,Message,ContactList,DomainList,ParentChat}]} =
-    mod_groupchat_chats:get_detailed_information_of_chat(Chat,LServer),
-  mod_groupchat_inspector:detailed_chat_information(Name,Chat,Anonymous,Search,Model,Desc,Message,ContactList,DomainList,ParentChat).
+
+form_list(Elements) ->
+  Splited = binary:split(Elements,<<",">>,[global]),
+  Empty = [X||X <- Splited, X == <<>>],
+  NotEmpty = Splited -- Empty,
+  NotEmpty.
 
 
 form_presence_vcard_update(Hash) ->

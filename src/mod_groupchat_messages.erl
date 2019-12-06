@@ -140,15 +140,15 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
       MetaSer = #{},
       MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
       send_message_no_permission_to_write(UserID,MessageNew);
-    {ok,Sub} when ChatStatus == <<"active">> ->
+    {ok,Sub} when ChatStatus =/= <<"inactive">> ->
       Message = change_message(Id,Type,Body,Sub,Meta,To,From),
       transform_message(Message);
     _ when ChatStatus == <<"inactive">> ->
-      Text = <<"Chat is inactive.">>,
+      Text = <<"Chat was inactived.">>,
       IdSer = randoms:get_string(),
       TypeSer = chat,
       BodySer = [#text{lang = <<>>,data = Text}],
-      ElsSer = [#xabbergroupchat_x{no_permission = <<>>}],
+      ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}],
       MetaSer = #{},
       MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
       UserID = mod_groupchat_inspector:get_user_id(Server,User,Chat),
@@ -306,9 +306,8 @@ do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline}
           OldID = mod_groupchat_vcard:get_image_id(LServer,User, Chat),
           case OldID of
             IdAvatar ->
-              ?INFO_MSG("Do nothing",[]);
+              ok;
             _ ->
-              ?INFO_MSG("try update",[]),
               ejabberd_router:route(jid:replace_resource(To,<<"Groupchat">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta())
           end;
         _ ->
@@ -323,7 +322,6 @@ do_route(#message{body=[], from = From, type = chat, to = To} = Msg) ->
       ChatJID = jid:make(LName,LServer),
       Displayed2 = filter_packet(Displayed,ChatJID),
       StanzaID = get_stanza_id(Displayed2,ChatJID,LServer,OriginID),
-      ?INFO_MSG("Try to get stanza_id Chat ~p~nOriginID ~p~nStanzaID ~p~n",[ChatJID,OriginID,StanzaID]),
       ejabberd_hooks:run(groupchat_got_displayed,LServer,[From,ChatJID,StanzaID]),
       send_displayed(ChatJID,StanzaID,OriginID);
     _ ->
@@ -763,42 +761,6 @@ get_actual_user_info(Server, Msgs) ->
         {Chat, UserCards}
     end end, Chats),
   change_all_messages(ChatandUserCards,Msgs).
-%%  [Chat] = Chats,
-%%  case Chat of
-%%    false ->
-%%      Msgs;
-%%    _ ->
-%%      JIDsRaw = lists:usort(lists:map(fun(UserID) ->
-%%        {mod_groupchat_users:get_user_by_id(Server,Chat,UserID), UserID} end, UniqIDs
-%%      )),
-%%      NoneJIDs = [{none,U}||{none,U} <- JIDsRaw],
-%%      JIDs = JIDsRaw -- NoneJIDs,
-%%      UserCards = lists:map(fun(UserInfo) ->
-%%        {User,UID} = UserInfo,
-%%        {UID,mod_groupchat_users:form_user_card(User,Chat)} end, JIDs
-%%      ),
-%%      lists:map(fun(Pkt) ->
-%%        {ID, IDInt, El} = Pkt,
-%%        #forwarded{sub_els = [Msg]} = El,
-%%        Msg2 = clean_reference(Msg),
-%%        Xtag = xmpp:get_subtag(Msg2, #xmppreference{type = <<"groupchat">>}),
-%%        OldCard = xmpp:get_subtag(Xtag, #xabbergroupchat_user_card{}),
-%%        CurrentUserID = OldCard#xabbergroupchat_user_card.id,
-%%        IDNewCard = lists:keyfind(CurrentUserID,1,UserCards),
-%%        case IDNewCard of
-%%          false ->
-%%            Pkt;
-%%          _ ->
-%%            {CurrentUserID, NewCard} = IDNewCard,
-%%            Pkt2 = strip_reference_elements(Msg),
-%%            Sub2 = xmpp:get_els(Pkt2),
-%%            X = Xtag#xmppreference{type = <<"groupchat">>, sub_els = [NewCard]},
-%%            XEl = xmpp:encode(X),
-%%            Sub3 = [XEl|Sub2],
-%%            {ID,IDInt,El#forwarded{sub_els = [Msg#message{sub_els = Sub3}]}}
-%%        end end, Msgs
-%%      )
-%%  end.
 
 change_all_messages(ChatandUsers, Msgs) ->
   lists:map(fun(Pkt) ->

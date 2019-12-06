@@ -60,7 +60,17 @@
 
 -export([is_exist/2,is_owner/2]).
 
+%% Change user settings hook export
+-export([check_if_exist/6, get_user_rights/6, validate_request/6, change_user_rights/6, user_rights/3, check_if_request_user_exist/6, user_rights_and_time/3]).
+
 start(Host, _Opts) ->
+  ejabberd_hooks:add(request_change_user_settings, Host, ?MODULE, check_if_exist, 10),
+  ejabberd_hooks:add(request_change_user_settings, Host, ?MODULE, check_if_request_user_exist, 15),
+  ejabberd_hooks:add(request_change_user_settings, Host, ?MODULE, get_user_rights, 20),
+  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, check_if_exist, 10),
+  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, check_if_request_user_exist, 15),
+  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, validate_request, 20),
+  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, change_user_rights, 30),
   ejabberd_hooks:add(groupchat_presence_hook, Host, ?MODULE, subscribe_user, 60),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, validate_data, 10),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, validate_rights, 15),
@@ -73,6 +83,13 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
 
 stop(Host) ->
+  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, check_if_exist, 10),
+  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, check_if_request_user_exist, 15),
+  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, validate_request, 20),
+  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, change_user_rights, 30),
+  ejabberd_hooks:delete(request_change_user_settings, Host, ?MODULE, check_if_exist, 10),
+  ejabberd_hooks:delete(request_change_user_settings, Host, ?MODULE, check_if_request_user_exist, 15),
+  ejabberd_hooks:delete(request_change_user_settings, Host, ?MODULE, get_user_rights, 20),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, validate_data, 10),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, validate_rights, 15),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, update_user, 20),
@@ -87,6 +104,55 @@ stop(Host) ->
 depends(_Host, _Opts) ->  [].
 
 mod_options(_Opts) -> [].
+
+check_if_exist(Acc, LServer, User, Chat, _ID, _Lang) ->
+  case check_user_if_exist(LServer,User,Chat) of
+    not_exist ->
+      {stop,not_ok};
+    _ ->
+      Acc
+  end.
+
+check_if_request_user_exist(Acc, LServer, _User, Chat, ID, _Lang) ->
+  case check_user_if_exist_by_id(LServer,ID,Chat) of
+    not_exist ->
+      {stop,not_exist};
+    _ ->
+      Acc
+  end.
+
+get_user_rights(_Acc, LServer, User, Chat, ID, Lang) ->
+  RequestUser = get_user_by_id(LServer,Chat,ID),
+  case mod_groupchat_restrictions:validate_users(LServer,Chat,User,RequestUser) of
+    ok ->
+      {stop,{ok,create_right_form(LServer,User,Chat,RequestUser,ID, Lang)}};
+    _ ->
+      {stop,{ok,create_empty_form(ID)}}
+  end.
+
+validate_request(Acc, LServer, _User, Chat, ID, _Lang) ->
+  RequestUser = get_user_by_id(LServer,Chat,ID),
+  case decode(LServer,Acc) of
+    {ok,FS} ->
+      CurrentValues = current_values(LServer,RequestUser,Chat),
+      FS1 = FS -- CurrentValues,
+      validate(FS1);
+    _ ->
+      {stop,bad_request}
+  end.
+
+change_user_rights(Acc, LServer, User, Chat, ID, Lang) ->
+  RequestUser = get_user_by_id(LServer,Chat,ID),
+  case mod_groupchat_restrictions:validate_users(LServer,Chat,User,RequestUser) of
+    ok ->
+      OldCard = form_user_card(RequestUser,Chat),
+      change_rights(LServer,Chat,User,RequestUser,Acc),
+      Permission = [{Name,Type,Values} || {Name,Type,Values} <- Acc, Type == <<"permission">>],
+      Restriction = [{Name,Type,Values} || {Name,Type,Values} <- Acc, Type == <<"restriction">>],
+      {OldCard,RequestUser,Permission,Restriction,create_right_form_no_options(LServer,User,Chat,RequestUser,ID, Lang)};
+    _ ->
+      {stop,not_ok}
+  end.
 
 choose_name(UserCard) ->
   IsAnon = is_anon_card(UserCard),
@@ -425,15 +491,15 @@ get_updated_user_rights(Server,User,Chat,Date) ->
   groupchat_policy.chatgroup = groupchat_users.chatgroup)
   LEFT JOIN groupchat_rights on
   groupchat_rights.name = groupchat_policy.right_name and groupchat_policy.valid_until > CURRENT_TIMESTAMP
-  and groupchat_policy.issued_at > ">>,Date,<<"
+  and groupchat_policy.issued_at > ">>,ejabberd_sql:escape(Date),<<"
   )
   LEFT JOIN groupchat_users_vcard ON groupchat_users_vcard.jid = groupchat_users.username)
   LEFT JOIN groupchat_users_info ON groupchat_users_info.username = groupchat_users.username and
    groupchat_users_info.chatgroup = groupchat_users.chatgroup)
   where groupchat_users.chatgroup = ">>,
-      <<"'">>,Chat,<<"' and groupchat_users.username =">>,
-      <<"'">>, User, <<"' and groupchat_users.user_updated_at =">>,
-      <<"'">>, Date, <<"'">>,
+      <<"'">>,ejabberd_sql:escape(Chat),<<"' and groupchat_users.username =">>,
+      <<"'">>, ejabberd_sql:escape(User), <<"' and groupchat_users.user_updated_at =">>,
+      <<"'">>, ejabberd_sql:escape(Date), <<"'">>,
       <<"ORDER BY groupchat_users.username
       ">>
     ]).
@@ -474,25 +540,37 @@ check_user_if_exist(Server,User,Chat) ->
       Subscription
   end.
 
+check_user_if_exist_by_id(Server,ID,Chat) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(subscription)s
+         from groupchat_users where chatgroup=%(Chat)s
+              and id=%(ID)s")) of
+    {selected,[]} ->
+      not_exist;
+    {selected,[{Subscription}]} ->
+      Subscription
+  end.
+
 update_user_status(Server,User,Chat) ->
   ejabberd_sql:sql_query(
     Server,
     [
-      <<"update groupchat_users set user_updated_at = now() where chatgroup='">>,Chat,<<"' and username = '">>,User,<<"';">>
+      <<"update groupchat_users set user_updated_at = now() where chatgroup='">>,ejabberd_sql:escape(Chat),<<"' and username = '">>,ejabberd_sql:escape(User),<<"';">>
     ]).
 
 insert_badge(Server,User,Chat,Badge) ->
   ejabberd_sql:sql_query(
     Server,
     [
-      <<"update groupchat_users set badge = '">>,Badge,<<"' , user_updated_at = now() where chatgroup='">>,Chat,<<"' and username = '">>,User,<<"';">>
+      <<"update groupchat_users set badge = '">>,ejabberd_sql:escape(Badge),<<"' , user_updated_at = now() where chatgroup='">>,ejabberd_sql:escape(Chat),<<"' and username = '">>,ejabberd_sql:escape(User),<<"';">>
     ]).
 
 insert_nickname(Server,User,Chat,Nick) ->
   ejabberd_sql:sql_query(
     Server,
     [
-      <<"update groupchat_users set nickname = '">>,Nick,<<"' , user_updated_at = now() where chatgroup='">>,Chat,<<"' and username = '">>,User,<<"';">>
+      <<"update groupchat_users set nickname = '">>,ejabberd_sql:escape(Nick),<<"' , user_updated_at = now() where chatgroup='">>,ejabberd_sql:escape(Chat),<<"' and username = '">>,ejabberd_sql:escape(User),<<"';">>
     ]).
 
 get_user_by_id(Server,Chat,Id) ->
@@ -610,10 +688,10 @@ nick(GV,FN,NickVcard,NickChat,IsAnon) ->
       {ok,NickChat};
     _  when NickVcard =/= null andalso NickVcard =/= <<>> andalso IsAnon == no ->
       {ok,NickVcard};
-    _  when FN =/= null andalso FN =/= <<>> andalso IsAnon == no ->
-      {ok,FN};
     _  when GV =/= null andalso GV =/= <<>> andalso IsAnon == no ->
       {ok,GV};
+    _  when FN =/= null andalso FN =/= <<>> andalso IsAnon == no ->
+      {ok,FN};
     _ ->
       empty
   end.
@@ -770,7 +848,6 @@ parse_items(Items,Acc,UserRequester,Lang) ->
   Server = ChatJid#jid.lserver,
   Nick = case nick(GV,FN,NickVcard,NickChat) of
            empty ->
-%%             insert_nickname(Server,Username,Chat,Username),
              Username;
            {ok,Value} ->
              Value;
@@ -848,10 +925,10 @@ nick(GV,FN,NickVcard,NickChat) ->
       {ok,NickChat};
     _  when NickVcard =/= null andalso NickVcard =/= <<>>->
       {ok,NickVcard};
-    _  when FN =/= null andalso FN =/= <<>>->
-      {ok,FN};
     _  when GV =/= null andalso GV =/= <<>>->
       {ok,GV};
+    _  when FN =/= null andalso FN =/= <<>>->
+      {ok,FN};
     _ ->
       {bad_request}
   end.
@@ -955,3 +1032,329 @@ change_peer_to_peer_invitation_state(LServer,User,Chat,State) ->
     _ ->
       {stop,no_user}
   end.
+
+%% user rights change functions
+user_rights(LServer,Chat,User) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(right_name)s from groupchat_policy where username=%(User)s
+    and chatgroup=%(Chat)s and valid_until > now()")) of
+    {selected,Rights} ->
+      Rights;
+    _ ->
+      []
+  end.
+
+user_rights_and_time(LServer,Chat,User) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(groupchat_policy.right_name)s,@(groupchat_rights.type)s,
+    @(COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD HH24:MI:SS')))s
+    from groupchat_policy left join groupchat_rights on groupchat_rights.name = groupchat_policy.right_name where username=%(User)s
+    and chatgroup=%(Chat)s and valid_until > now()")) of
+    {selected,Rights} ->
+      Rights;
+    _ ->
+      []
+  end.
+
+create_right_form(LServer,User,Chat,RequestUser,ID, Lang) ->
+  UserRights = user_rights(LServer,Chat,User),
+  IsOwner = lists:member({<<"owner">>},UserRights),
+  CanRestrictUsers = lists:member({<<"restrict-participants">>},UserRights),
+  case IsOwner of
+    true ->
+      RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
+      Fields = [
+        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+        #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_owner(LServer,RightsAndTime,Lang)
+      ],
+      #xabbergroupchat{
+        xmlns = ?NS_GROUPCHAT_RIGHTS,
+        sub_els = [
+          #xdata{type = form,
+            title = <<"Groupchat user's rights change">>,
+            instructions = [<<"Fill out this form to change the rights of user">>],
+            fields = Fields}
+        ]};
+    _ when CanRestrictUsers == true ->
+      RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
+      Fields = [
+        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+        #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_admin(LServer,RightsAndTime,Lang)
+      ],
+      #xabbergroupchat{
+        xmlns = ?NS_GROUPCHAT_RIGHTS,
+        sub_els = [
+          #xdata{type = form,
+            title = <<"Groupchat user's rights change">>,
+            instructions = [<<"Fill out this form to change the rights of user">>],
+            fields = Fields}
+        ]};
+    _ ->
+      create_empty_form(ID)
+  end.
+
+create_right_form_no_options(LServer,User,Chat,RequestUser,ID, Lang) ->
+  UserRights = user_rights(LServer,Chat,User),
+  IsOwner = lists:member({<<"owner">>},UserRights),
+  CanRestrictUsers = lists:member({<<"restrict-participants">>},UserRights),
+  case IsOwner of
+    true ->
+      RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
+      Fields = [
+        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+        #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_owner_no_options(LServer,RightsAndTime,Lang)
+      ],
+      #xabbergroupchat{
+        xmlns = ?NS_GROUPCHAT_RIGHTS,
+        sub_els = [
+          #xdata{type = result,
+            title = <<"Groupchat user's rights change">>,
+            instructions = [<<"Fill out this form to change the rights of user">>],
+            fields = Fields}
+        ]};
+    _ when CanRestrictUsers == true ->
+      RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
+      Fields = [
+        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+        #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_admin_no_options(LServer,RightsAndTime,Lang)
+      ],
+      #xabbergroupchat{
+        xmlns = ?NS_GROUPCHAT_RIGHTS,
+        sub_els = [
+          #xdata{type = result,
+            title = <<"Groupchat user's rights change">>,
+            instructions = [<<"Fill out this form to change the rights of user">>],
+            fields = Fields}
+        ]};
+    _ ->
+      create_empty_form(ID)
+  end.
+
+create_empty_form(ID) ->
+  Fields = [
+    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+    #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}
+    ],
+  #xabbergroupchat{
+    xmlns = ?NS_GROUPCHAT_RIGHTS,
+    sub_els = [
+      #xdata{type = form,
+        title = <<"Groupchat user s rights change">>,
+        instructions = [<<"Fill out this form to change the rights of user">>],
+        fields = Fields}
+    ]}.
+
+make_fields_owner(LServer,RightsAndTime,Lang) ->
+  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
+  Permissions = [{R,D}||{R,T,D} <- AllRights, T == <<"permission">>],
+  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
+  PermissionsFields = lists:map(fun(Right) ->
+    {Name,Desc} = Right,
+    Values = get_time(Name,ExistingRights),
+    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
+      values = Values,
+      options = get_options(Values)
+    }
+            end, Permissions
+  ),
+  RestrictionsFields = lists:map(fun(Right) ->
+    {Name,Desc} = Right,
+    Values = get_time(Name,ExistingRights),
+    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
+      values = Values,
+      options = get_options(Values)
+    }
+                                end, Restrictions
+  ),
+  PermissionSection = [#xdata_field{var= <<"permission">>, type = 'fixed', values = [<<"Permissions:">>]}],
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
+
+make_fields_owner_no_options(LServer,RightsAndTime,Lang) ->
+  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
+  Permissions = [{R,D}||{R,T,D} <- AllRights, T == <<"permission">>],
+  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
+  PermissionsFields = lists:map(fun(Right) ->
+    {Name,Desc} = Right,
+    Values = get_time(Name,ExistingRights),
+    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
+      values = Values
+    }
+                                end, Permissions
+  ),
+  RestrictionsFields = lists:map(fun(Right) ->
+    {Name,Desc} = Right,
+    Values = get_time(Name,ExistingRights),
+    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
+      values = Values
+    }
+                                 end, Restrictions
+  ),
+  PermissionSection = [#xdata_field{var= <<"permission">>, type = 'fixed', values = [<<"Permissions:">>]}],
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
+
+make_fields_admin(LServer,RightsAndTime,Lang) ->
+  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
+  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
+  RestrictionsFields = lists:map(fun(Right) ->
+    {Name,Desc} = Right,
+    Values = get_time(Name,ExistingRights),
+    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
+      values = Values,
+      options = get_options(Values)
+    }
+                                 end, Restrictions
+  ),
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  RestrictionSection ++ RestrictionsFields.
+
+make_fields_admin_no_options(LServer,RightsAndTime,Lang) ->
+  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
+  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
+  RestrictionsFields = lists:map(fun(Right) ->
+    {Name,Desc} = Right,
+    Values = get_time(Name,ExistingRights),
+    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
+      values = Values
+    }
+                                 end, Restrictions
+  ),
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  RestrictionSection ++ RestrictionsFields.
+
+get_time(Right,RightsList) ->
+  case lists:keyfind(Right,1,RightsList) of
+    {Right,Time} ->
+      [convert_time(Time)];
+    _ ->
+      []
+  end.
+get_options([]) ->
+  form_options();
+get_options([<<"0">>]) ->
+  form_options();
+get_options([Value]) ->
+  [#xdata_option{label = <<"current">>, value = [Value]}| form_options()].
+
+form_options() ->
+  [
+    #xdata_option{label = <<"5 minutes">>, value = [<<"5 minutes">>]},
+    #xdata_option{label = <<"10 minutes">>, value = [<<"10 minutes">>]},
+    #xdata_option{label = <<"15 minutes">>, value = [<<"15 minutes">>]},
+    #xdata_option{label = <<"30 minutes">>, value = [<<"30 minutes">>]},
+    #xdata_option{label = <<"1 hour">>, value = [<<"1 hour">>]},
+    #xdata_option{label = <<"1 week">>, value = [<<"1 week">>]},
+    #xdata_option{label = <<"1 month">>, value = [<<"1 month">>]},
+    #xdata_option{label = <<"Forever">>, value = [<<"0">>]}
+  ].
+
+convert_time(Time) ->
+  TimeNow = calendar:datetime_to_gregorian_seconds(calendar:universal_time()) - 62167219200,
+  UnixTime = convert_from_datetime_to_unix_time(Time),
+  Diff = UnixTime - TimeNow,
+  case Diff of
+    _ when Diff < 3153600000 ->
+      integer_to_binary(UnixTime);
+    _ ->
+      <<"0">>
+  end.
+
+-spec decode(binary(),list()) -> list().
+decode(LServer, FS) ->
+  Decoded = decode(LServer, [],filter_fixed_fields(FS)),
+  case lists:member(false,Decoded) of
+    true ->
+      not_ok;
+    _ ->
+      {ok,Decoded}
+  end.
+
+-spec decode(binary(),list(),list()) -> list().
+decode(LServer, Acc,[#xdata_field{var = Var, values = Values} | RestFS]) ->
+  decode(LServer,[get_and_validate(LServer,Var,Values)| Acc], RestFS);
+decode(_LServer, Acc, []) ->
+  Acc.
+
+-spec filter_fixed_fields(list()) -> list().
+filter_fixed_fields(FS) ->
+  lists:filter(fun(F) ->
+    #xdata_field{type = Type} = F,
+    case Type of
+      fixed ->
+        false;
+      hidden ->
+        false;
+      _ ->
+        true
+    end
+               end, FS).
+
+-spec get_and_validate(binary(),binary(),list()) -> binary().
+get_and_validate(LServer,RightName,Value) ->
+  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  case lists:keyfind(RightName,1,AllRights) of
+    {RightName,Type,_Desc} ->
+      {RightName,Type,Value};
+    _ ->
+      false
+  end.
+
+is_valid_value([],_ValidValues) ->
+  true;
+is_valid_value([Value],ValidValues) ->
+  lists:member(Value,ValidValues);
+is_valid_value(_Other,_ValidValues) ->
+  false.
+
+valid_values() ->
+  [<<"0">>,<<"5 minutes">>,<<"10 minutes">>,<<"15 minutes">>,<<"30 minutes">>,<<"1 hour">>,<<"1 week">>,<<"1 month">>].
+
+validate([]) ->
+  {stop,bad_request};
+validate(FS) ->
+  ValidValues = valid_values(),
+  Validation = lists:map(fun(El) ->
+    {_Rightname,_Type,Values} = El,
+    is_valid_value(Values,ValidValues)
+            end, FS),
+  IsFailed = lists:member(false, Validation),
+  case IsFailed of
+    false ->
+      FS;
+    _ ->
+      {stop, bad_request}
+  end.
+
+change_rights(LServer,Chat,Admin,RequestUser,Rights) ->
+  lists:foreach(fun(Right) ->
+    {Rule,_Type,ExpireOption} = Right,
+    Expires = set_expires(ExpireOption),
+    mod_groupchat_restrictions:set_rule(LServer,Rule,Expires,RequestUser,Chat,Admin)
+                end, Rights).
+
+set_expires([]) ->
+  <<"0 years">>;
+set_expires([<<"0">>]) ->
+  <<"1000 years">>;
+set_expires(ExpireOption) ->
+  list_to_binary(ExpireOption).
+
+current_values(LServer,User,Chat) ->
+  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  RightsAndTime = user_rights_and_time(LServer,Chat,User),
+  lists:map(fun(El) ->
+    {Name,Type,_Desc} = El,
+    case lists:keyfind(Name,1,RightsAndTime) of
+      {Name,Type,ExTime} ->
+        {Name,Type,[integer_to_binary(convert_from_datetime_to_unix_time(ExTime))]};
+      _ ->
+        {Name,Type,[]}
+    end
+            end, AllRights).

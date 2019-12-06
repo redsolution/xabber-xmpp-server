@@ -41,11 +41,14 @@
   user_change_avatar/4,
   anon/1,
   send_to_all/2,
-  chat_created/4 ]).
+  chat_created/4,
+  user_rights_changed/6
+  ]).
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_created, Host, ?MODULE, chat_created, 10),
+  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, user_rights_changed, 40),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
   ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, users_kicked, 35),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 55),
@@ -55,6 +58,7 @@ start(Host, _Opts) ->
 
 stop(Host) ->
   ejabberd_hooks:delete(groupchat_created, Host, ?MODULE, chat_created, 10),
+  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, user_rights_changed, 40),
   ejabberd_hooks:delete(groupchat_user_change_own_avatar, Host, ?MODULE, user_change_own_avatar, 10),
   ejabberd_hooks:delete(groupchat_user_change_some_avatar, Host, ?MODULE, user_change_avatar, 10),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
@@ -348,6 +352,49 @@ user_updated({Accum,OldCard},{Server,Chat,Admin,E,Lang}) ->
   send_to_all(Chat,M),
   {stop,ok}.
 
+user_rights_changed({OldCard,RequestUser,Permission,Restriction,Form}, LServer, Admin, Chat, _ID, Lang) ->
+  ByUserCard = mod_groupchat_users:form_user_card(Admin,Chat),
+  UpdatedUser = mod_groupchat_users:form_user_card(RequestUser,Chat),
+  ChatJID = jid:from_string(Chat),
+  Acc = case anon(UpdatedUser) of
+          public when UpdatedUser#xabbergroupchat_user_card.nickname =/= undefined andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<" ">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<"">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(UpdatedUser#xabbergroupchat_user_card.nickname) > 1 ->
+            UpdatedUser#xabbergroupchat_user_card.nickname;
+          public ->
+            jid:to_string(UpdatedUser#xabbergroupchat_user_card.jid);
+          anonim ->
+            UpdatedUser#xabbergroupchat_user_card.nickname
+        end,
+  UserID = case anon(ByUserCard) of
+             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
+               ByUserCard#xabbergroupchat_user_card.nickname;
+             public ->
+               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
+             anonim ->
+               ByUserCard#xabbergroupchat_user_card.nickname
+           end,
+  MsgTxt =
+    case Admin of
+      _  when length(Permission) > 0 andalso length(Restriction) > 0 ->
+        Txt = <<" rights was updated by ">>,
+        text_for_msg(Lang,Txt,Acc,UserID,[]);
+      _ when length(Permission) > 0 andalso length(Restriction) == 0 ->
+        Txt = permission_text(Permission,OldCard,UpdatedUser),
+        text_for_msg(Lang,Txt,Acc,UserID,[]);
+      _ when length(Permission) == 0 andalso length(Restriction) > 0 ->
+        Txt = new_restriction_text(Restriction),
+        text_for_msg(Lang,Txt,Acc,UserID,[]);
+      _ ->
+        Txt = <<" info was updated by ">>,
+        text_for_msg(Lang,Txt,Acc,UserID,[])
+    end,
+  Body = [#text{lang = <<>>,data = MsgTxt}],
+  Version = mod_groupchat_users:current_chat_version(LServer,Chat),
+  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [UpdatedUser]},
+  By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
+  SubEls = [X,By],
+  M = form_message(ChatJID,Body,SubEls),
+  send_to_all(Chat,M),
+  {stop,{ok,Form}}.
 
 % Internal function
 
@@ -393,6 +440,27 @@ restriction_text(Restrictions) ->
       <<" restriction was changed by ">>
   end.
 
+new_restriction_text(Restrictions) ->
+  ResExpire = lists:map(fun(R) ->
+   {_Name,_Type,Expire} = R,
+    Expire end, Restrictions
+  ),
+  NowExpireList = lists:filter(fun(El) ->
+    El == [] end, ResExpire
+  ),
+  DiffList = ResExpire--NowExpireList,
+  case length(DiffList) of
+    0 when length(NowExpireList) > 1 ->
+      <<" restrictions were canceled by ">>;
+    0 ->
+      <<" restriction was canceled by ">>;
+    _ when NowExpireList == [] ->
+      <<" was restricted by ">>;
+    _ when length(Restrictions) > 1 ->
+      <<" restrictions were changed by ">>;
+    _ ->
+      <<" restriction was changed by ">>
+  end.
 
 
 send_presences(Server,Chat) ->

@@ -554,14 +554,16 @@ get_chat_meta_nodeid(Server,Chat)->
   end.
 
 get_chat_meta(Server,Chat,Nodeid)->
-case ejabberd_sql:sql_query(
+  case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(payload)s from pubsub_item
+    ?SQL("select @(payload)s,@(itemid)s from pubsub_item
     where publisher = %(Chat)s and nodeid = %(Nodeid)d")) of
     {selected,[]} ->
       no_avatar;
-    {selected,[{Payload}]} ->
-      Payload
+    {selected,[{Payload,ItemID}]} ->
+      {Payload,ItemID};
+    _ ->
+      no_avatar
   end.
 
 make_chat_notification_message(Server,Chat,To) ->
@@ -573,11 +575,11 @@ maybe_send(_Server,_Chat,no_avatar,_To) ->
   ok;
 maybe_send(Server,Chat,Nodeid,To) ->
   Payload = get_chat_meta(Server,Chat,Nodeid),
-  parse_and_send(Server,Chat,Payload,Nodeid,To).
+  parse_and_send(Server,Chat,Payload,To).
 
-parse_and_send(_Server,_Chat,no_avatar,_Nodeid,_To) ->
+parse_and_send(_Server,_Chat,no_avatar,_To) ->
   ok;
-parse_and_send(_Server,Chat,Payload,Nodeid,To) ->
+parse_and_send(_Server,Chat,{Payload,Nodeid},To) ->
   Metadata = xmpp:decode(fxml_stream:parse_element(Payload)),
   ChatJID = jid:remove_resource(jid:from_string(Chat)),
   Item = #ps_item{id = Nodeid, sub_els = [Metadata]},

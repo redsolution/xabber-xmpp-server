@@ -792,7 +792,7 @@ get_chat_active(Server,Chat) ->
 count_users(LServer,Chat) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(count(username))d from groupchat_users where chatgroup = %(Chat)s ")) of
+    ?SQL("select @(count(username))d from groupchat_users where chatgroup = %(Chat)s and subscription = 'both'")) of
     {selected,[]} ->
       [];
     {selected,[{}]} ->

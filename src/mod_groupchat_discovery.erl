@@ -210,7 +210,7 @@ make_sql_query(LServer, User, UserHost, RSM) ->
     where chatgroup IN ((select jid from groupchats
     where model='open' and (searchable='local' or searchable='global') EXCEPT select chatgroup from groupchat_block
     where blocked = '">>,SUser,<<"' or blocked = '">>,UserHost,<<"')
-   UNION (select jid from groupchats where model='member-only')
+   UNION (select jid from groupchats where model='member-only' and (searchable='local' or searchable='global'))
    INTERSECT select chatgroup from groupchat_users where username = '">>,SUser,<<"')">>],
   PageClause = case Chat of
                  B when is_binary(B) ->

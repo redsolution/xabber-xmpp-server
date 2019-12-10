@@ -85,7 +85,7 @@ mod_options(_) -> [].
 
 -spec receive_message_stored({ok, message()} | any())
       -> {ok, message()} | any().
-receive_message_stored({ok, #message{ meta = #{sm_copy := true, mam_archived := true}} = Pkt}) ->
+receive_message_stored({ok, #message{ meta = #{sm_copy := true}} = Pkt}) ->
   {ok,Pkt};
 receive_message_stored({ok, #message{to = #jid{luser = LUser, lserver = LServer},meta = #{stanza_id := StanzaID}} = Pkt}) ->
   case xmpp:get_subtag(Pkt, #origin_id{}) of

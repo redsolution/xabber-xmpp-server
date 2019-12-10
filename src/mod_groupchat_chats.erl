@@ -127,8 +127,10 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
   Privacy = set_value(<<"public">>,get_value(xabbergroupchat_privacy,SubEls)),
   Membership = set_value(<<"open">>,get_value(xabbergroupchat_membership,SubEls)),
   Index = set_value(<<"local">>,get_value(xabbergroupchat_index,SubEls)),
-  Contacts = make_string(set_value([],get_value(xabbergroup_contacts,SubEls))),
-  Domains = make_string(set_value([],get_value(xabbergroup_domains,SubEls))),
+  ContactList = set_value([],get_value(xabbergroup_contacts,SubEls)),
+  Contacts = make_string(ContactList),
+  DomainList = set_value([],get_value(xabbergroup_domains,SubEls)),
+  Domains = make_string(DomainList),
   Chat = jid:to_string(jid:make(LocalPart,Server)),
   Creator = jid:to_string(jid:make(CreatorLUser,CreatorLServer)),
   case ejabberd_sql:sql_query(
@@ -156,7 +158,7 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
         mod_groupchat_restrictions:insert_rule(Server,Chat,Creator,Rule,Expires,IssuedBy) end,
         Permissions
       ),
-    {stop,{ok,create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,Contacts,Domains),Chat,Creator}};
+    {stop,{ok,create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,ContactList,DomainList),Chat,Creator}};
     _ ->
       {stop,exist}
   end.

@@ -1,0 +1,1 @@
+alter table conversation_metadata add column metadata_updated_at bigint NOT NULL DEFAULT 0;

@@ -459,6 +459,7 @@ form_presence(Chat,User) ->
              <<"0">> ->
                [
                  #xabbergroupchat_x{
+                   xmlns = ?NS_GROUPCHAT,
                    members = Members,
                    present = Present,
                    sub_els = [
@@ -480,6 +481,7 @@ form_presence(Chat,User) ->
              _ ->
                [
                  #xabbergroupchat_x{
+                   xmlns = ?NS_GROUPCHAT,
                    members = Members,
                    present = Present,
                    parent = jid:from_string(ParentChat),

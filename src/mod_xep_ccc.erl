@@ -226,6 +226,19 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
       ok
   end,
   {noreply, State};
+handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
+  IsChat = xmpp:get_subtag(Presence, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+  XEl = xmpp:get_subtag(Presence, #xabbergroupchat_x{}),
+  Conversation = jid:to_string(jid:make(PUser,PServer)),
+  case IsChat of
+    #xabbergroupchat_x{} ->
+      update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,<<>>);
+    _ when XEl =/= false ->
+      update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,<<>>);
+    _ ->
+      update_metainfo(<<"chat">>, LServer,LUser,Conversation,<<>>)
+  end,
+  {noreply, State};
 handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els = SubEls, meta = #{stanza_id := TS}} = Pkt}, State) ->
   Propose = xmpp:get_subtag(Pkt, #jingle_propose{}),
   Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
@@ -262,15 +275,7 @@ handle_cast({sm,#message{type = chat, from = Peer, to = To, sub_els = SubELs, me
   {LUser, LServer, _ } = jid:tolower(To),
   {PUser, PServer, _} = jid:tolower(Peer),
   PktRefGrp = filter_reference(Pkt,<<"groupchat">>),
-  X = xmpp:get_subtag(PktRefGrp, #xmppreference{type = <<"groupchat">>}),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
-  case X of
-    #xmppreference{} ->
-      Conversation = jid:to_string(jid:make(PUser,PServer)),
-      update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,<<>>);
-    _ ->
-      ok
-  end,
   Type = get_conversation_type(LServer,LUser,Conversation),
   Invite = xmpp:get_subtag(PktRefGrp, #xabbergroupchat_invite{}),
   XEl = lists:keyfind(xabbergroupchat_x,1, SubELs),
@@ -281,19 +286,18 @@ handle_cast({sm,#message{type = chat, from = Peer, to = To, sub_els = SubELs, me
       case ChatJID of
         undefined ->
           store_special_message_id(LServer,LUser,Conversation,TS,<<"invite">>),
-          update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,TS);
+          update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation);
+%%          update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,TS);
         _ ->
           Chat = jid:to_string(jid:remove_resource(ChatJID)),
           store_special_message_id(LServer,LUser,Chat,TS,<<"invite">>),
-          update_metainfo(<<"groupchat">>, LServer,LUser,Chat,TS)
+          update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat)
       end;
     _ when XEl =/= false ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
       TSGroupchat = StanzaID#stanza_id.id,
-      Chat = jid:to_string(jid:remove_resource(Peer)),
       store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),<<"service">>),
-      update_metainfo(<<"groupchat">>, LServer,LUser,Chat,TS),
       update_metainfo(message, LServer,LUser,Conversation,TS);
     <<"groupchat">> when IsLocal == false ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
@@ -485,6 +489,12 @@ groupchat_got_displayed(From,ChatJID,TS) ->
 sm_receive_packet(#message{to = #jid{lserver = LServer}} = Pkt) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
   gen_server:cast(Proc, {sm,Pkt}),
+  Pkt;
+sm_receive_packet(#presence{to = #jid{lserver = LServer}, sub_els = SubEls} = Pkt) ->
+  Proc = gen_mod:get_module_proc(LServer, ?MODULE),
+  DecodedSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
+  PktNew = Pkt#presence{sub_els = DecodedSubEls},
+  gen_server:cast(Proc, {sm,PktNew}),
   Pkt;
 sm_receive_packet(Acc) ->
   Acc.
@@ -758,6 +768,8 @@ store_last_call(Pkt, Peer, LUser, LServer, TS) ->
       delete_last_call(Peer, LUser, LServer),
       case mnesia:transaction(F1) of
         {atomic, ok} ->
+          Conversation = jid:to_string(jid:remove_resource(Peer)),
+          update_metainfo(<<"chat">>, LServer,LUser,Conversation,<<>>),
           ?DEBUG("Save call ~p to ~p~n TS ~p ",[LUser,Peer,TS]),
           ok;
         {aborted, Err1} ->
@@ -1100,10 +1112,7 @@ get_last_sync(ChatName, ChatServer, PUser, PServer) ->
   {atomic,MsgRec} = mnesia:transaction(FN),
   MsgRec.
 
-update_metainfo(_Any, _LServer,_LUser,_Conversation, empty) ->
-  ?DEBUG("No id in displayed",[]),
-  ok;
-update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,_StanzaID) ->
+update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation) ->
   Type = <<"groupchat">>,
   ?DEBUG("save groupchat ~p ~p",[LUser,Conversation]),
   TS = time_now(),
@@ -1114,7 +1123,30 @@ update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,_StanzaID) ->
       "!conversation=%(Conversation)s",
       "type=%(Type)s",
       "updated_at=%(TS)d",
-      "server_host=%(LServer)s"]);
+      "metadata_updated_at=%(TS)d",
+      "server_host=%(LServer)s"]).
+
+update_metainfo(_Any, _LServer,_LUser,_Conversation, empty) ->
+  ?DEBUG("No id in displayed",[]),
+  ok;
+update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,_StanzaID) ->
+  Type = <<"groupchat">>,
+  ?DEBUG("save groupchat ~p ~p",[LUser,Conversation]),
+  TS = time_now(),
+ ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d
+    where username=%(LUser)s and conversation=%(Conversation)s and type != %(Type)s and %(LServer)H")
+  );
+update_metainfo(<<"chat">>, LServer,LUser,Conversation,_StanzaID) ->
+  Type = <<"chat">>,
+  ?DEBUG("save chat ~p ~p",[LUser,Conversation]),
+  TS = time_now(),
+ ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d
+    where username=%(LUser)s and conversation=%(Conversation)s and type != %(Type)s and %(LServer)H")
+  );
 update_metainfo(message, LServer,LUser,Conversation,_StanzaID) ->
   ?DEBUG("save new message ~p ~p ",[LUser,Conversation]),
   TS = time_now(),
@@ -1124,33 +1156,40 @@ update_metainfo(message, LServer,LUser,Conversation,_StanzaID) ->
     ["!username=%(LUser)s",
       "!conversation=%(Conversation)s",
       "updated_at=%(TS)d",
+      "metadata_updated_at=%(TS)d",
       "server_host=%(LServer)s"]);
 update_metainfo(delivered, LServer,LUser,Conversation,StanzaID) ->
   ?DEBUG("save delivered ~p ~p ~p",[LUser,Conversation,StanzaID]),
+  TS = time_now(),
   ?SQL_UPSERT(
     LServer,
     "conversation_metadata",
     ["!username=%(LUser)s",
       "!conversation=%(Conversation)s",
       "delivered_until=%(StanzaID)s",
+      "metadata_updated_at=%(TS)d",
       "server_host=%(LServer)s"]);
 update_metainfo(read, LServer,LUser,Conversation,StanzaID) ->
   ?DEBUG("save read ~p ~p ~p",[LUser,Conversation,StanzaID]),
+  TS = time_now(),
   ?SQL_UPSERT(
     LServer,
     "conversation_metadata",
     ["!username=%(LUser)s",
       "!conversation=%(Conversation)s",
       "read_until=%(StanzaID)s",
+      "metadata_updated_at=%(TS)d",
       "server_host=%(LServer)s"]);
 update_metainfo(displayed, LServer,LUser,Conversation,StanzaID) ->
   ?DEBUG("save displayed ~p ~p ~p",[LUser,Conversation,StanzaID]),
+  TS = time_now(),
   ?SQL_UPSERT(
     LServer,
     "conversation_metadata",
     ["!username=%(LUser)s",
       "!conversation=%(Conversation)s",
       "displayed_until=%(StanzaID)s",
+      "metadata_updated_at=%(TS)d",
       "server_host=%(LServer)s"]).
 
 get_sync(LServer, LUser,Stamp) ->
@@ -1166,13 +1205,13 @@ get_sync(LServer, LUser,Stamp) ->
     @(displayed_until)s,
     @(updated_at)d
      from conversation_metadata"
-    " where username=%(LUser)s and updated_at >= %(Stamp)d and %(LServer)H order by updated_at desc")) of
+    " where username=%(LUser)s and metadata_updated_at >= %(Stamp)d and %(LServer)H order by updated_at desc")) of
     {selected,[<<>>]} ->
-      not_ok;
+      [];
     {selected,Sync} ->
       Sync;
     _ ->
-      not_ok
+      []
   end.
 
 get_conversation_type(LServer,LUser,Conversation) ->
@@ -1198,9 +1237,10 @@ ejabberd_sql:sql_query(
      where username=%(LUser)s and conversation=%(Conversation)s and retract < %(NewVersion)d and %(LServer)H")).
 
 get_last_stamp(LServer, LUser) ->
+  SUser = ejabberd_sql:escape(LUser),
   case ejabberd_sql:sql_query(
     LServer,
-    [<<"select max(updated_at) from conversation_metadata where username = '">>,LUser,<<"' ;">>]) of
+    [<<"select max(metadata_updated_at) from conversation_metadata where username = '">>,SUser,<<"' ;">>]) of
     {selected,_MAX,[[null]]} ->
       <<"0">>;
     {selected,_MAX,[[Version]]} ->
@@ -1250,7 +1290,7 @@ get_count_messages(LServer,LUser,PUser,TS) ->
     ?SQL("select
     @(count(*))d
      from archive"
-    " where username=%(LUser)s and bare_peer=%(PUser)s and txt notnull and txt !='' and timestamp > %(TS)d and timestamp not in (select timestamp from special_messages where conversation = %(PUser)s ) and %(LServer)H")) of
+    " where username=%(LUser)s and bare_peer=%(PUser)s and txt notnull and txt !='' and timestamp > %(TS)d and timestamp not in (select timestamp from special_messages where username = %(LUser)s ) and %(LServer)H")) of
     {selected,[{Count}]} ->
       Count;
     _ ->
@@ -1481,6 +1521,7 @@ handle_sub_els(headline, [#unique_received{} = UniqueReceived], From, To) ->
         false ->
           store_last_msg(MessageD, PeerJID, LUser, LServer, StanzaID),
           delete_msg(LUser, LServer, PUser, PServer, StanzaID),
+          update_metainfo(read, LServer,LUser,Conversation,StanzaID),
           update_metainfo(delivered, LServer,LUser,Conversation,StanzaID);
         _ ->
           update_metainfo(delivered, LServer,LUser,Conversation,StanzaID)
@@ -1584,7 +1625,7 @@ make_sql_query(LServer, User, TS, RSM) ->
   displayed_until,
   updated_at
   from conversation_metadata where username = '">>,SUser,<<"' and 
-  updated_at > '">>,Timestamp,<<"'">>],
+  metadata_updated_at > '">>,Timestamp,<<"'">>],
   PageClause = case Chat of
                  B when is_binary(B) ->
                    case Direction of

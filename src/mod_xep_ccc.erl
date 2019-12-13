@@ -227,8 +227,9 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
   end,
   {noreply, State};
 handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
-  IsChat = xmpp:get_subtag(Presence, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-  XEl = xmpp:get_subtag(Presence, #xabbergroupchat_x{}),
+  PktNew = xmpp:decode_els(Presence),
+  IsChat = xmpp:get_subtag(PktNew, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+  XEl = xmpp:get_subtag(PktNew, #xabbergroupchat_x{}),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   case IsChat of
     #xabbergroupchat_x{} ->
@@ -490,11 +491,9 @@ sm_receive_packet(#message{to = #jid{lserver = LServer}} = Pkt) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
   gen_server:cast(Proc, {sm,Pkt}),
   Pkt;
-sm_receive_packet(#presence{to = #jid{lserver = LServer}, sub_els = SubEls} = Pkt) ->
+sm_receive_packet(#presence{to = #jid{lserver = LServer}} = Pkt) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
-  DecodedSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-  PktNew = Pkt#presence{sub_els = DecodedSubEls},
-  gen_server:cast(Proc, {sm,PktNew}),
+  gen_server:cast(Proc, {sm,Pkt}),
   Pkt;
 sm_receive_packet(Acc) ->
   Acc.

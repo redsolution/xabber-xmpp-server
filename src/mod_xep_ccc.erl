@@ -970,7 +970,9 @@ get_last_message(LUser, LServer, PUser, PServer) ->
       Chat = jid:to_string(jid:make(PUser,PServer)),
       get_invite(LServer,LUser,Chat);
     _ ->
-      [Msg] = MsgRec,
+      SortFun = fun(E1,E2) -> ID1 = binary_to_integer(E1#last_msg.id), ID2 = binary_to_integer(E2#last_msg.id), ID1 > ID2 end,
+      MsgSort = lists:sort(SortFun,MsgRec),
+      [Msg|_Rest] = MsgSort,
       #last_msg{packet = Packet} = Msg,
       #xabber_conversation_last{sub_els = [Packet]}
   end.
@@ -1060,8 +1062,10 @@ get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
 get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID) ->
   Msgs = get_count(LUser, LServer, PUser, PServer),
   Msg = [X || X <- Msgs, X#unread_msg_counter.origin_id == OriginID],
-  case Msg of
-    [#unread_msg_counter{id = StanzaID}] ->
+  SortFun = fun(E1,E2) -> ID1 = binary_to_integer(E1#unread_msg_counter.id), ID2 = binary_to_integer(E2#unread_msg_counter.id), ID1 > ID2 end,
+  SortMsg = lists:sort(SortFun,Msg),
+  case SortMsg of
+    [#unread_msg_counter{id = StanzaID}| _Rest] ->
       StanzaID;
     _ ->
       empty
@@ -1160,36 +1164,26 @@ update_metainfo(message, LServer,LUser,Conversation,_StanzaID) ->
 update_metainfo(delivered, LServer,LUser,Conversation,StanzaID) ->
   ?DEBUG("save delivered ~p ~p ~p",[LUser,Conversation,StanzaID]),
   TS = time_now(),
-  ?SQL_UPSERT(
+  ejabberd_sql:sql_query(
     LServer,
-    "conversation_metadata",
-    ["!username=%(LUser)s",
-      "!conversation=%(Conversation)s",
-      "delivered_until=%(StanzaID)s",
-      "metadata_updated_at=%(TS)d",
-      "server_host=%(LServer)s"]);
+    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, delivered_until = %(StanzaID)s
+    where username=%(LUser)s and conversation=%(Conversation)s and delivered_until::bigint <= %(StanzaID)d and %(LServer)H")
+  );
 update_metainfo(read, LServer,LUser,Conversation,StanzaID) ->
-  ?DEBUG("save read ~p ~p ~p",[LUser,Conversation,StanzaID]),
   TS = time_now(),
-  ?SQL_UPSERT(
+  ejabberd_sql:sql_query(
     LServer,
-    "conversation_metadata",
-    ["!username=%(LUser)s",
-      "!conversation=%(Conversation)s",
-      "read_until=%(StanzaID)s",
-      "metadata_updated_at=%(TS)d",
-      "server_host=%(LServer)s"]);
+    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, read_until = %(StanzaID)s
+    where username=%(LUser)s and conversation=%(Conversation)s and read_until::bigint <= %(StanzaID)d and %(LServer)H")
+  );
 update_metainfo(displayed, LServer,LUser,Conversation,StanzaID) ->
   ?DEBUG("save displayed ~p ~p ~p",[LUser,Conversation,StanzaID]),
   TS = time_now(),
-  ?SQL_UPSERT(
+  ejabberd_sql:sql_query(
     LServer,
-    "conversation_metadata",
-    ["!username=%(LUser)s",
-      "!conversation=%(Conversation)s",
-      "displayed_until=%(StanzaID)s",
-      "metadata_updated_at=%(TS)d",
-      "server_host=%(LServer)s"]).
+    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, displayed_until = %(StanzaID)s
+    where username=%(LUser)s and conversation=%(Conversation)s and displayed_until::bigint <= %(StanzaID)d and %(LServer)H")
+  ).
 
 get_sync(LServer, LUser,Stamp) ->
   case ejabberd_sql:sql_query(

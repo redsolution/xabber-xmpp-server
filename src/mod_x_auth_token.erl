@@ -385,7 +385,9 @@ newtokenmsg(ClientInfo,DeviceInfo,UID,BareJID,IP) ->
   SR = #xmppreference{'begin' = SettingsRefStart, 'end' = SettingsRefStart + bin_len(FilMiddle) -1, type = <<"markup">>, sub_els = [bold()]},
   IPBoldReference = #xmppreference{'begin' = FirstSecondLinesLength + bin_len(ThL) , 'end' = FirstSecondLinesLength + bin_len(ThL) + bin_len(FoL) -1, type = <<"markup">>, sub_els = [bold()]},
   Text = [#text{lang = <<>>,data = TextStr}],
-  #message{type = chat, from = Server, to = BareJID, id =randoms:get_string(), body = Text, sub_els = [X,NLR,CIR,DR,IPBoldReference,SR,UserRef]}.
+  ID = create_id(),
+  OriginID = #origin_id{id = ID},
+  #message{type = chat, from = Server, to = BareJID, id =ID, body = Text, sub_els = [X,NLR,CIR,DR,IPBoldReference,SR,UserRef,OriginID]}.
 
 newtokenoauth(UID,JID) ->
   BareJID = jid:remove_resource(JID),
@@ -396,7 +398,9 @@ newtokenoauth(UID,JID) ->
   TextStr = <<"New token issued for ",User/binary,", on ",Time/binary,
     "\nIf this wasn't you, go to Account Settings > Tokens and revoke that token.">>,
   Text = [#text{lang = <<>>,data = TextStr}],
-  #message{type = chat, from = Server, to = BareJID, id =randoms:get_string(), body = Text, sub_els = [X]}.
+  ID = create_id(),
+  OriginID = #origin_id{id = ID},
+  #message{type = chat, from = Server, to = BareJID, id =ID, body = Text, sub_els = [X,OriginID]}.
 
 token_list_stanza(Tokens) ->
   Fields = lists:map(fun(N) ->
@@ -1020,6 +1024,16 @@ disco_sm_features({result, Feats}, _From, _To, <<"">>, _Lang) ->
         {result, [?NS_XABBER_TOKEN|Feats]};
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
         Acc.
+
+-spec create_id() -> binary().
+create_id() ->
+  A = randoms:get_alphanum_string(10),
+  B = randoms:get_alphanum_string(4),
+  C = randoms:get_alphanum_string(4),
+  D = randoms:get_alphanum_string(4),
+  E = randoms:get_alphanum_string(10),
+  ID = <<A/binary, "-", B/binary, "-", C/binary, "-", D/binary, "-", E/binary>>,
+  list_to_binary(string:to_lower(binary_to_list(ID))).
 
 mod_opt_type(xabber_token_expiration_time) ->
   fun(I) when is_integer(I), I > 0 -> I end;

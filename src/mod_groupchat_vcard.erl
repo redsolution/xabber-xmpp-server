@@ -24,6 +24,7 @@
 %%%----------------------------------------------------------------------
 
 -module(mod_groupchat_vcard).
+-behavior(gen_mod).
 -author('andrey.gagarin@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -export([
@@ -43,10 +44,33 @@
   get_photo_meta/3, get_photo_data/5, get_avatar_type/4, get_all_image_metadata/2, check_old_meta/2,
   make_chat_notification_message/3, get_pubsub_meta/0, get_pubsub_data/0, handle_pubsub/4, handle_pubsub/3, get_image_id/3
 ]).
+%% gen_mod behavior
+-export([start/2, stop/1, mod_options/1, depends/2, mod_opt_type/1]).
 -include("ejabberd.hrl").
 -include("ejabberd_sql_pt.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
+
+
+start(_, _) ->
+  ok.
+
+stop(_) ->
+  ok.
+
+mod_opt_type(get_url) ->
+  fun(<<"http://", _/binary>> = URL) -> URL;
+    (<<"https://", _/binary>> = URL) -> URL
+  end.
+
+mod_options(_Host) ->
+  [
+    %% Required option
+    get_url
+  ].
+
+depends(_, _) ->
+  [{mod_http_fileserver, hard}].
 
 handle_request(Iq) ->
   #iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From,to = To,sub_els = [#xmlel{name = <<"pubsub">>,
@@ -480,10 +504,8 @@ handle_pubsub(ChatJID,UserJID,ID,#avatar_data{data = Data}) ->
   case Meta of
     [{ID,AvaSize,AvaType,_AvaUrl}] ->
       <<"image/",Type/binary>> = AvaType,
-      PathRaw = gen_mod:get_module_opt(Server,mod_http_upload,docroot),
-      UrlDirRaw = gen_mod:get_module_opt(Server,mod_http_upload,get_url),
-      Path = mod_http_upload:expand_home(PathRaw),
-      UrlDir = mod_http_upload:expand_host(UrlDirRaw, Server),
+      Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+      UrlDir = gen_mod:get_module_opt(Server, ?MODULE, get_url),
       Name = <<ID/binary, ".", Type/binary >>,
       Url = <<UrlDir/binary, "/", Name/binary>>,
       File = <<Path/binary, "/" , Name/binary>>,
@@ -605,7 +627,11 @@ get_photo_meta(Server,User,Chat)->
     error ->
       #avatar_meta{};
     _ ->
-      [{Hash,AvatarSize,AvatarType,AvatarUrl}] = Meta,
+      [{Hash,AvatarSize,AvatarType,_AvatarOldStyle}] = Meta,
+      <<"image/",Type/binary>> = AvatarType,
+      Url = gen_mod:get_module_opt(Server, ?MODULE, get_url),
+      Name = <<Hash/binary, ".", Type/binary >>,
+      AvatarUrl = <<Url/binary, "/", Name/binary>>,
       Info = #avatar_info{bytes = AvatarSize, type = AvatarType, id = Hash, url = AvatarUrl},
       #avatar_meta{info = [Info]}
   end,
@@ -623,8 +649,7 @@ get_photo_data(Server,Hash,UserNode,_User,Chat) ->
       error;
     _ ->
       <<"image/", Type/binary>> = TypeRaw,
-      PathRaw = gen_mod:get_module_opt(Server,mod_http_upload,docroot),
-      Path = mod_http_upload:expand_home(PathRaw),
+      Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
       Name = <<Hash/binary, ".", Type/binary >>,
       File = <<Path/binary, "/" , Name/binary>>,
       get_avatar_data(File,Hash,UserNode)
@@ -806,10 +831,8 @@ update_metadata_user_put_by_id(Server, UserID, AvatarID, AvatarType, AvatarSize,
   where id = %(UserID)s and chatgroup = %(Chat)s ")).
 
 update_data_user_put(Server, UserID, Data, Hash, Chat) ->
-  PathRaw = gen_mod:get_module_opt(Server,mod_http_upload,docroot),
-  UrlDirRaw = gen_mod:get_module_opt(Server,mod_http_upload,get_url),
-  Path = mod_http_upload:expand_home(PathRaw),
-  UrlDir = mod_http_upload:expand_host(UrlDirRaw, Server),
+  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+  UrlDir = gen_mod:get_module_opt(Server, ?MODULE, get_url),
   TypeRaw = eimp:get_type(Data),
   Type = atom_to_binary(TypeRaw, latin1),
   Name = <<Hash/binary, ".", Type/binary >>,
@@ -967,8 +990,7 @@ check_and_delete(Server, Hash, AvatarType) ->
   end.
 
 delete_file(Server, Hash, AvatarType) ->
-  PathRaw = gen_mod:get_module_opt(Server,mod_http_upload,docroot),
-  Path = mod_http_upload:expand_home(PathRaw),
+  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
   <<"image/",Type/binary>> = AvatarType,
   Name = <<Hash/binary, ".", Type/binary >>,
   File = <<Path/binary, "/" , Name/binary>>,

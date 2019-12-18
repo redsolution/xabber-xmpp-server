@@ -157,9 +157,8 @@ handle_cast({From,#iq{id = IQID,type = set, sub_els = [#xabber_replace{id = Stan
   {LUser,LServer,LResource} = jid:tolower(From),
   NewID = randoms:get_alphanum_string(32),
   NewIQ = IQ#iq{id = NewID},
-  #xabber_replace_message{from = MFrom, to = MTo, body = MBody, stanza_id = Stanza} = Message,
-  #stanza_id{by = By} = Stanza,
-  set_rewrite_job(NewID,rewrite,{LUser,LServer,LResource},StanzaID,IQID,[{from,MFrom},{to,MTo},{text,MBody},{by,By}]),
+  #xabber_replace_message{from = MFrom, to = MTo, body = MBody, sub_els = SubEls} = Message,
+  set_rewrite_job(NewID,rewrite,{LUser,LServer,LResource},StanzaID,IQID,[{from,MFrom},{to,MTo},{text,MBody},{sub_els,SubEls}]),
   ?DEBUG("Change iq ~p",[NewIQ]),
   ejabberd_router:route(NewIQ),
   {noreply, State};
@@ -185,10 +184,10 @@ handle_cast(#iq{from = From, to = To, type = result, id = ID} = IQ, State) ->
       ejabberd_hooks:run(iq_result_from_remote_server, LServer, [IQ]),
       ok;
     [#rewrite_job{message_id = StanzaID, rewrite_ask = rewrite, usr = {LUser, LServer, LResource}, iq_id = IQID,
-      rewrite_message = [{from,MFrom},{to,MTo},{text,MBody},{by,By}]} = Job] when From#jid.lresource == <<>> ->
+      rewrite_message = [{from,MFrom},{to,MTo},{text,MBody},{sub_els,SubEls}]} = Job] when From#jid.lresource == <<>> ->
       delete_job(Job),
       Replaced = #replaced{stamp = erlang:timestamp()},
-      Replace = #xabber_replace_message{from = MFrom,to = MTo, body = MBody, stanza_id = #stanza_id{by = By,id = integer_to_binary(StanzaID)}, replaced = Replaced},
+      Replace = #xabber_replace_message{from = MFrom,to = MTo, body = MBody, replaced = Replaced, sub_els = SubEls},
       start_rewrite_job(rewrite, LUser, LServer, LResource, StanzaID, IQID, {From,Replace});
     [#rewrite_job{message_id = StanzaID, rewrite_ask = Type, usr = {LUser, LServer, LResource}, iq_id = IQID} = Job] when From#jid.lresource == <<>> ->
       delete_job(Job),

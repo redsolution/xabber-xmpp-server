@@ -512,9 +512,7 @@ make_action(#iq{type = result} = IQ) ->
 make_action(#iq{type = error} = IQ) ->
   ?DEBUG("Drop error iq ~p", [IQ]);
 make_action(IQ) ->
-  SubEls = xmpp:get_els(IQ),
-  DecSubEls = lists:map(fun(E) -> xmpp:decode(E) end, SubEls),
-  DecIQ = xmpp:set_els(IQ,DecSubEls),
+  DecIQ = xmpp:decode_els(IQ),
   process_groupchat_iq(DecIQ).
 
 process_groupchat_iq(#iq{lang = Lang, type = get, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = []}]} = IQ) ->
@@ -525,7 +523,7 @@ process_groupchat_iq(#iq{lang = Lang, type = get, to = To, sub_els = [#xabbergro
     [Name,translate:translate(Lang,Desc),Type,Action] end, Permissions
   ),
   ejabberd_router:route(xmpp:make_iq_result(IQ,query_chat(TranslatedPermissions)));
-process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = Restrictions } = Query]} = IQ) ->
+process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = Restrictions } = Query]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Permission = mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat),
@@ -657,6 +655,30 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   case Result of
     ok ->
       ejabberd_router:route(xmpp:make_iq_result(IQ));
+    _ ->
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
+  end;
+process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS}]} = IQ) ->
+  Chat = jid:to_string(jid:remove_resource(To)),
+  Server = To#jid.lserver,
+  User = jid:to_string(jid:remove_resource(From)),
+  Result = ejabberd_hooks:run_fold(groupchat_default_rights_form, Server, [], [User,Chat,Server,Lang]),
+  case Result of
+    {ok, Query} ->
+      ejabberd_router:route(xmpp:make_iq_result(IQ, Query));
+    _ ->
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
+  end;
+process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS, sub_els = [#xdata{type = submit, fields = FS}]}]} = IQ) ->
+  Chat = jid:to_string(jid:remove_resource(To)),
+  Server = To#jid.lserver,
+  User = jid:to_string(jid:remove_resource(From)),
+  Result = ejabberd_hooks:run_fold(set_groupchat_default_rights, Server, FS, [User,Chat,Server,Lang]),
+  case Result of
+    {ok, Query} ->
+      ejabberd_router:route(xmpp:make_iq_result(IQ, Query));
+    bad_request ->
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()));
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;

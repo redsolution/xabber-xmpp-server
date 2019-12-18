@@ -95,7 +95,8 @@ user_change_avatar(User, Server, Chat, OtherUser) ->
   Body = [#text{lang = <<>>,data = MsgTxt}],
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [UpdatedUser]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
-  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [X,By], meta = #{}},
+  SubEls =  [X,By],
+  M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M),
   {stop,ok}.
 

@@ -566,6 +566,7 @@ CREATE TABLE conversation_metadata(
     displayed_until text NOT NULL DEFAULT '0',
     updated_at bigint NOT NULL DEFAULT 0,
     metadata_updated_at bigint NOT NULL DEFAULT 0,
+    status text NOT NULL DEFAULT 'active',
     CONSTRAINT uc_conversation_metadata UNIQUE (username,server_host,conversation,conversation_thread)
     );
 

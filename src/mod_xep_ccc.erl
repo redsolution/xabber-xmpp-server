@@ -58,7 +58,7 @@
 
 %%
 -export([get_stanza_id/2, update_retract/4, check_user_for_sync/5, try_to_sync/5, make_responce_to_sync/5, iq_result_from_remote_server/1]).
--export([get_last_sync/4, make_responce_to_sync/3, get_last_ccc_state/3, get_stanza_id_from_counter/5]).
+-export([get_last_sync/4, get_stanza_id_from_counter/5]).
 -type c2s_state() :: ejabberd_c2s:state().
 %% records
 -record(state, {host = <<"">> :: binary()}).
@@ -288,7 +288,6 @@ handle_cast({sm,#message{type = chat, from = Peer, to = To, sub_els = SubELs, me
         undefined ->
           store_special_message_id(LServer,LUser,Conversation,TS,<<"invite">>),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation);
-%%          update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,TS);
         _ ->
           Chat = jid:to_string(jid:remove_resource(ChatJID)),
           store_special_message_id(LServer,LUser,Chat,TS,<<"invite">>),
@@ -560,6 +559,7 @@ make_result(LServer, LUser, Stamp, RSM) ->
                    end, ConvRes
   ),
   ReplacedConv = replace_invites(LServer, LUser, Conv),
+  FilConv = filter_from_deleted(ReplacedConv,Stamp),
   LastStamp = get_last_stamp(LServer, LUser),
   ResRSM = case ReplacedConv of
              [_|_] when RSM /= undefined ->
@@ -573,7 +573,7 @@ make_result(LServer, LUser, Stamp, RSM) ->
              _ ->
                undefined
            end,
-  #xabber_synchronization{conversation = ReplacedConv, stamp = LastStamp, rsm = ResRSM}.
+  #xabber_synchronization{conversation = FilConv, stamp = LastStamp, rsm = ResRSM}.
 
 make_result(LServer, LUser, Stamp) ->
   Sync = get_sync(LServer, LUser, Stamp),
@@ -582,21 +582,28 @@ make_result(LServer, LUser, Stamp) ->
      end, Sync
   ),
   ReplacedConv = replace_invites(LServer, LUser, Conv),
+  FilConv = filter_from_deleted(ReplacedConv,Stamp),
   LastStamp = get_last_stamp(LServer, LUser),
-  #xabber_synchronization{conversation = ReplacedConv, stamp = LastStamp}.
+  #xabber_synchronization{conversation = FilConv, stamp = LastStamp}.
 
 convert_result(Result) ->
   lists:map(fun(El) ->
-    [Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt] = El,
-    {Conversation,binary_to_integer(Retract),Type,Thread,Read,Delivered,Display,binary_to_integer(UpdateAt)} end, Result
+    [Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,Status] = El,
+    {Conversation,binary_to_integer(Retract),Type,Thread,Read,Delivered,Display,binary_to_integer(UpdateAt),Status} end, Result
   ).
 
 
 make_result_el(LServer, LUser, El) ->
-  {Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt} = El,
+  {Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,ConversationStatus} = El,
   {PUser, PServer,_} = jid:tolower(jid:from_string(Conversation)),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
   case Type of
+    _ when ConversationStatus == <<"deleted">> ->
+      #xabber_conversation{
+        jid = jid:from_string(Conversation),
+        type = Type,
+        sub_els = [#xabber_deleted_conversation{}]
+      };
     <<"groupchat">> when IsLocal == true ->
       LastRead = get_groupchat_last_readed(PServer,PUser,LServer,LUser),
       User = jid:to_string(jid:make(LUser,LServer)),
@@ -681,6 +688,31 @@ replace_invites(LServer, LUser, Conversations) ->
     _ ->
      change_invites(LServer, LUser, Conversations,Invites)
   end.
+
+filter_from_deleted(Conversations,0) ->
+  lists:filter(
+    fun(Conversation) ->
+      case Conversation of
+        #xabber_conversation{sub_els = [#xabber_deleted_conversation{}]} ->
+          false;
+        _ ->
+          true
+      end
+    end, Conversations
+  );
+filter_from_deleted(Conversations,<<"0">>) ->
+  lists:filter(
+    fun(Conversation) ->
+      case Conversation of
+        #xabber_conversation{sub_els = [#xabber_deleted_conversation{}]} ->
+          false;
+        _ ->
+          true
+      end
+    end, Conversations
+  );
+filter_from_deleted(Conversations,_Stamp) ->
+  Conversations.
 
 change_invites(LServer, LUser, Conversations,Invites) ->
   Conv = lists:map(fun(C) ->
@@ -1196,7 +1228,8 @@ get_sync(LServer, LUser,Stamp) ->
     @(read_until)s,
     @(delivered_until)s,
     @(displayed_until)s,
-    @(updated_at)d
+    @(updated_at)d,
+    @(status)s
      from conversation_metadata"
     " where username=%(LUser)s and metadata_updated_at >= %(Stamp)d and %(LServer)H order by updated_at desc")) of
     {selected,[<<>>]} ->
@@ -1373,19 +1406,6 @@ get_count_groupchat_messages(LServer,LUser,TS,Conversation,Status) ->
       0
   end.
 
-get_count_groupchat_messages(LServer,LUser,TS,Conversation) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select
-    @(count(*))d
-     from archive"
-    " where username=%(LUser)s  and txt notnull and txt !='' and timestamp > %(TS)d and timestamp not in (select timestamp from special_messages where conversation = %(Conversation)s and %(LServer)H ) and %(LServer)H")) of
-    {selected,[{Count}]} ->
-      Count;
-    _ ->
-      0
-  end.
-
 get_groupchat_last_readed(PServer,PUser,LServer,LUser) ->
   Conv = jid:to_string(jid:make(LUser,LServer)),
   case ejabberd_sql:sql_query(
@@ -1400,38 +1420,6 @@ get_groupchat_last_readed(PServer,PUser,LServer,LUser) ->
       Sync;
     _ ->
       <<"0">>
-  end.
-
-get_groupchat_last_readed(PServer,PUser) ->
-  case ejabberd_sql:sql_query(
-    PServer,
-    ?SQL("select
-    @(read_until)s
-     from conversation_metadata"
-    " where username=%(PUser)s and %(PServer)H order by updated_at desc limit 1")) of
-    {selected,[<<>>]} ->
-      <<"0">>;
-    {selected,[]} ->
-      <<"0">>;
-    {selected,[{Sync}]} ->
-      Sync;
-    _ ->
-      <<"0">>
-  end.
-
-get_last_groupchat_message(LServer,LUser) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select
-    @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
-     from archive"
-    " where username=%(LUser)s  and txt notnull and txt !='' and %(LServer)H order by timestamp desc limit 1")) of
-    {selected,[<<>>]} ->
-      undefined;
-    {selected,[{TS, XML, Peer, Kind, Nick}]} ->
-      convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer);
-    _ ->
-      undefined
   end.
 
 store_special_message_id(LServer,LUser,Conv,TS,Type) ->
@@ -1616,7 +1604,8 @@ make_sql_query(LServer, User, TS, RSM) ->
   read_until,
   delivered_until,
   displayed_until,
-  updated_at
+  updated_at,
+  status
   from conversation_metadata where username = '">>,SUser,<<"' and 
   metadata_updated_at > '">>,Timestamp,<<"'">>],
   PageClause = case Chat of
@@ -1647,10 +1636,10 @@ make_sql_query(LServer, User, TS, RSM) ->
         % 2.5 Requesting the Last Page in a Result Set
         [<<"SELECT * FROM (">>, Query,
           <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until, displayed_until,
-  updated_at ORDER BY updated_at ASC ">>,
+  updated_at,status ORDER BY updated_at ASC ">>,
           LimitClause, <<") AS c ORDER BY updated_at DESC;">>];
       _ ->
-        [Query, <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at
+        [Query, <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status
         ORDER BY updated_at DESC ">>,
           LimitClause, <<";">>]
     end,
@@ -1658,10 +1647,10 @@ make_sql_query(LServer, User, TS, RSM) ->
     true ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,<<" and server_host='">>,
         SServer, <<"' ">>,
-        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at) as subquery;">>]};
+        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status) as subquery;">>]};
     false ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,
-        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at) as subquery;">>]}
+        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status) as subquery;">>]}
   end.
 
 
@@ -1680,38 +1669,23 @@ get_max_direction_chat(RSM) ->
 delete_conversations(UserJID,Conversations) ->
   LUser = UserJID#jid.luser,
   LServer = UserJID#jid.lserver,
-  ConvList = form_conv_list(parse_conv(Conversations)),
-  case ejabberd_sql:sql_query(
-    LServer,
-    [<<"delete from conversation_metadata where username= '">>, LUser,<<"' and ">>,ConvList]) of
-    {updated,_N} ->
-      ok;
+  ConvList = parse_conv(Conversations),
+  TS = time_now(),
+  lists:foreach(fun(Conversation) ->
+    case ejabberd_sql:sql_query(
+      LServer,
+      ?SQL("update conversation_metadata set status = 'deleted', updated_at=%(TS)d where username = %(LUser)s and conversation = %(Conversation)s")) of
+    {updated,N} when N > 0 ->
+      make_ccc_push(LServer,LUser,Conversation,TS,deleted);
     _ ->
       bad
-  end.
+  end end, ConvList).
 
 parse_conv(Convs) ->
   lists:map(fun(Con) ->
     #xabber_conversation{jid = JID} = Con,
     jid:to_string(jid:remove_resource(JID))
             end, Convs).
-
-form_conv_list(UIDs) ->
-  Length = length(UIDs),
-  case Length of
-    0 ->
-      error;
-    1 ->
-      [<<"conversation = '">>] ++ UIDs ++ [<<"'">>];
-    _ when Length > 1 ->
-      [F|R] = UIDs,
-      Rest = lists:map(fun(N) ->
-        <<" or conversation = '", N/binary, "'">>
-                       end, R),
-      [<<"(conversation = '", F/binary, "'">>] ++ Rest ++ [<<")">>];
-    _ ->
-      error
-  end.
 
 %% request jobs
 
@@ -1732,53 +1706,13 @@ get_request_job(ServerID,{PUser,PServer},{LUser,LServer,LResource}) ->
 delete_job(#request_job{} = J) ->
   mnesia:dirty_delete_object(J).
 
-%% last chat information
-
-get_last_ccc_state(_Acc,LServer,Chat) ->
-  ChatJID = jid:from_string(Chat),
-  Stamp = 0,
-  LUser = ChatJID#jid.luser,
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select
-    @(conversation)s,
-    @(retract)d,
-    @(type)s,
-    @(conversation_thread)s,
-    @(read_until)s,
-    @(delivered_until)s,
-    @(displayed_until)s,
-    @(updated_at)d
-     from conversation_metadata"
-    " where username=%(LUser)s and updated_at >= %(Stamp)d and %(LServer)H order by updated_at desc limit 1")) of
-    {selected,[<<>>]} ->
-      {stop,not_ok};
-    {selected,[]} ->
-      {stop,not_ok};
-    {selected,[Sync]} ->
-      Sync;
-    _ ->
-      {stop,not_ok}
-  end.
-
-make_responce_to_sync(Sync,_LServer,Chat) ->
-  {Conversation,Retract,_T,Thread,_Read,Delivered,Display,UpdateAt} = Sync,
-  {PUser, PServer,_} = jid:tolower(jid:from_string(Chat)),
-  LastRead = get_groupchat_last_readed(PServer,PUser),
-  Chat = jid:to_string(jid:make(PUser,PServer)),
-  Count = get_count_groupchat_messages(PServer,PUser,binary_to_integer(LastRead),Conversation),
-  LastMessage = get_last_groupchat_message(PServer,PUser),
-  Unread = #xabber_conversation_unread{count = Count, 'after' = LastRead},
-  XabberDelivered = #xabber_conversation_delivered{id = Delivered},
-  XabberDisplayed = #xabber_conversation_displayed{id = Display},
-  Conv = #xabber_conversation{retract = #xabber_conversation_retract{version = Retract},
-    jid = jid:from_string(Chat),
-    type = <<"groupchat">>,
-    thread = Thread,
-    stamp = integer_to_binary(UpdateAt),
-    delivered = XabberDelivered,
-    displayed = XabberDisplayed,
-    last = LastMessage,
-    unread = Unread},
-  Res = #xabber_synchronization{conversation = [Conv], stamp = integer_to_binary(UpdateAt)},
-  {stop,{ok,Res}}.
+make_ccc_push(LServer,LUser,Conversation, TS, deleted) ->
+  UserResources = ejabberd_sm:user_resources(LUser,LServer),
+  Conv = #xabber_conversation{jid = jid:from_string(Conversation), sub_els = [#xabber_deleted_conversation{}]},
+  Query = #xabber_synchronization_query{stamp = integer_to_binary(TS), sub_els = [Conv]},
+  lists:foreach(fun(Res) ->
+    From = jid:make(LUser,LServer),
+    To = jid:make(LUser,LServer,Res),
+    IQ = #iq{from = From, to = To, type = set, id = randoms:get_string(), sub_els = [Query]},
+    ejabberd_router:route(IQ)
+                end, UserResources).

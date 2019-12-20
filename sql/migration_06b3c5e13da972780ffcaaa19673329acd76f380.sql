@@ -1,0 +1,1 @@
+alter table conversation_metadata add column status text not null default 'active';

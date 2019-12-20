@@ -704,10 +704,10 @@ nick(GV,FN,NickVcard,NickChat) ->
       {ok,NickChat};
     _  when NickVcard =/= null andalso NickVcard =/= <<>>->
       {ok,NickVcard};
-    _  when FN =/= null andalso FN =/= <<>>->
-      {ok,FN};
     _  when GV =/= null andalso GV =/= <<>>->
       {ok,GV};
+    _  when FN =/= null andalso FN =/= <<>>->
+      {ok,FN};
     _ ->
       {bad_request}
   end.

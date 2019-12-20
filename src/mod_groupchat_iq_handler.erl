@@ -76,7 +76,7 @@ register_hooks(Host) ->
 unregister_hooks(Host) ->
   ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE, disco_sm_features, 50).
 
-handle_call(Request, From, State) ->
+handle_call(_Request, _From, _State) ->
   erlang:error(not_implemented).
 
 handle_cast({groupchat_created,Server,User,Chat,Lang}, State) ->

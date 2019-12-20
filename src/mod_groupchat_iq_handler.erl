@@ -261,19 +261,6 @@ make_action(#iq{type = get, sub_els = [#xmlel{name = <<"time">>,
   attrs = [{<<"xmlns">>,<<"urn:xmpp:time">>}]}]} = Iq) ->
   R = mod_time:process_local_iq(Iq),
   ejabberd_router:route(R);
-make_action(#iq{to=To, type = get, sub_els = [#xmlel{name = <<"vCard">>, 
-            attrs = [{<<"xmlns">>,<<"vcard-temp">>}]}]} = Iq) ->
-  Chat = To#jid.luser,
-  Server = To#jid.lserver,
-  Vcard = mod_vcard:get_vcard(Chat,Server),
-  A = case length(Vcard) of
-        0 ->
-          #vcard_temp{};
-        _ ->
-          [F|_R] = Vcard,
-          F
-      end,
-  ejabberd_router:route(xmpp:make_iq_result(Iq,A));
 make_action(#iq{type = result, sub_els = [#xmlel{name = <<"vCard">>,
   attrs = [{<<"xmlns">>,<<"vcard-temp">>}], children = _Children}]} = Iq) ->
   mod_groupchat_vcard:handle(Iq);
@@ -515,6 +502,11 @@ make_action(IQ) ->
   DecIQ = xmpp:decode_els(IQ),
   process_groupchat_iq(DecIQ).
 
+process_groupchat_iq(#iq{to = To, type = get, sub_els = [#vcard_temp{}]} = IQ) ->
+  Chat = jid:to_string(jid:remove_resource(To)),
+  Server = To#jid.lserver,
+  Vcard = mod_groupchat_vcard:get_vcard(Chat,Server),
+  ejabberd_router:route(xmpp:make_iq_result(IQ,Vcard));
 process_groupchat_iq(#iq{lang = Lang, type = get, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = []}]} = IQ) ->
     Chat = jid:to_string(jid:remove_resource(To)),
   {selected,_Tables,Permissions} = mod_groupchat_restrictions:show_permissions(To#jid.lserver,Chat),

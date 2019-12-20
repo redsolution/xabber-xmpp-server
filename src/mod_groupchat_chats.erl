@@ -40,7 +40,8 @@
   get_information_of_chat/2,
   count_users/2,
   get_all_information_chat/2,
-  status_options/1
+  status_options/1,
+  get_name_desc/2
   ]).
 start(Host, _Opts) ->
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_localpart, 10),
@@ -844,3 +845,16 @@ form_list(Elements) ->
   Empty = [X||X <- Splited, X == <<>>],
   NotEmpty = Splited -- Empty,
   NotEmpty.
+
+get_name_desc(Server,Chat) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(name)s,@(description)s
+    from groupchats where jid=%(Chat)s and %(Server)H")) of
+    {selected,[]} ->
+      {<<>>,<<>>};
+    {selected,[{Name,Desc}]} ->
+      {Name,Desc};
+    _ ->
+      {<<>>,<<>>}
+  end.

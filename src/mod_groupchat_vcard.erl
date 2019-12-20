@@ -42,7 +42,8 @@
   update_metadata/6,
   update_parse_avatar_option/4,
   get_photo_meta/3, get_photo_data/5, get_avatar_type/4, get_all_image_metadata/2, check_old_meta/2,
-  make_chat_notification_message/3, get_pubsub_meta/0, get_pubsub_data/0, handle_pubsub/4, handle_pubsub/3, get_image_id/3
+  make_chat_notification_message/3, get_pubsub_meta/0, get_pubsub_data/0, handle_pubsub/4, handle_pubsub/3, get_image_id/3,
+  get_vcard/2
 ]).
 %% gen_mod behavior
 -export([start/2, stop/1, mod_options/1, depends/2, mod_opt_type/1]).
@@ -352,7 +353,7 @@ iq_last() ->
 
 give_client_vesrion() ->
   #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,<<"jabber:iq:version">>}],
-    children = [name(<<"XabberGroupchat">>),version(<<"0.3.3">>),system_os(<<"Gentoo">>)]
+    children = [name(<<"XabberGroupchat">>),version(<<"0.9">>),system_os(<<"Gentoo">>)]
     }.
 
 name(Name) ->
@@ -995,3 +996,7 @@ delete_file(Server, Hash, AvatarType) ->
   Name = <<Hash/binary, ".", Type/binary >>,
   File = <<Path/binary, "/" , Name/binary>>,
   file:delete(File).
+
+get_vcard(Chat,Server) ->
+  {Name,Desc} = mod_groupchat_chats:get_name_desc(Server,Chat),
+  #vcard_temp{jabberid = Chat, nickname = Name, desc = Desc}.

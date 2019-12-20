@@ -26,11 +26,12 @@
 -module(mod_groupchat_presence).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
+-behavior(gen_server).
 -include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("mod_groupchat_present.hrl").
-
+-export([init/1, handle_call/3, handle_cast/2, terminate/2]).
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1]).
 -export([
          form_presence/2, form_presence/1,
@@ -43,15 +44,17 @@
          form_updated_presence/1,
          process_presence/1,
   send_info_to_index/2, get_global_index/1, send_message_to_index/2,
-  chat_created/4, groupchat_changed/3
+  chat_created/4, groupchat_changed/4
         ]).
-start(Host, _Opts) ->
-  ejabberd_hooks:add(groupchat_created, Host, ?MODULE, chat_created, 15),
-  ejabberd_hooks:add(groupchat_changed, Host, ?MODULE, groupchat_changed, 10).
+
+%% records
+-record(state, {host = <<"">> :: binary()}).
+
+start(Host, Opts) ->
+  gen_mod:start_child(?MODULE, Host, Opts).
 
 stop(Host) ->
-  ejabberd_hooks:delete(groupchat_created, Host, ?MODULE, chat_created, 15),
-  ejabberd_hooks:delete(groupchat_changed, Host, ?MODULE, groupchat_changed, 10).
+  gen_mod:stop_child(?MODULE, Host).
 
 depends(_Host, _Opts) ->  [].
 
@@ -62,7 +65,34 @@ mod_options(_Host) -> [
   {xabber_global_indexs, []}
 ].
 
-groupchat_changed(LServer,Chat,Status) ->
+init([Host, _Opts]) ->
+  register_hooks(Host),
+  {ok, #state{host = Host}}.
+
+terminate(_Reason, State) ->
+  Host = State#state.host,
+  unregister_hooks(Host).
+
+register_hooks(Host) ->
+  ejabberd_hooks:add(groupchat_created, Host, ?MODULE, chat_created, 15),
+  ejabberd_hooks:add(groupchat_changed, Host, ?MODULE, groupchat_changed, 10).
+
+unregister_hooks(Host) ->
+  ejabberd_hooks:delete(groupchat_created, Host, ?MODULE, chat_created, 15),
+  ejabberd_hooks:delete(groupchat_changed, Host, ?MODULE, groupchat_changed, 10).
+
+handle_call(_Request, _From, _State) ->
+  erlang:error(not_implemented).
+
+handle_cast(#presence{to = To} = Presence, State) ->
+  Server = To#jid.lserver,
+  Chat = jid:to_string(jid:remove_resource(To)),
+  process_presence(mod_groupchat_chats:get_chat_active(Server,Chat),Presence),
+  {noreply, State};
+handle_cast(_Request, State) ->
+  {noreply, State}.
+
+groupchat_changed(LServer,Chat,Status,_User) ->
   ChatJID = jid:from_string(Chat),
   FromChat = jid:replace_resource(ChatJID,<<"Groupchat">>),
   Users = mod_groupchat_users:user_list_to_send(LServer,Chat),
@@ -83,8 +113,9 @@ chat_created(LServer,User,Chat,_Lang) ->
 
 process_presence(#presence{to=To} = Packet) ->
   Server = To#jid.lserver,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  process_presence(mod_groupchat_chats:get_chat_active(Server,Chat),Packet).
+  Proc = gen_mod:get_module_proc(Server, ?MODULE),
+  gen_server:cast(Proc, Packet),
+  Packet.
 
 process_presence({selected,[]},Packet) ->
   Packet;

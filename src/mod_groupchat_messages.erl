@@ -144,7 +144,7 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
       Message = change_message(Id,Type,Body,Sub,Meta,To,From),
       transform_message(Message);
     _ when ChatStatus == <<"inactive">> ->
-      Text = <<"Chat was inactivated.">>,
+      Text = <<"Chat is inactive.">>,
       IdSer = randoms:get_string(),
       TypeSer = chat,
       BodySer = [#text{lang = <<>>,data = Text}],

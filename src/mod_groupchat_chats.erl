@@ -41,7 +41,8 @@
   count_users/2,
   get_all_information_chat/2,
   status_options/1,
-  get_name_desc/2
+  get_name_desc/2,
+  get_status_label_name/2
   ]).
 start(Host, _Opts) ->
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_localpart, 10),
@@ -857,4 +858,18 @@ get_name_desc(Server,Chat) ->
       {Name,Desc};
     _ ->
       {<<>>,<<>>}
+  end.
+
+get_status_label_name(LServer,Status) ->
+  StatusList = lists:map(
+    fun(El) ->
+      #xdata_option{label = Label, value = [Value]} = El,
+        {Value, list_to_binary(string:to_lower(binary_to_list(Label)))}
+      end,
+    status_options(LServer)),
+  case lists:keyfind(Status,1,StatusList) of
+    {Status,LowerLabel} ->
+      LowerLabel;
+    _ ->
+      <<"unknown">>
   end.

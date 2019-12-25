@@ -182,7 +182,7 @@ get_commands_spec() ->
 			args_desc = ["Username", "Local vhost served by ejabberd"],
 			args_example = [<<"bob">>, <<"example.com">>],
 			args = [{user, binary}, {host, binary}],
-			result = {res, restuple}},
+			result = {res, rescode}},
      #ejabberd_commands{name = registered_users, tags = [accounts],
 			desc = "List all registered users in HOST",
 			module = ?MODULE, function = registered_users,
@@ -491,7 +491,7 @@ register(User, Host, Password) ->
 
 unregister(User, Host) ->
     ejabberd_auth:remove_user(User, Host),
-    {ok, ""}.
+    not ejabberd_auth:user_exists(User, Host).
 
 registered_users(Host) ->
     Users = ejabberd_auth:get_users(Host),

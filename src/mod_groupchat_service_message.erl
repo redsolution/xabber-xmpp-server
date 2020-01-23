@@ -76,7 +76,7 @@ mod_options(_Opts) -> [].
 groupchat_changed(LServer,Chat,Status,User) ->
   ChatJID = jid:from_string(Chat),
   Version = mod_groupchat_users:current_chat_version(LServer,Chat),
-  Label = mod_groupchat_chats:get_status_label_name(LServer,Status),
+  Label = mod_groupchat_chats:get_status_label_name(LServer,Chat,Status),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
   UserID = case anon(ByUserCard) of
              public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
@@ -118,7 +118,7 @@ user_change_avatar(User, Server, Chat, OtherUser) ->
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   MsgTxt = <<UserID/binary, " updated avatar of ", UpdatedUserID/binary>>,
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [UpdatedUser]},
+  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
   SubEls =  [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -139,11 +139,10 @@ user_change_own_avatar(User, Server, Chat) ->
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   MsgTxt = <<UserID/binary, " updated avatar">>,
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [ByUserCard]},
+  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
-%%  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [X,By], meta = #{}},
   send_to_all(Chat,M),
   {stop,ok}.
 
@@ -171,7 +170,7 @@ created_chat(Created,User,ChatJID,Lang) ->
     contacts = Contacts
   } = Created,
   XEl = #xabbergroupchat_x{
-    xmlns = ?NS_GROUPCHAT_CREATE,
+    xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,
     name = Name,
     description = Description,
     searchable = Search,
@@ -183,7 +182,6 @@ created_chat(Created,User,ChatJID,Lang) ->
   By = #xmppreference{type = <<"groupchat">>, sub_els = [X]},
   SubEls = [XEl,By],
   M = form_message(ChatJID,Body,SubEls),
-%%  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [XEl,By], meta = #{}},
   send_to_all(Chat,M).
 
 chat_created(LServer,User,Chat,Lang) ->
@@ -202,7 +200,7 @@ chat_created(LServer,User,Chat,Lang) ->
   {selected,[{Name,Anonymous,Search,Model,Desc,_Message,_ContactList,_DomainList,_ParentChat}]} =
     mod_groupchat_chats:get_detailed_information_of_chat(Chat,LServer),
   XEl = #xabbergroupchat_x{
-    xmlns = ?NS_GROUPCHAT_CREATE,
+    xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,
     name = Name,
     description = Desc,
     searchable = Search,
@@ -212,7 +210,6 @@ chat_created(LServer,User,Chat,Lang) ->
   By = #xmppreference{type = <<"groupchat">>, sub_els = [X]},
   SubEls = [XEl,By],
   M = form_message(jid:from_string(Chat),Body,SubEls),
-%%  M = #message{from = ChatJID, to = ChatJID, type = chat, id = randoms:get_string(), body = Body, sub_els = [XEl,By], meta = #{}},
   send_to_all(Chat,M).
 
 users_kicked(Acc, #iq{lang = Lang,to = To, from = From}) ->
@@ -247,11 +244,10 @@ users_kicked(Acc, #iq{lang = Lang,to = To, from = From}) ->
   end,
   MsgTxt = text_for_msg(Lang,Txt,UserID,KickedUsers,AddTxt),
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_KICK, sub_els = Acc},
+  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = Acc},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [X]},
   SubEls = [XEl,By],
   M = form_message(To,Body,SubEls),
-%%  M = #message{from = To, to = To, type = chat, id = randoms:get_string(), body = Body, sub_els = [XEl,By], meta = #{}},
   send_to_all(Chat,M),
   send_presences(To#jid.lserver,Chat),
   {stop,ok}.
@@ -270,7 +266,7 @@ user_left(_Acc,{Server,_User,Chat,X,Lang})->
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
-  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_LEFT, version = Version},
+  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [X]},
   SubEls = [XEl,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -294,7 +290,7 @@ user_join(_Acc,{Server,To,Chat,Lang}) ->
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_JOIN, version = Version},
+  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -371,7 +367,7 @@ user_updated({Accum,OldCard},{Server,Chat,Admin,E,Lang}) ->
   end,
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [UpdatedUser]},
+  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -415,7 +411,7 @@ user_rights_changed({OldCard,RequestUser,Permission,Restriction,Form}, LServer, 
     end,
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groupchat_users:current_chat_version(LServer,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [UpdatedUser]},
+  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -503,6 +499,9 @@ send_to_all(Chat,Stanza) ->
   Pkt1 = mod_groupchat_messages:strip_stanza_id(Stanza,Server),
   {Pkt2, _State2} = ejabberd_hooks:run_fold(
     user_send_packet, Server, {Pkt1, #{jid => ChatJID}}, []),
+  #message{meta = #{stanza_id := TS}} = Pkt2,
+  #origin_id{id = OriginID} = xmpp:get_subtag(Pkt2,#origin_id{}),
+  mod_groupchat_messages:set_displayed(ChatJID,ChatJID,TS,OriginID),
   ListAll = mod_groupchat_users:user_list_to_send(Server,Chat),
   {selected, NoReaders} = mod_groupchat_users:user_no_read(Server,Chat),
   ListTo = ListAll -- NoReaders,

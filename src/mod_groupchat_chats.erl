@@ -35,14 +35,14 @@
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1]).
 -export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all/1, get_all_info/3, get_count_chats/1, get_depended_chats/2, get_detailed_information_of_chat/2]).
 -export([check_creator/4, check_user/4, check_chat/4,create_peer_to_peer/4, send_invite/4, check_if_peer_to_peer_exist/4, groupchat_exist/2]).
--export([check_user_rights/4, decode/2, check_user_permission/5, validate_fs/5, change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5,
+-export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5, change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5,
   get_chat_active/2,
   get_information_of_chat/2,
   count_users/2,
   get_all_information_chat/2,
-  status_options/1,
+  status_options/2,
   get_name_desc/2,
-  get_status_label_name/2
+  get_status_label_name/3
   ]).
 start(Host, _Opts) ->
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_localpart, 10),
@@ -183,8 +183,8 @@ check_user_permission(_Acc,User,Chat,_Server,_FS) ->
       {stop, not_allowed}
   end.
 
-validate_fs(_Acc,_User,_Chat, LServer,FS) ->
-  Decoded = decode(LServer,FS),
+validate_fs(_Acc,_User, Chat, LServer,FS) ->
+  Decoded = decode(LServer,Chat,FS),
   case lists:member(false, Decoded) of
     true ->
       {stop, not_ok};
@@ -595,16 +595,16 @@ get_chat_fields(Chat,LServer) ->
     #xdata_field{var = <<"description">>, type = 'text-multi', values = [Desc], label = <<"Description">>},
     #xdata_field{var = <<"contacts">>, type = 'jid-multi', values = [form_list(ContactList)], label = <<"Contacts">>},
     #xdata_field{var = <<"domains">>, type = 'jid-multi', values = [form_list(DomainList)], label = <<"Domains">>},
-    #xdata_field{var = <<"status">>, type = 'list-single', values = [Status], label = <<"Status">>, options = status_options(LServer)}
+    #xdata_field{var = <<"status">>, type = 'list-single', values = [Status], label = <<"Status">>, options = status_options(LServer, Chat)}
     ].
 
--spec decode(binary(),list()) -> list().
-decode(LServer,FS) ->
-  decode(LServer,[],filter_fixed_fields(FS)).
+-spec decode(binary(),binary(),list()) -> list().
+decode(LServer,Chat,FS) ->
+  decoding(LServer,Chat,[],filter_fixed_fields(FS)).
 
-decode(LServer,Acc,[#xdata_field{var = Var, values = Values} | RestFS]) ->
-  decode(LServer,[get_and_validate(LServer,Var,Values)| Acc], RestFS);
-decode(_LServer,Acc, []) ->
+decoding(LServer,Chat,Acc,[#xdata_field{var = Var, values = Values} | RestFS]) ->
+  decoding(LServer,Chat,[get_and_validate(LServer,Chat,Var,Values)| Acc], RestFS);
+decoding(_LServer,_Chat,Acc, []) ->
   Acc.
 
 filter_fixed_fields(FS) ->
@@ -620,35 +620,35 @@ filter_fixed_fields(FS) ->
     end
   end, FS).
 
--spec get_and_validate(binary(),binary(),list()) -> binary().
-get_and_validate(_LServer,<<"description">>,Desc) ->
+-spec get_and_validate(binary(),binary(),binary(),list()) -> binary().
+get_and_validate(_LServer,_Chat,<<"description">>,Desc) ->
   {description,list_to_binary(Desc)};
-get_and_validate(_LServer,<<"name">>,Name) ->
+get_and_validate(_LServer,_Chat,<<"name">>,Name) ->
   {name,list_to_binary(Name)};
-get_and_validate(_LServer,<<"pinned-message">>,PinnedMessage) ->
+get_and_validate(_LServer,_Chat,<<"pinned-message">>,PinnedMessage) ->
   {message,list_to_binary(PinnedMessage)};
-get_and_validate(LServer,<<"status">>,Status) ->
-  validate_status(LServer,list_to_binary(Status));
-get_and_validate(_LServer,<<"index">>,Index) ->
+get_and_validate(LServer,Chat,<<"status">>,Status) ->
+  validate_status(LServer,Chat,list_to_binary(Status));
+get_and_validate(_LServer,_Chat,<<"index">>,Index) ->
   validate_index(list_to_binary(Index));
-get_and_validate(_LServer,<<"membership">>,Membership) ->
+get_and_validate(_LServer,_Chat,<<"membership">>,Membership) ->
   validate_membership(list_to_binary(Membership));
-get_and_validate(_LServer,<<"contacts">>,Contacts) ->
+get_and_validate(_LServer,_Chat,<<"contacts">>,Contacts) ->
   validate_contacts(Contacts);
-get_and_validate(_LServer,<<"domains">>,Domains) ->
+get_and_validate(_LServer,_Chat,<<"domains">>,Domains) ->
   validate_domains(Domains);
-get_and_validate(_LServer,_Var,_Values) ->
+get_and_validate(_LServer,_Chat,_Var,_Values) ->
   false.
 
-validate_status(LServer,Status) ->
-  ValidStatus = make_valid_status(LServer),
+validate_status(LServer,Chat,Status) ->
+  ValidStatus = make_valid_status(LServer,Chat),
   case lists:member(Status,ValidStatus) of
     true ->
       {status,Status}
   end.
 
-make_valid_status(LServer) ->
-  AllStatus = status_options(LServer),
+make_valid_status(LServer, Chat) ->
+  AllStatus = status_options(LServer, Chat),
   lists:map(fun(El) ->
     #xdata_option{value = [Val]} = El,
     Val end, AllStatus
@@ -820,7 +820,7 @@ create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,Contacts,Domain
   ],
   #xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE,sub_els = SubEls}.
 
-status_options(LServer) ->
+status_options(LServer, Chat) ->
   Predefined = [
     #xdata_option{label = <<"Ready for chat">>, value = [<<"chat">>]},
     #xdata_option{label = <<"Online">>, value = [<<"active">>]},
@@ -828,7 +828,7 @@ status_options(LServer) ->
     #xdata_option{label = <<"Away for long time">>, value = [<<"xa">>]},
     #xdata_option{label = <<"Busy">>, value = [<<"dnd">>]},
     #xdata_option{label = <<"Inactive">>, value = [<<"inactive">>]}],
-  Result = ejabberd_hooks:run_fold(chat_status_options, LServer, Predefined, []),
+  Result = ejabberd_hooks:run_fold(chat_status_options, LServer, Predefined, [Chat]),
   Result.
 
 membership_options() ->
@@ -860,13 +860,13 @@ get_name_desc(Server,Chat) ->
       {<<>>,<<>>}
   end.
 
-get_status_label_name(LServer,Status) ->
+get_status_label_name(LServer,Chat,Status) ->
   StatusList = lists:map(
     fun(El) ->
       #xdata_option{label = Label, value = [Value]} = El,
         {Value, list_to_binary(string:to_lower(binary_to_list(Label)))}
       end,
-    status_options(LServer)),
+    status_options(LServer, Chat)),
   case lists:keyfind(Status,1,StatusList) of
     {Status,LowerLabel} ->
       LowerLabel;

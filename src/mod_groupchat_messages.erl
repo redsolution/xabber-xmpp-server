@@ -39,7 +39,7 @@
   add_path/3,
   strip_stanza_id/2,
   send_displayed/3,
-  get_items_from_pep/3, check_invite/2, get_actual_user_info/2, get_displayed_msg/4, shift_references/2, binary_length/1
+  get_items_from_pep/3, check_invite/2, get_actual_user_info/2, get_displayed_msg/4, shift_references/2, binary_length/1, set_displayed/4
 ]).
 -export([get_last/1, seconds_since_epoch/1]).
 
@@ -346,11 +346,35 @@ send_displayed(ChatJID,StanzaID,MessageID) ->
   Msgs = get_displayed_msg(LName,LServer,StanzaID, MessageID),
   lists:foreach(fun(Msg) ->
     #displayed_msg{bare_peer = {PUser,PServer,_}, stanza_id = StanzaID, origin_id = MessageID} = Msg,
-    Displayed = #message_displayed{id = MessageID, sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
-    M = #message{type = chat, from = ChatJID, to = jid:make(PUser,PServer), sub_els = [Displayed], id=randoms:get_string()},
-    ejabberd_router:route(M)
+    case PUser of
+      LName when PServer == LServer ->
+        send_displayed_to_all(ChatJID,StanzaID,MessageID);
+      _ ->
+        Displayed = #message_displayed{id = MessageID, sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
+        M = #message{type = chat, from = ChatJID, to = jid:make(PUser,PServer), sub_els = [Displayed], id=randoms:get_string()},
+        ejabberd_router:route(M)
+    end
                 end, Msgs),
   delete_old_messages(LName,LServer,StanzaID).
+
+send_displayed_to_all(ChatJID,StanzaID,MessageID) ->
+  Displayed = #message_displayed{id = MessageID, sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
+  Server = ChatJID#jid.lserver,
+  Chat = jid:to_string(jid:remove_resource(ChatJID)),
+  ListAll = mod_groupchat_users:user_list_to_send(Server,Chat),
+  {selected, NoReaders} = mod_groupchat_users:user_no_read(Server,Chat),
+  ListTo = ListAll -- NoReaders,
+  case ListTo of
+    [] ->
+      ok;
+    _ ->
+      lists:foreach(fun(U) ->
+        {Member} = U,
+        To = jid:from_string(Member),
+        M = #message{type = chat, from = ChatJID, to = To, sub_els = [Displayed], id=randoms:get_string()},
+        ejabberd_router:route(M) end, ListTo)
+  end,
+  ok.
 
 get_displayed_msg(LName,LServer,StanzaID, MessageID) ->
   FN = fun()->
@@ -476,7 +500,6 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
           send_received(Pkt2,From,OriginID,To),
           send_message(Pkt2,Users,To);
         _ ->
-%%          send_received(Pkt2,From,OriginID,To),
           send_message(Pkt2,Users,To)
       end
   end.

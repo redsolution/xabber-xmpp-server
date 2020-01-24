@@ -65,20 +65,16 @@ depends(_Host, _Opts) ->  [].
 mod_options(_Opts) -> [].
 
 check_if_exist(Acc, User, Chat, LServer, _Lang) ->
-  ?INFO_MSG("Check user ~p",[User]),
   case mod_groupchat_users:check_user_if_exist(LServer,User,Chat) of
     not_exist ->
-      ?INFO_MSG("No user ~p",[User]),
       {stop,not_ok};
     _ ->
-      ?INFO_MSG("User exist ~p",[User]),
       Acc
   end.
 
 check_if_has_rights(_Acc, User, Chat, LServer, Lang) ->
   case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
     yes ->
-      ?INFO_MSG("Send rights to ~p",[User]),
       {stop, {ok,create_default_right_form(Chat, LServer, Lang)}};
     _ ->
       {stop, not_ok}
@@ -90,7 +86,6 @@ check_values(Acc, User, Chat, LServer, _Lang) ->
     yes when FS =/= not_ok ->
       {ok,Values} = FS,
       NewValues = Values -- get_default_current_rights(LServer,Chat),
-      ?INFO_MSG("Try to change default rights ~p",[NewValues]),
       validate(NewValues);
     _ ->
       {stop, not_ok}

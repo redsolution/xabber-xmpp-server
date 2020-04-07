@@ -95,6 +95,7 @@
 {
   us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
   bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_',
+  type = <<>>                          :: binary() | '_',
   user_id = <<>>                       :: binary() | '_',
   origin_id = <<>>                     :: binary() | '_',
   id = <<>>                            :: binary() | '_'
@@ -181,7 +182,7 @@ handle_cast({request,User,Chat}, State) ->
   set_request_job(NewID,{LUser,LServer,LResource},{PUser,PServer}),
   ejabberd_router:route(NewIQ),
   {noreply, State};
-handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver = LServer}, to = #jid{lserver = PServer, luser = PUser} = To, meta = #{stanza_id := TS, mam_archived := true}} = Pkt}, State) ->
+handle_cast({user_send,#message{id = ID, type = chat, from = #jid{luser =  LUser,lserver = LServer}, to = #jid{lserver = PServer, luser = PUser} = To, meta = #{stanza_id := TS, mam_archived := true}} = Pkt}, State) ->
   Invite = xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}),
   Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
   Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
@@ -194,7 +195,7 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
   end,
   case Reject of
     #jingle_reject{} ->
-      store_special_message_id(LServer,LUser,Conversation,TS,<<"reject">>),
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
       delete_last_call(To, LUser, LServer);
     _ ->
       ok
@@ -214,7 +215,7 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
   Type = get_conversation_type(LServer,LUser,Conversation),
   case Displayed of
     #message_displayed{id = OriginID} when IsLocal == false andalso Type == <<"groupchat">> ->
-      StanzaID = get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID),
+      StanzaID = get_stanza_id_of_chat(Displayed,LUser,LServer,PUser,PServer,OriginID),
       update_metainfo(read, LServer,LUser,Conversation,StanzaID),
       delete_msg(LUser, LServer, PUser, PServer, StanzaID);
     #message_displayed{id = OriginID} ->
@@ -240,7 +241,7 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
       update_metainfo(<<"chat">>, LServer,LUser,Conversation,<<>>)
   end,
   {noreply, State};
-handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els = SubEls, meta = #{stanza_id := TS}} = Pkt}, State) ->
+handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, sub_els = SubEls, meta = #{stanza_id := TS}} = Pkt}, State) ->
   Propose = xmpp:get_subtag(Pkt, #jingle_propose{}),
   Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
   Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
@@ -260,7 +261,7 @@ handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els =
   case Reject of
     #jingle_reject{} ->
       Conversation = jid:to_string(jid:remove_resource(From)),
-      store_special_message_id(LServer,LUser,Conversation,TS,<<"reject">>),
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
       delete_last_call(From, LUser, LServer);
     _ ->
       ok
@@ -272,38 +273,45 @@ handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els =
   DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
   handle_sub_els(chat,DecSubEls,From,To),
   {noreply, State};
-handle_cast({sm,#message{type = chat, from = Peer, to = To, sub_els = SubELs, meta = #{stanza_id := TS}} = Pkt}, State) ->
+handle_cast({sm,#message{type = chat, from = Peer, to = To, meta = #{stanza_id := TS}} = Pkt}, State) ->
   {LUser, LServer, _ } = jid:tolower(To),
   {PUser, PServer, _} = jid:tolower(Peer),
   PktRefGrp = filter_reference(Pkt,<<"groupchat">>),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   Type = get_conversation_type(LServer,LUser,Conversation),
   Invite = xmpp:get_subtag(PktRefGrp, #xabbergroupchat_invite{}),
-  XEl = lists:keyfind(xabbergroupchat_x,1, SubELs),
+  X = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
+  OriginIDElemnt = xmpp:get_subtag(Pkt, #origin_id{}),
+  OriginID = get_origin_id(OriginIDElemnt),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
   case Type of
     _ when Invite =/= false ->
       #xabbergroupchat_invite{jid = ChatJID} = Invite,
       case ChatJID of
         undefined ->
-          store_special_message_id(LServer,LUser,Conversation,TS,<<"invite">>),
+          store_special_message_id(LServer,LUser,Conversation,TS,OriginID,<<"invite">>),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation);
         _ ->
           Chat = jid:to_string(jid:remove_resource(ChatJID)),
-          store_special_message_id(LServer,LUser,Chat,TS,<<"invite">>),
+          store_special_message_id(LServer,LUser,Chat,TS,OriginID,<<"invite">>),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat)
       end;
-    _ when XEl =/= false ->
+    _ when X =/= false andalso IsLocal == true ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
       TSGroupchat = StanzaID#stanza_id.id,
-      store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),<<"service">>),
+      store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),OriginID,<<"service">>),
+      update_metainfo(message, LServer,LUser,Conversation,TS);
+    _ when X =/= false andalso IsLocal == false ->
+      FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
+      StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
+      TSGroupchat = StanzaID#stanza_id.id,
+      store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID),
       update_metainfo(message, LServer,LUser,Conversation,TS);
     <<"groupchat">> when IsLocal == false ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
       TSGroupchat = StanzaID#stanza_id.id,
-      OriginID = xmpp:get_subtag(Pkt, #origin_id{}),
       store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID),
       update_metainfo(message, LServer,LUser,Conversation,binary_to_integer(TSGroupchat));
     <<"groupchat">> ->
@@ -559,7 +567,6 @@ make_result(LServer, LUser, Stamp, RSM) ->
                    end, ConvRes
   ),
   ReplacedConv = replace_invites(LServer, LUser, Conv),
-  FilConv = filter_from_deleted(ReplacedConv,Stamp),
   LastStamp = get_last_stamp(LServer, LUser),
   ResRSM = case ReplacedConv of
              [_|_] when RSM /= undefined ->
@@ -573,7 +580,7 @@ make_result(LServer, LUser, Stamp, RSM) ->
              _ ->
                undefined
            end,
-  #xabber_synchronization{conversation = FilConv, stamp = LastStamp, rsm = ResRSM}.
+  #xabber_synchronization{conversation = ReplacedConv, stamp = LastStamp, rsm = ResRSM}.
 
 make_result(LServer, LUser, Stamp) ->
   Sync = get_sync(LServer, LUser, Stamp),
@@ -582,9 +589,8 @@ make_result(LServer, LUser, Stamp) ->
      end, Sync
   ),
   ReplacedConv = replace_invites(LServer, LUser, Conv),
-  FilConv = filter_from_deleted(ReplacedConv,Stamp),
   LastStamp = get_last_stamp(LServer, LUser),
-  #xabber_synchronization{conversation = FilConv, stamp = LastStamp}.
+  #xabber_synchronization{conversation = ReplacedConv, stamp = LastStamp}.
 
 convert_result(Result) ->
   lists:map(fun(El) ->
@@ -689,30 +695,6 @@ replace_invites(LServer, LUser, Conversations) ->
      change_invites(LServer, LUser, Conversations,Invites)
   end.
 
-filter_from_deleted(Conversations,0) ->
-  lists:filter(
-    fun(Conversation) ->
-      case Conversation of
-        #xabber_conversation{sub_els = [#xabber_deleted_conversation{}]} ->
-          false;
-        _ ->
-          true
-      end
-    end, Conversations
-  );
-filter_from_deleted(Conversations,<<"0">>) ->
-  lists:filter(
-    fun(Conversation) ->
-      case Conversation of
-        #xabber_conversation{sub_els = [#xabber_deleted_conversation{}]} ->
-          false;
-        _ ->
-          true
-      end
-    end, Conversations
-  );
-filter_from_deleted(Conversations,_Stamp) ->
-  Conversations.
 
 change_invites(LServer, LUser, Conversations,Invites) ->
   Conv = lists:map(fun(C) ->
@@ -873,11 +855,12 @@ store_last_msg(Pkt, Peer, LUser, LServer, TS, OriginIDRecord) ->
               })
                end,
           delete_last_msg(Peer, LUser, LServer),
+          IsService = xmpp:get_subtag(Pkt,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
           case mnesia:transaction(F1) of
             {atomic, ok} ->
               ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
               OriginID = get_origin_id(OriginIDRecord),
-              store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID),
+              store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID, IsService),
               ok;
             {aborted, Err1} ->
               ?DEBUG("Cannot add last msg for ~s@~s: ~s",
@@ -944,7 +927,7 @@ get_user_id(Pkt) ->
       end
   end.
 
-store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID) ->
+store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID, false) ->
   case {mnesia:table_info(last_msg, disc_only_copies),
     mnesia:table_info(last_msg, memory)} of
     {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
@@ -971,7 +954,9 @@ store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID) ->
             [LUser, LServer, Err1]),
           Err1
       end
-  end.
+  end;
+store_last_msg_in_counter(_Peer, _LUser, _LServer, _UserID, _TS, _OriginID, _IsService) ->
+  ok.
 
 delete_last_msg(Peer, LUser, LServer) ->
   {PUser, PServer,_R} = jid:tolower(Peer),
@@ -1082,6 +1067,15 @@ get_stanza_id(Pkt,BareJID) ->
       empty
   end.
 
+get_stanza_id_of_chat(Pkt,LUser,LServer,PUser,PServer,OriginID) ->
+  BareJID = jid:make(LUser, LServer),
+  case xmpp:get_subtag(Pkt, #stanza_id{}) of
+    #stanza_id{by = BareJID, id = StanzaID} ->
+      StanzaID;
+    _ ->
+      get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID)
+  end.
+
 get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
   case xmpp:get_subtag(Pkt, #stanza_id{}) of
     #stanza_id{by = BareJID, id = StanzaID} ->
@@ -1099,6 +1093,26 @@ get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID) ->
   case SortMsg of
     [#unread_msg_counter{id = StanzaID}| _Rest] ->
       StanzaID;
+    _ ->
+      get_id_from_special_messages(LUser,LServer,PUser,PServer,OriginID)
+  end.
+
+get_id_from_special_messages(LUser,LServer,PUser,PServer,OriginID) ->
+  Conv = jid:to_string(jid:make(PUser,PServer)),
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    @(timestamp)s
+     from special_messages"
+    " where username=%(LUser)s and conversation=%(Conv)s and origin_id=%(OriginID)s and %(LServer)H order by timestamp desc")) of
+    {selected,[<<>>]} ->
+      empty;
+    {selected,[]} ->
+      empty;
+    {selected,[{}]} ->
+      empty;
+    {selected,[{ID}]} ->
+      ID;
     _ ->
       empty
   end.
@@ -1216,7 +1230,28 @@ update_metainfo(displayed, LServer,LUser,Conversation,StanzaID) ->
     ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, displayed_until = %(StanzaID)s
     where username=%(LUser)s and conversation=%(Conversation)s and displayed_until::bigint <= %(StanzaID)d and %(LServer)H")
   ).
-
+get_sync(LServer, LUser,Stamp) when Stamp == 0 orelse Stamp == <<"0">> ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    @(conversation)s,
+    @(retract)d,
+    @(type)s,
+    @(conversation_thread)s,
+    @(read_until)s,
+    @(delivered_until)s,
+    @(displayed_until)s,
+    @(updated_at)d,
+    @(status)s
+     from conversation_metadata"
+    " where username=%(LUser)s and metadata_updated_at >= %(Stamp)d and status != 'deleted' and %(LServer)H order by updated_at desc")) of
+    {selected,[<<>>]} ->
+      [];
+    {selected,Sync} ->
+      Sync;
+    _ ->
+      []
+  end;
 get_sync(LServer, LUser,Stamp) ->
   case ejabberd_sql:sql_query(
     LServer,
@@ -1422,7 +1457,7 @@ get_groupchat_last_readed(PServer,PUser,LServer,LUser) ->
       <<"0">>
   end.
 
-store_special_message_id(LServer,LUser,Conv,TS,Type) ->
+store_special_message_id(LServer,LUser,Conv,TS,OriginID,Type) ->
   ejabberd_sql:sql_query(
     LServer,
   ?SQL_INSERT(
@@ -1430,6 +1465,7 @@ store_special_message_id(LServer,LUser,Conv,TS,Type) ->
     ["username=%(LUser)s",
       "conversation=%(Conv)s",
       "timestamp=%(TS)d",
+      "origin_id=%(OriginID)s",
       "type=%(Type)s",
       "server_host=%(LServer)s"])).
 
@@ -1587,6 +1623,68 @@ time_now() ->
   {MSec, Sec, USec} = erlang:timestamp(),
   (MSec*1000000 + Sec)*1000000 + USec.
 
+make_sql_query(LServer, User, TS, RSM) when TS == 0 orelse TS == <<"0">> ->
+  {Max, Direction, Chat} = get_max_direction_chat(RSM),
+  SServer = ejabberd_sql:escape(LServer),
+  SUser = ejabberd_sql:escape(User),
+  Timestamp = TS,
+  LimitClause = if is_integer(Max), Max >= 0 ->
+    [<<" limit ">>, integer_to_binary(Max)];
+                  true ->
+                    []
+                end,
+  Conversations = [<<"select conversation,
+  retract,
+  type,
+  conversation_thread,
+  read_until,
+  delivered_until,
+  displayed_until,
+  updated_at,
+  status
+  from conversation_metadata where username = '">>,SUser,<<"' and
+  metadata_updated_at > '">>,Timestamp,<<"' and status != 'deleted' ">>],
+  PageClause = case Chat of
+                 B when is_binary(B) ->
+                   case Direction of
+                     before ->
+                       [<<" AND updated_at > '">>, Chat,<<"' ">>];
+                     'after' ->
+                       [<<" AND updated_at < '">>, Chat,<<"' ">>];
+                     _ ->
+                       []
+                   end;
+                 _ ->
+                   []
+               end,
+  Query = case ejabberd_sql:use_new_schema() of
+            true ->
+              [Conversations,<<" and server_host='">>,
+                SServer, <<"' ">>,PageClause];
+            false ->
+              [Conversations,PageClause]
+          end,
+  QueryPage =
+    case Direction of
+      before ->
+        [<<"SELECT * FROM (">>, Query,
+          <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until, displayed_until,
+  updated_at,status ORDER BY updated_at ASC ">>,
+          LimitClause, <<") AS c ORDER BY updated_at DESC;">>];
+      _ ->
+        [Query, <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status
+        ORDER BY updated_at DESC ">>,
+          LimitClause, <<";">>]
+    end,
+  case ejabberd_sql:use_new_schema() of
+    true ->
+      {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,<<" and server_host='">>,
+        SServer, <<"' ">>,
+        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status) as subquery;">>]};
+    false ->
+      {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,
+        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status) as subquery;">>]}
+  end;
 make_sql_query(LServer, User, TS, RSM) ->
   {Max, Direction, Chat} = get_max_direction_chat(RSM),
   SServer = ejabberd_sql:escape(LServer),

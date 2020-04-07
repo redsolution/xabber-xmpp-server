@@ -92,7 +92,7 @@ try_register(User, Server, Password) ->
 get_users(Server, Opts) ->
     case list_users(Server, Opts) of
 	{selected, Res} ->
-	    [{U, Server} || {U} <- Res];
+	    [{U, Server, <<"sql">>} || {U} <- Res];
 	_ -> []
     end.
 

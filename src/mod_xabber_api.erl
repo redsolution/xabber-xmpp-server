@@ -39,14 +39,16 @@
 
 
   % Accounts
-  xabber_registered_chats/3, xabber_registered_users/3, xabber_register_chat/9,
+  xabber_registered_chats/3, xabber_register_chat/9,
   xabber_registered_chats_count/1, xabber_registered_users_count/1,
   set_password/3, check_user/2, xabber_revoke_user_token/2,
   % Vcard
   set_vcard/4,set_vcard/5,set_nickname/3,get_vcard_multi/4,get_vcard/3,get_vcard/4, oauth_issue_token/5,
 
   % Count user
-  xabber_num_online_users/1
+  xabber_num_online_users/1,
+  xabber_test_api/0,  xabber_get_vcard/2,
+  xabber_registered_vhosts/0, xabber_registered_users/1, xabber_get_one_message/3
 ]).
 
 
@@ -109,6 +111,51 @@ get_commands_spec() ->
   VcardXEP = "For a full list of vCard fields check XEP-0054: vcard-temp at "
   "http://www.xmpp.org/extensions/xep-0054.html",
     [
+      #ejabberd_commands{name = xabber_test_api, tags = [xabber],
+        desc = "Test api",
+        longdesc = "Test api",
+        module = ?MODULE, function = xabber_test_api,
+        args_desc = ["xabber_test_api"],
+        args_example = [],
+        args = [],
+        result = {res, restuple},
+        result_example = {ok, <<"Some information">>},
+        result_desc = "Result tuple"},
+      #ejabberd_commands{name = xabber_registered_vhosts, tags = [xabber],
+        desc = "List all registered vhosts in SERVER",
+        module = ?MODULE, function = xabber_registered_vhosts,
+        result_desc = "List of available vhosts",
+        result_example = [<<"example.com">>, <<"anon.example.com">>],
+        args = [],
+        result = {vhosts, {list, {vhost, string}}}},
+      #ejabberd_commands{name = xabber_registered_users, tags = [xabber],
+        desc = "List all registered vhosts in SERVER",
+        module = ?MODULE, function = xabber_registered_users,
+        result_desc = "List of available vhosts",
+        result_example = [<<"example.com">>, <<"anon.example.com">>],
+        args = [{host, binary}],
+        args_desc = ["Name of HOST to check"],
+        args_example = [<<"capulet.lit">>],
+        result = {users, {list, {user, {tuple, [{name, string}, {auth, string}]}}}}},
+      #ejabberd_commands{name = xabber_get_vcard, tags = [xabber],
+        desc = "List all registered vhosts in SERVER",
+        module = ?MODULE, function = xabber_get_vcard,
+        result_desc = "List of available vhosts",
+        result_example = [<<"example.com">>, <<"anon.example.com">>],
+        args = [{user, binary},{host, binary}],
+        args_desc = ["User and Host to check"],
+        args_example = [<<"juliet">>,<<"capulet.lit">>],
+        result = {result, {tuple, [{nick, string}, {first_name, string}, {last_name, string}, {photo, string}, {phone, string}]}}},
+      #ejabberd_commands{name = xabber_get_one_message, tags = [xabber],
+        policy = user,
+        desc = "Get a single message",
+        module = ?MODULE, function = xabber_get_one_message,
+        result_desc = "One message",
+        result_example = [<<"message-id-1">>],
+        args = [{message_id, binary}],
+        args_desc = ["User and Host to check"],
+        args_example = [<<"message-123">>],
+        result = {result, {tuple, [{message, string}]}}},
       #ejabberd_commands{name = xabber_revoke_user_token, tags = [xabber],
         desc = "Delete user's token",
         longdesc = "Type 'jid token' to delete selected token. Type 'jid all' - if you want to delete all tokens of user",
@@ -247,7 +294,7 @@ get_commands_spec() ->
         result_desc = "List of registered chats",
         result_example = [{<<"chat1">>,<<"user1@example.com">>,123}, {<<"chat2">>,<<"user@xabber.com">>,456,202}],
         args = [{host, binary},{limit,integer},{page,integer}],
-        result = {chats, {list, {chats, {tuple,[
+        result = {chats, {list, {chat, {tuple,[
           {name, string},
           {owner,string},
           {number, integer},
@@ -289,6 +336,22 @@ get_commands_spec() ->
         result = {number, integer}
       }
     ].
+
+xabber_registered_vhosts() ->
+  ?MYHOSTS.
+
+xabber_registered_users(Host) ->
+  Users = ejabberd_auth:get_users(Host),
+  SUsers = lists:sort(Users),
+  UserAndBackends = lists:map(fun({U,_S, B}) -> {U,B} end, SUsers),
+  UserAndBackends.
+
+xabber_get_vcard(User, Server) ->
+  VcardInfo = convert_vcard(mod_vcard:get_vcard(User,Server)).
+
+xabber_get_one_message(User, Server, StanzaID) ->
+  ?INFO_MSG("Try to get message from user ~p @ ~p~n Stanza ID ~p",[User,Server,StanzaID]),
+  {<<"some message">>}.
 
 oauth_issue_token(Jid, TTLSeconds, ScopesString,Browser,IP) ->
   Scopes = [list_to_binary(Scope) || Scope <- string:tokens(ScopesString, ";")],
@@ -473,6 +536,25 @@ check_user(#{caller_module := mod_http_api} = Auth,Args) ->
 check_user(_Auth,_Args) ->
   ok.
 
+xabber_test_api() ->
+  Doc = {[{foo, [<<"bing">>, 2.3, true]}]},
+  Res = jose_json_jiffy:encode(Doc),
+  {ok, Res}.
+
+convert_vcard([]) ->
+  [{<<>>,<<>>,<<>>,<<>>,<<>>}];
+convert_vcard([Vcard_X|_Rest]) ->
+%%  ?INFO_MSG("Converted ~p",[Vcard]),
+  Vcard = xmpp:decode(Vcard_X),
+  [{set_default(Vcard#vcard_temp.nickname),set_default(Vcard#vcard_temp.nickname),set_default(Vcard#vcard_temp.nickname),set_default(Vcard#vcard_temp.photo),set_default(Vcard#vcard_temp.tel)}].
+
+set_default(Value) ->
+  case Value of
+    undefined ->
+      <<>>;
+    _ ->
+      Value
+  end.
 
 validate_privacy(Privacy) ->
   lists:member(Privacy,[<<"public">>, <<"incognito">>]).

@@ -205,7 +205,7 @@ get_users_ldap(Server) ->
 							  error -> [];
 							  LU ->
 							      [{LU,
-								jid:nameprep(Server)}]
+								jid:nameprep(Server)}, <<"ldap">>]
 							end;
 						    _ -> []
 						  end

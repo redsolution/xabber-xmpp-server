@@ -586,6 +586,15 @@ CREATE TABLE conversation_metadata(
     CONSTRAINT uc_conversation_metadata UNIQUE (username,server_host,conversation,conversation_thread)
     );
 
+CREATE TABLE special_messages(
+    username text NOT NULL,
+    conversation text NOT NULL,
+    timestamp BIGINT NOT NULL,
+    origin_id text,
+    type text NOT NULL DEFAULT 'chat',
+    CONSTRAINT uc_special_message UNIQUE (username,timestamp)
+    );
+
 ALTER TABLE archive ADD CONSTRAINT unique_timestamp UNIQUE (timestamp, server_host);
 
 CREATE TABLE origin_id (

@@ -233,9 +233,9 @@ wake_all(LServer) ->
     case Mod:lookup_sessions(LServer) of
 	{ok, Sessions} ->
 	    IgnoreResponse = fun(_) -> ok end,
-	    lists:foreach(fun({_, PushLJID, Node, XData}) ->
+	    lists:foreach(fun({_, PushLJID, Node, XData, Cipher, Key}) ->
 				  mod_push:notify(LServer, PushLJID, Node,
-						  XData, none, IgnoreResponse)
+						  XData, none, IgnoreResponse, Cipher, Key)
 			  end, Sessions);
 	error ->
 	    error

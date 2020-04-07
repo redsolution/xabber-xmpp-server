@@ -29,7 +29,7 @@
 -behaviour(mod_push).
 
 %% API
--export([init/2, store_session/6, lookup_session/4, lookup_session/3,
+-export([init/2, store_session/6, lookup_session/4, lookup_session/3, store_session/8,
 	 lookup_sessions/3, lookup_sessions/2, lookup_sessions/1,
 	 delete_session/3, delete_old_sessions/2, transform/1]).
 
@@ -46,6 +46,34 @@ init(_Host, _Opts) ->
 			   [{disc_only_copies, [node()]},
 			    {type, bag},
 			    {attributes, record_info(fields, push_session)}]).
+
+store_session(LUser, LServer, TS, PushJID, Node, XData, EncryptionType, EncriptionKey) ->
+	US = {LUser, LServer},
+	PushLJID = jid:tolower(PushJID),
+	MaxSessions = ejabberd_sm:get_max_user_sessions(LUser, LServer),
+	F = fun() ->
+		if is_integer(MaxSessions) ->
+			enforce_max_sessions(US, MaxSessions - 1);
+			MaxSessions == infinity ->
+				ok
+		end,
+		mnesia:write(#push_session{us = US,
+			timestamp = TS,
+			service = PushLJID,
+			node = Node,
+			xml = encode_xdata(XData),
+			encryption_key = EncriptionKey,
+			encryption_type = EncryptionType
+			})
+			end,
+	case mnesia:transaction(F) of
+		{atomic, ok} ->
+			{ok, {TS, PushLJID, Node, XData}};
+		{aborted, E} ->
+			?ERROR_MSG("Cannot store push session for ~s@~s: ~p",
+				[LUser, LServer, E]),
+			{error, db_failure}
+	end.
 
 store_session(LUser, LServer, TS, PushJID, Node, XData) ->
     US = {LUser, LServer},

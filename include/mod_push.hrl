@@ -21,4 +21,6 @@
          timestamp = p1_time_compat:timestamp() :: erlang:timestamp(),
          service = {<<"">>, <<"">>, <<"">>}     :: ljid(),
          node = <<"">>                          :: binary(),
+         encryption_type = <<"">>               :: binary(),
+         encryption_key = <<"">>                :: binary(),
          xml                                    :: undefined | xmlel()}).

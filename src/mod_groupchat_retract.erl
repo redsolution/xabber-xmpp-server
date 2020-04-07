@@ -279,7 +279,8 @@ send_notifications(_Acc, {Server,_User,Chat,_ID,Retract,_Version}) ->
 
 %% retract_query hook
 
-user_in_chat(_Acc, {Server,User,Chat,_Version,_Less}) ->
+user_in_chat(_Acc, {Server,UserJID,Chat,_Version,_Less}) ->
+  User = jid:to_string(jid:remove_resource(UserJID)),
   Status = mod_groupchat_users:check_user(Server,User,Chat),
   case Status of
     not_exist ->
@@ -304,7 +305,7 @@ check_if_less(_Acc,{Server,_User,Chat,Version,Less}) ->
 
 
 
-send_query(_Acc,{Server,User,Chat,Version,_Less}) ->
+send_query(_Acc,{Server,UserJID,Chat,Version,_Less}) ->
   V = case Version of
         undefined -> 0;
         <<>> -> 0;
@@ -312,7 +313,6 @@ send_query(_Acc,{Server,User,Chat,Version,_Less}) ->
       end,
   QueryElements = get_query(Server,Chat,V),
   ChatJID = jid:from_string(Chat),
-  UserJID = jid:from_string(User),
   MsgHead = lists:map(fun(El) ->
     {Element} = El,
     EventNotDecoded= fxml_stream:parse_element(Element),
@@ -593,12 +593,10 @@ filter_els(Els) ->
       NS = xmpp:get_ns(El),
       if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
         try xmpp:decode(El) of
-          #xmppreference{type = <<"markup">>} ->
-            true;
-          #xmppreference{type = <<"mention">>} ->
-            true;
+          #xmppreference{type = <<"groupchat">>} ->
+            false;
           #xmppreference{type = _Any} ->
-            false
+            true
         catch _:{xmpp_codec, _} ->
           false
         end;

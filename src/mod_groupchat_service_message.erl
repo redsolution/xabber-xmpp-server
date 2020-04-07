@@ -35,7 +35,7 @@
 -export([user_left/2,
   user_join/2,
   users_kicked/2,
-  user_updated/2,
+  user_updated/8,
   created_chat/4,
   user_change_own_avatar/3,
   user_change_avatar/4,
@@ -298,15 +298,9 @@ user_join(_Acc,{Server,To,Chat,Lang}) ->
   send_presences(Server,Chat),
   {stop,ok}.
 
-user_updated({Accum,OldCard},{Server,Chat,Admin,E,Lang}) ->
-  Item = E#xabbergroupchat_query_members.item,
-  Nick = Item#xabbergroupchat_item.nickname,
-  Badge = Item#xabbergroupchat_item.badge,
-  Permission = Item#xabbergroupchat_item.permission,
-  Restriction = Item#xabbergroupchat_item.restriction,
+user_updated({User,OldCard}, LServer,Chat, Admin,_ID,Nick,Badge,Lang) ->
   ByUserCard = mod_groupchat_users:form_user_card(Admin,Chat),
-  UpdatedUser = mod_groupchat_users:form_user_card(Accum,Chat),
-  ChatJID = jid:from_string(Chat),
+  UpdatedUser = mod_groupchat_users:form_user_card(User,Chat),
   OldName = case anon(UpdatedUser) of
               public when OldCard#xabbergroupchat_user_card.nickname =/= undefined andalso OldCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso OldCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso OldCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(OldCard#xabbergroupchat_user_card.nickname) > 1 ->
                 OldCard#xabbergroupchat_user_card.nickname;
@@ -331,48 +325,71 @@ user_updated({Accum,OldCard},{Server,Chat,Admin,E,Lang}) ->
              anonim ->
                ByUserCard#xabbergroupchat_user_card.nickname
            end,
-  MsgTxt =
+%%  MsgTxt =
+%%  case Admin of
+%%    User when Badge == undefined andalso Nick =/= undefined ->
+%%      Txt = <<" is now known as ">>,
+%%      text_for_msg(Lang,Txt,OldName,UserID,[]);
+%%    User when Badge =/= undefined andalso Nick =/= undefined ->
+%%      Txt = <<" changed his badge and is now known as ">>,
+%%      text_for_msg(Lang,Txt,OldName,UserID,[]);
+%%    User when Badge =/= undefined andalso Nick == undefined ->
+%%      Txt = <<" changed his badge">>,
+%%      text_for_msg(Lang,Txt,UserID,[],[]);
+%%    _ when Badge == undefined andalso Nick =/= undefined ->
+%%      Txt = <<" nickname was changed to ", Nick/binary," by ">>,
+%%      text_for_msg(Lang,Txt,OldName,UserID,[]);
+%%    _ when Badge =/= undefined andalso Nick == undefined ->
+%%      Txt = <<" badge was changed by ">>,
+%%      text_for_msg(Lang,Txt,Acc,UserID,[]);
+%%    _ ->
+%%      Txt = <<" info was updated by ">>,
+%%      text_for_msg(Lang,Txt,Acc,UserID,[])
+%%  end,
+  OldNick = OldCard#xabbergroupchat_user_card.nickname,
+  NewNick = UpdatedUser#xabbergroupchat_user_card.nickname,
+  OldBadge = OldCard#xabbergroupchat_user_card.badge,
+  NewBadge = UpdatedUser#xabbergroupchat_user_card.badge,
+  ?INFO_MSG("OldNick ~p~nNewNick ~p~n~nOldBadge ~p~nNewBadge ~p~n",[OldNick,NewNick,OldBadge,NewBadge]),
   case Admin of
-    _  when length(Permission) > 0 andalso length(Restriction) > 0 andalso Badge == undefined andalso Nick == undefined ->
-      Txt = <<" rights was updated by ">>,
-      text_for_msg(Lang,Txt,Acc,UserID,[]);
-    _ when length(Permission) > 0 andalso length(Restriction) == 0 andalso Badge == undefined andalso Nick == undefined ->
-      Txt = permission_text(Permission,OldCard,UpdatedUser),
-      text_for_msg(Lang,Txt,Acc,UserID,[]);
-    _ when length(Permission) == 0 andalso length(Restriction) > 0 andalso Badge == undefined andalso Nick == undefined ->
-      Txt = restriction_text(Restriction),
-      text_for_msg(Lang,Txt,Acc,UserID,[]);
-    Accum when length(Permission) == 0 andalso length(Restriction) == 0 andalso Badge == undefined andalso Nick =/= undefined ->
-      Txt = <<" is now known as ">>,
-      text_for_msg(Lang,Txt,OldName,UserID,[]);
-    Accum when Badge =/= undefined andalso Nick =/= undefined ->
+    User when OldNick =/= NewNick andalso OldBadge =/= NewBadge ->
       Txt = <<" changed his badge and is now known as ">>,
-      text_for_msg(Lang,Txt,OldName,UserID,[]);
-    Accum when Badge =/= undefined andalso Nick == undefined ->
+      MsgTxt = text_for_msg(Lang,Txt,OldName,UserID,[]),
+      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+    User when OldNick =/= NewNick andalso OldBadge == NewBadge ->
+      Txt = <<" is now known as ">>,
+      MsgTxt = text_for_msg(Lang,Txt,OldName,UserID,[]),
+      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+    User when OldNick == NewNick andalso OldBadge =/= NewBadge ->
       Txt = <<" changed his badge">>,
-      text_for_msg(Lang,Txt,UserID,[],[]);
-    _ when length(Permission) == 0 andalso length(Restriction) == 0 andalso Badge == undefined andalso Nick =/= undefined ->
+      MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
+      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+    _ when OldNick =/= NewNick andalso OldBadge =/= NewBadge ->
+      Txt = <<" nickname was changed to ", Nick/binary," and badge was changed by ">>,
+      MsgTxt = text_for_msg(Lang,Txt,OldName,UserID,[]),
+      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+    _ when OldNick =/= NewNick andalso OldBadge == NewBadge ->
       Txt = <<" nickname was changed to ", Nick/binary," by ">>,
-      text_for_msg(Lang,Txt,OldName,UserID,[]);
-    _ when length(Permission) == 0 andalso length(Restriction) == 0 andalso Badge =/= undefined andalso Nick == undefined ->
+      MsgTxt = text_for_msg(Lang,Txt,Acc,UserID,[]),
+      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+    _ when OldNick == NewNick andalso OldBadge =/= NewBadge ->
       Txt = <<" badge was changed by ">>,
-      text_for_msg(Lang,Txt,Acc,UserID,[]);
-    _ when Nick =/= undefined andalso (length(Permission) > 0 orelse length(Restriction) > 0 orelse Badge =/= undefined)->
-      Txt = <<" nickname was changed to ", Nick/binary," by ">>,
-      T1 = text_for_msg(Lang,Txt,OldName,UserID,[]),
-      <<T1/binary,". User info was updated">>;
+      MsgTxt = text_for_msg(Lang,Txt,Acc,UserID,[]),
+      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
     _ ->
-      Txt = <<" info was updated by ">>,
-      text_for_msg(Lang,Txt,Acc,UserID,[])
+      ok
   end,
+  {stop,ok}.
+
+maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt) ->
+  ChatJID = jid:from_string(Chat),
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  Version = mod_groupchat_users:current_chat_version(Server,Chat),
+  Version = mod_groupchat_users:current_chat_version(LServer,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser]},
   By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
-  send_to_all(Chat,M),
-  {stop,ok}.
+  send_to_all(Chat,M).
 
 user_rights_changed({OldCard,RequestUser,Permission,Restriction,Form}, LServer, Admin, Chat, _ID, Lang) ->
   ByUserCard = mod_groupchat_users:form_user_card(Admin,Chat),

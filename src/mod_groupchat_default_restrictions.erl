@@ -146,11 +146,12 @@ is_valid_value(_Other,_ValidValues) ->
   false.
 
 valid_values() ->
-  [<<"0">>,<<"5 minutes">>,<<"10 minutes">>,<<"15 minutes">>,<<"30 minutes">>,<<"1 hour">>,<<"1 week">>,<<"1 month">>].
+  [<<>>,<<"0">>,<<"5 minutes">>,<<"10 minutes">>,<<"15 minutes">>,<<"30 minutes">>,<<"1 hour">>,<<"1 week">>,<<"1 month">>].
 
 validate([]) ->
   {stop,bad_request};
 validate(FS) ->
+  ?INFO_MSG("FS ~p~n~n",[FS]),
   ValidValues = valid_values(),
   Validation = lists:map(fun(El) ->
     {_Rightname,Values} = El,
@@ -307,7 +308,10 @@ set_restrictions(Server,User,Chat) ->
     _ ->
       ok
   end.
-
+set_default_restrictions(LServer, Chat, Right, [<<>>]) ->
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("delete from groupchat_default_restrictions where chatgroup=%(Chat)s and right_name=%(Right)s"));
 set_default_restrictions(LServer, Chat, Right, []) ->
   ejabberd_sql:sql_query(
     LServer,

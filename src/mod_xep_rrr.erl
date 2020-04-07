@@ -1047,12 +1047,10 @@ filter_els(Els) ->
       NS = xmpp:get_ns(El),
       if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
         try xmpp:decode(El) of
-          #xmppreference{type = <<"markup">>} ->
-            true;
-          #xmppreference{type = <<"mention">>} ->
-            true;
+          #xmppreference{type = <<"groupchat">>} ->
+            false;
           #xmppreference{type = _Any} ->
-            false
+            true
         catch _:{xmpp_codec, _} ->
           false
         end;

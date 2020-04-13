@@ -71,7 +71,12 @@
 % Change user nick and badge
 -export([validate_data/8, validate_rights/8, update_user/8]).
 
+% Delete chat
+-export([check_if_user_owner/4, unsubscribe_all_participants/4]).
+
 start(Host, _Opts) ->
+  ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, check_if_user_owner, 10),
+  ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, unsubscribe_all_participants, 20),
   ejabberd_hooks:add(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
   ejabberd_hooks:add(request_own_rights, Host, ?MODULE, send_user_rights, 20),
   ejabberd_hooks:add(request_change_user_settings, Host, ?MODULE, check_if_exist, 10),
@@ -93,6 +98,8 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
 
 stop(Host) ->
+  ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, check_if_user_owner, 10),
+  ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, unsubscribe_all_participants, 20),
   ejabberd_hooks:delete(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
   ejabberd_hooks:delete(request_own_rights, Host, ?MODULE, send_user_rights, 20),
   ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, check_if_exist, 10),
@@ -116,6 +123,27 @@ stop(Host) ->
 depends(_Host, _Opts) ->  [].
 
 mod_options(_Opts) -> [].
+
+% delete groupchat hook
+check_if_user_owner(_Acc, LServer, User, Chat) ->
+  case mod_groupchat_restrictions:is_owner(LServer,Chat,User) of
+    yes ->
+      ok;
+    _ ->
+      {stop,{error, xmpp:err_not_allowed()}}
+  end.
+
+unsubscribe_all_participants(_Acc, LServer, _User, Chat) ->
+  Users = get_all_user(LServer,Chat),
+  From = jid:from_string(Chat),
+  lists:foreach(fun(U) ->
+    {Participant} = U,
+    To = jid:from_string(Participant),
+    ejabberd_router:route(#presence{type = unsubscribe, id = randoms:get_string(), from = From, to = To}),
+    ejabberd_router:route(#presence{type = unsubscribed, id = randoms:get_string(), from = From, to = To})
+                end,
+    Users
+  ).
 
 % request_own_rights hook
 check_if_user_exist(Acc, LServer, User, Chat,_Lang) ->
@@ -767,29 +795,6 @@ calculate_role(UserPerm) ->
       <<"owner">>
   end.
 
-%%get_users_list_with_version(Iq) ->
-%%  #iq{to = To,from = From,sub_els = Sub, lang = Lang} = Iq,
-%%  Els = lists:map(fun(El) -> xmpp:decode(El) end, Sub),
-%%  Chat = jid:to_string(jid:remove_resource(To)),
-%%  Server = To#jid.lserver,
-%%  User = jid:to_string(jid:remove_resource(From)),
-%%  Q = lists:keyfind(xabbergroupchat_query_members,1,Els),
-%%  V = Q#xabbergroupchat_query_members.version,
-%%  VInteger = binary_to_integer(V),
-%%  DateNew = get_chat_version(Server,Chat),
-%%  UnixTimeNew = convert_from_datetime_to_unix_time(DateNew),
-%%  VersionNew = integer_to_binary(UnixTimeNew),
-%%  case VInteger of
-%%    _ when UnixTimeNew > VInteger ->
-%%      Date = convert_from_unix_time_to_datetime(VInteger),
-%%      {selected,_Tables,Items} = get_updated_users_rights(Server,Chat,Date);
-%%    _ ->
-%%      Items = []
-%%  end,
-%%a(Items,[],User,Lang,VersionNew)->
-%%  A = query_chat(parse_items(Items,[],User,Lang),VersionNew).
-%%  ejabberd_router:route(xmpp:make_iq_result(Iq,A)).
-
 get_users_from_chat(Iq) ->
   #iq{to = To,from = From, lang = Lang} = Iq,
   Chat = jid:to_string(jid:remove_resource(To)),
@@ -854,95 +859,6 @@ update_user(User, LServer,Chat, _Admin,_ID,Nickname,Badge,_Lang) ->
   insert_badge(LServer,User,Chat,Badge),
   insert_nickname(LServer,User,Chat,Nickname),
   {User,UserCard}.
-
-%%validate_data(_Acc,{Server,Chat,Admin,E,_Lang}) ->
-%%  Item = E#xabbergroupchat_query_members.item,
-%%  UserId = Item#xabbergroupchat_item.id,
-%%  User = case UserId of
-%%           <<>> ->
-%%             Admin;
-%%           _ ->
-%%             get_user_by_id(Server,Chat,UserId)
-%%         end,
-%%  Nick = Item#xabbergroupchat_item.nickname,
-%%  Badge = Item#xabbergroupchat_item.badge,
-%%  Permission = Item#xabbergroupchat_item.permission,
-%%  Restriction = Item#xabbergroupchat_item.restriction,
-%%  case Nick of
-%%    undefined when Badge == undefined andalso Permission == [] andalso Restriction == [] ->
-%%      {stop, not_ok};
-%%    _  when User == Admin andalso (Permission =/= [] orelse Restriction =/= []) ->
-%%      {stop, not_ok};
-%%    _ ->
-%%      ok
-%%  end.
-%%
-%%validate_rights(_Acc,{Server,Chat,Admin,E,_Lang}) ->
-%%  Item = E#xabbergroupchat_query_members.item,
-%%  UserId = Item#xabbergroupchat_item.id,
-%%  User = case UserId of
-%%           <<>> ->
-%%             Admin;
-%%           _ ->
-%%             get_user_by_id(Server,Chat,UserId)
-%%         end,
-%%  Nick = Item#xabbergroupchat_item.nickname,
-%%  Badge = Item#xabbergroupchat_item.badge,
-%%  SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-badges">>,Admin,Chat),
-%%  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-nicknames">>,Admin,Chat),
-%%  Change = mod_groupchat_restrictions:is_permitted(<<"restrict-participants">>,Admin,Chat),
-%%  Permission = Item#xabbergroupchat_item.permission,
-%%  Restriction = Item#xabbergroupchat_item.restriction,
-%%  RightValidation = mod_groupchat_restrictions:validate_users(Server,Chat,Admin,User),
-%%  case Nick of
-%%    _ when (Badge =/= undefined andalso SetBadge == no) orelse (Nick =/= undefined
-%%      andalso (SetNick == no andalso User =/= Admin))
-%%      orelse (Change == no andalso (Permission =/= [] orelse Restriction =/= []))
-%%      orelse (RightValidation == not_ok andalso (Permission =/= [] orelse Restriction =/= [])) ->
-%%      {stop,not_ok};
-%%    _ ->
-%%      ok
-%%  end.
-%%
-%%update_user(_Acc,{Server,Chat,Admin,E,_Lang}) ->
-%%  Item = E#xabbergroupchat_query_members.item,
-%%  UserId = Item#xabbergroupchat_item.id,
-%%  User = case UserId of
-%%           <<>> ->
-%%             Admin;
-%%           _ ->
-%%             get_user_by_id(Server,Chat,UserId)
-%%         end,
-%%  UserCard = form_user_card(User,Chat),
-%%  Nick = Item#xabbergroupchat_item.nickname,
-%%  Badge = Item#xabbergroupchat_item.badge,
-%%  Permission = Item#xabbergroupchat_item.permission,
-%%  Restriction = Item#xabbergroupchat_item.restriction,
-%%  SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-badges">>,Admin,Chat),
-%%  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-nicknames">>,Admin,Chat),
-%%  mod_groupchat_restrictions:change_restriction(Server,Restriction,User,Chat,Admin),
-%%  mod_groupchat_restrictions:change_permission(Server,Permission,User,Chat,Admin),
-%%  case Nick of
-%%    _ when Badge =/= undefined andalso SetBadge == yes andalso Nick =/= undefined andalso SetNick == yes ->
-%%      insert_badge(Server,User,Chat,Badge),
-%%      insert_nickname(Server,User,Chat,Nick);
-%%    _ when Badge =/= undefined andalso SetBadge == yes andalso Nick =/= undefined andalso User == Admin ->
-%%      insert_badge(Server,User,Chat,Badge),
-%%      insert_nickname(Server,User,Chat,Nick);
-%%    undefined when Badge =/= undefined andalso SetBadge == yes->
-%%      insert_badge(Server,User,Chat,Badge);
-%%    _ when Nick =/= undefined andalso SetNick == yes->
-%%      insert_nickname(Server,User,Chat,Nick);
-%%    _ when Nick =/= undefined andalso User == Admin->
-%%      insert_nickname(Server,User,Chat,Nick);
-%%    undefined when Badge =/= undefined andalso SetBadge == yes->
-%%      insert_badge(Server,User,Chat,<<"">>);
-%%    _ ->
-%%      ok
-%%  end,
-%%  {User,UserCard}.
-
-
 
 parse_items([],Acc,_User,_Lang) ->
   Acc;
@@ -1694,4 +1610,14 @@ calculate_role(LServer,Username,Chat) ->
       end;
     _ ->
       <<"owner">>
+  end.
+
+get_all_user(LServer,Chat) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(username)s from groupchat_users where chatgroup=%(Chat)s")) of
+    {selected,Users} ->
+      Users;
+    _ ->
+      []
   end.

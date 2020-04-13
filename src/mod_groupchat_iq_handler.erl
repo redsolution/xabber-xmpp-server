@@ -64,10 +64,12 @@ terminate(_Reason, State) ->
 
 register_iq_handlers(Host) ->
   gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_GROUPCHAT, ?MODULE, process_groupchat),
+  gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_GROUPCHAT_DELETE, ?MODULE, process_groupchat),
   gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_GROUPCHAT_CREATE, ?MODULE, process_groupchat).
 
 unregister_iq_handlers(Host) ->
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_GROUPCHAT),
+  gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_GROUPCHAT_DELETE),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_GROUPCHAT_CREATE).
 
 register_hooks(Host) ->
@@ -92,6 +94,7 @@ process_iq({selected,[]},Iq) ->
   Iq;
 process_iq({selected,[_Name]},Iq) ->
   make_action(Iq).
+
 process_groupchat(#iq{type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE, sub_els = []}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_groupchat(#iq{type = set, lang = Lang, to = To, from = From, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE, sub_els = SubEls}]} = IQ) ->
@@ -153,6 +156,20 @@ process_groupchat(#iq{type=get, to= To, from = From,
   UserJid = jid:to_string(jid:remove_resource(From)),
   Query = mod_groupchat_inspector:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
   xmpp:make_iq_result(Iq,Query);
+process_groupchat(#iq{from = From, to = To, type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DELETE, cdata = Localpart}]} = IQ) ->
+  ?INFO_MSG("Try to delete chat ~p",[Localpart]),
+  Server = To#jid.lserver,
+  User = jid:to_string(jid:remove_resource(From)),
+  Chat = jid:to_string(jid:make(Localpart,Server)),
+  Result = ejabberd_hooks:run_fold(delete_groupchat, Server, [], [Server, User, Chat]),
+  case Result of
+    ok ->
+      xmpp:make_iq_result(IQ);
+    {error,Error} ->
+      xmpp:make_error(IQ, Error);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_internal_server_error())
+  end;
 process_groupchat(IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).
 

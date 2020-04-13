@@ -44,7 +44,12 @@
   get_name_desc/2,
   get_status_label_name/3
   ]).
+
+% Delete chat hook
+-export([delete_chat_hook/4]).
+
 start(Host, _Opts) ->
+  ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, delete_chat_hook, 30),
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_localpart, 10),
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_unsupported_stanzas, 15),
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_params, 25),
@@ -62,6 +67,7 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_chat, 35).
 
 stop(Host) ->
+  ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, delete_chat_hook, 30),
   ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_localpart, 10),
   ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_unsupported_stanzas, 15),
   ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_params, 25),
@@ -84,6 +90,11 @@ mod_opt_type(annihilation) ->
   fun (B) when is_boolean(B) -> B end.
 
 mod_options(_Host) -> [{annihilation, true}].
+
+% delete chat hook
+delete_chat_hook(_Acc, _LServer, _User, Chat) ->
+  delete(Chat),
+  {stop, ok}.
 
 check_localpart(_Acc,Server,_CreatorLUser,_CreatorLServer,SubEls) ->
   LocalPart = get_value(xabbergroupchat_localpart,SubEls),

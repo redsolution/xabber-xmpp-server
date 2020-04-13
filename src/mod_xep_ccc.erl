@@ -205,7 +205,9 @@ handle_cast({user_send,#message{id = ID, type = chat, from = #jid{luser =  LUser
       update_metainfo(message, LServer,LUser,Conversation,TS),
       update_metainfo(read, LServer,LUser,Conversation,TS);
     _ ->
-      ok
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"invite">>),
+      update_metainfo(message, LServer,LUser,Conversation,TS),
+      update_metainfo(read, LServer,LUser,Conversation,TS)
   end,
   {noreply, State};
 handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver = LServer}, to = #jid{luser =  PUser,lserver = PServer}} = Pkt}, State) ->

@@ -613,10 +613,10 @@ shift_references(Els, Length) ->
       NS = xmpp:get_ns(El),
       if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
         try xmpp:decode(El) of
-          #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, uri = Uri, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, uri = Uri, sub_els = Sub}};
-          #xmppreference{type = Type, 'begin' = Begin, 'end' = End, uri = Uri, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = Begin + Length, 'end' = End + Length, uri = Uri, sub_els = Sub}}
+          #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub} ->
+            {true, #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub}};
+          #xmppreference{type = Type, 'begin' = Begin, 'end' = End, sub_els = Sub} ->
+            {true, #xmppreference{type = Type, 'begin' = Begin + Length, 'end' = End + Length, sub_els = Sub}}
         catch _:{xmpp_codec, _} ->
           false
         end;

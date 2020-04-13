@@ -457,7 +457,7 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
   User = mod_groupchat_users:choose_name(UserCard),
   Username = <<User/binary, ":", "\n">>,
   Length = binary_length(Username),
-  Reference = #xmppreference{type = <<"groupchat">>, 'begin' = 0, 'end' = Length - 1, sub_els = [UserCard]},
+  Reference = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, 'begin' = 0, 'end' = Length - 1, sub_els = [UserCard]}]},
   NewBody = [#text{lang = <<>>,data = <<Username/binary, Text/binary >>}],
   {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(Server,Chat),
   {selected, NoReaders} = mod_groupchat_users:user_no_read(Server,Chat),
@@ -790,7 +790,7 @@ change_all_messages(ChatandUsers, Msgs) ->
     {_ID, _IDInt, El} = Pkt,
     #forwarded{sub_els = [Msg]} = El,
     Msg2 = clean_reference(Msg),
-    X = xmpp:get_subtag(Msg2, #xmppreference{type = <<"groupchat">>}),
+    X = xmpp:get_subtag(Msg2, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
     case X of
       false ->
         Pkt;
@@ -835,10 +835,10 @@ shift_references(Pkt, Length) ->
       NS = xmpp:get_ns(El),
       if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
         try xmpp:decode(El) of
-          #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, uri = Uri, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, uri = Uri, sub_els = Sub}};
-          #xmppreference{type = Type, 'begin' = Begin, 'end' = End, uri = Uri, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = Begin + Length, 'end' = End + Length, uri = Uri, sub_els = Sub}}
+          #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub} ->
+            {true, #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub}};
+          #xmppreference{type = Type, 'begin' = Begin, 'end' = End, sub_els = Sub} ->
+            {true, #xmppreference{type = Type, 'begin' = Begin + Length, 'end' = End + Length, sub_els = Sub}}
         catch _:{xmpp_codec, _} ->
           false
         end;

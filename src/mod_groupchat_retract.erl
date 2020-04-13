@@ -354,17 +354,17 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   Sub = MD#message.sub_els,
   Body = MD#message.body,
   OldText = xmpp:get_text(Body),
-  RefEls = get_references(Sub),
-  [X] = [E || E <- RefEls, E#xmppreference.type == <<"groupchat">>],
+  X = xmpp:get_subtag(MD, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+  Reference = xmpp:get_subtag(X, #xmppreference{}),
   NewSubFiltered = filter_els(NewEls),
-  UserCard = xmpp:get_subtag(X, #xabbergroupchat_user_card{}),
+  UserCard = xmpp:get_subtag(Reference, #xabbergroupchat_user_card{}),
   UserID = UserCard#xabbergroupchat_user_card.id,
   UserJID = mod_groupchat_users:get_user_by_id(Server,Chat,UserID),
   ActualCard = mod_groupchat_users:form_user_card(UserJID,Chat),
   UserChoose = mod_groupchat_users:choose_name(ActualCard),
   Username = <<UserChoose/binary, ":", "\n">>,
   Length = mod_groupchat_messages:binary_length(Username),
-  NewX = #xmppreference{type = <<"groupchat">>, sub_els = [ActualCard], 'begin' = 0, 'end' = Length - 1},
+  NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [ActualCard], 'begin' = 0, 'end' = Length - 1}]},
   Els1 = strip_els(Sub),
   NewSubRefShift = shift_references(NewSubFiltered, Length),
   Els2 = Els1 ++ [NewX] ++ NewSubRefShift,
@@ -387,24 +387,6 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{body = NewText, sub_els = Els4},
   NewReplace = Replace#xabber_replace{xabber_replace_message = NewXabberReplaceMessage},
   NewReplace.
-
-get_references(Els) ->
-  NewEls = lists:filter(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
-        try xmpp:decode(El) of
-          #xmppreference{} ->
-            true
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els),
-  NewEls.
 
 select_previous_id(Server,ID) ->
   case ejabberd_sql:sql_query(

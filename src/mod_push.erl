@@ -709,7 +709,7 @@ make_summary(Host, #message{from = From} = Pkt) ->
 make_summary(_Host, _Pkt) ->
     undefined.
 
-make_special_els(#message{to = To, meta = #{stanza_id := TS, mam_archived := true}} = Pkt) ->
+make_special_els(#message{to = To, meta = #{stanza_id := TS}} = Pkt) ->
 	?INFO_MSG("PKT to cipher ~p~n",[Pkt]),
 	Acc0 = [#stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}],
 	Acc = case xmpp:get_subtag(Pkt, #jingle_propose{}) of

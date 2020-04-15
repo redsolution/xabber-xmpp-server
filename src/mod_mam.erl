@@ -354,7 +354,7 @@ user_receive_packet(Acc) ->
 user_send_packet({#message{to = Peer} = Pkt, #{jid := JID} = C2SState}) ->
     LUser = JID#jid.luser,
     LServer = JID#jid.lserver,
-    Request = xmpp:get_subtag(Pkt, #unique_request{}),
+    Request = xmpp:get_subtag(Pkt, #delivery_retry{}),
     Pkt0 = mod_unique:remove_request(Pkt,Request),
     Pkt1 = init_stanza_id(Pkt0, LServer),
     Pkt2 = case should_archive_out(Pkt1, LServer) of

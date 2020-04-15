@@ -100,7 +100,7 @@ receive_message_stored(Acc) ->
 
 sent_message_stored({ok, Pkt}, LServer, JID, StanzaID, Request) ->
     case Request of
-      #unique_request{to = To} ->
+      #delivery_retry{to = To} ->
         case To of
           undefined ->
             check_origin_id(Pkt, LServer, JID, StanzaID);
@@ -109,6 +109,7 @@ sent_message_stored({ok, Pkt}, LServer, JID, StanzaID, Request) ->
             {ok, Pkt2}
         end;
       _ ->
+        check_origin_id(Pkt, LServer, JID, StanzaID),
         {ok, Pkt}
     end;
 sent_message_stored(Acc, _LServer, _JID, _StanzaID, _Request) ->
@@ -117,8 +118,8 @@ sent_message_stored(Acc, _LServer, _JID, _StanzaID, _Request) ->
 -spec user_send_packet({stanza(), c2s_state()})
       -> {stanza(), c2s_state()}.
 user_send_packet({#message{} = Pkt, #{jid := JID} = C2SState} = Acc) ->
-    case xmpp:get_subtag(Pkt, #unique_request{}) of
-        #unique_request{retry = <<"true">>} ->
+    case xmpp:get_subtag(Pkt, #delivery_retry{}) of
+        #delivery_retry{to = undefined} ->
             case xmpp:get_subtag(Pkt, #origin_id{}) of
                 #origin_id{id = OriginID} ->
                     LUser = JID#jid.luser,
@@ -258,9 +259,9 @@ remove_request(Pkt,_Request) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
       if
-        (Name == <<"request">> andalso NS == <<"http://xabber.com/protocol/delivery">>) ->
+        (Name == <<"retry">> andalso NS == <<"http://xabber.com/protocol/delivery">>) ->
           try xmpp:decode(El) of
-            #unique_request{} ->
+            #delivery_retry{} ->
               false
           catch _:{xmpp_codec, _} ->
             false

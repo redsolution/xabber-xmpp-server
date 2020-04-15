@@ -470,33 +470,37 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
   ToArchived = jid:remove_resource(From),
   ArchiveMsg = message_for_archive(Id,Type,NewBody,NewEls,Meta,From,ToArchived),
   OriginID = get_origin_id(xmpp:get_subtag(ArchiveMsg, #origin_id{})),
-  RequestReceive = xmpp:get_subtag(ArchiveMsg, #unique_request{}),
-  case RequestReceive of
-    _ when RequestReceive#unique_request.retry == <<"true">> andalso OriginID /= false ->
+  Retry = xmpp:get_subtag(ArchiveMsg, #delivery_retry{}),
+  case Retry of
+    _ when Retry /= false andalso OriginID /= false ->
       case mod_unique:get_message(Server, LUser, OriginID) of
             #message{} = Found ->
               send_received(Found, From, OriginID,To);
         _ ->
           Pkt0 = strip_stanza_id(ArchiveMsg,Server),
-          Pkt1 = mod_unique:remove_request(Pkt0,RequestReceive),
+          Pkt1 = mod_unique:remove_request(Pkt0,Retry),
           {Pkt2, _State2} = ejabberd_hooks:run_fold(
             user_send_packet, Server, {Pkt1, #{jid => To}}, []),
-          case RequestReceive of
+          case Retry of
             false ->
               send_message(Pkt2,Users,To);
             _ when OriginID /= false ->
+              #message{meta = #{stanza_id := StanzaID}} = Pkt2,
+              store_origin_id(Server, StanzaID, OriginID),
               send_received(Pkt2,From,OriginID,To),
               send_message(Pkt2,Users,To)
           end
       end;
     _ ->
       Pkt0 = strip_stanza_id(ArchiveMsg,Server),
-      Pkt1 = mod_unique:remove_request(Pkt0,RequestReceive),
+      Pkt1 = mod_unique:remove_request(Pkt0,Retry),
       {Pkt2, _State2} = ejabberd_hooks:run_fold(
         user_send_packet, Server, {Pkt1, #{jid => To}}, []),
       ejabberd_hooks:run(groupchat_send_message,Server,[From,To,Pkt2]),
-      case RequestReceive of
+      case Retry of
         _ when OriginID =/= false ->
+          #message{meta = #{stanza_id := StanzaID}} = Pkt2,
+          store_origin_id(Server, StanzaID, OriginID),
           send_received(Pkt2,From,OriginID,To),
           send_message(Pkt2,Users,To);
         _ ->
@@ -701,22 +705,16 @@ send_received(
     JID,
     OriginID,ChatJID) ->
   JIDBare = jid:remove_resource(JID),
-  #message{meta = #{mam_archived := true, stanza_id := StanzaID}} = Pkt,
-  case store_origin_id(ChatJID#jid.lserver, StanzaID, OriginID) of
-    ok ->
-      Pkt2 = xmpp:set_from_to(Pkt,JID,ChatJID),
-      set_displayed(ChatJID,JID,StanzaID,OriginID),
-      UniqueReceived = #unique_received{
-        forwarded = #forwarded{sub_els = [Pkt2]}},
-      Confirmation = #message{
-        from = ChatJID,
-        to = JIDBare,
-        type = headline,
-        sub_els = [UniqueReceived]},
-      ejabberd_router:route(Confirmation);
-    _ ->
-      ok
-  end.
+  #message{meta = #{stanza_id := StanzaID}} = Pkt,
+  Pkt2 = xmpp:set_from_to(Pkt,JID,ChatJID),
+  set_displayed(ChatJID,JID,StanzaID,OriginID),
+  UniqueReceived = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, type = <<"echo">>, sub_els = [Pkt2]},
+  Confirmation = #message{
+    from = ChatJID,
+    to = JIDBare,
+    type = headline,
+    sub_els = [UniqueReceived]},
+  ejabberd_router:route(Confirmation).
 
 set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
   {LName,LServer,_} = jid:tolower(ChatJID),

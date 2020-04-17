@@ -59,6 +59,9 @@
 %%
 -export([get_stanza_id/2, update_retract/4, check_user_for_sync/5, try_to_sync/5, make_responce_to_sync/5, iq_result_from_remote_server/1]).
 -export([get_last_sync/4, get_stanza_id_from_counter/5]).
+
+% syncronization_query hook
+-export([create_synchronization_metadata/10, check_conversation_type/10]).
 -type c2s_state() :: ejabberd_c2s:state().
 %% records
 -record(state, {host = <<"">> :: binary()}).
@@ -339,6 +342,10 @@ code_change(_OldVsn, State, _Extra) ->
 %% Hooks handlers.
 %%--------------------------------------------------------------------
 register_hooks(Host) ->
+  ejabberd_hooks:add(syncronization_query, Host, ?MODULE,
+    check_conversation_type, 50),
+  ejabberd_hooks:add(syncronization_query, Host, ?MODULE,
+    create_synchronization_metadata, 60),
   ejabberd_hooks:add(iq_result_from_remote_server, Host, ?MODULE,
     iq_result_from_remote_server, 10),
   ejabberd_hooks:add(synchronization_event, Host, ?MODULE,
@@ -363,6 +370,10 @@ register_hooks(Host) ->
     c2s_stream_features, 50).
 
 unregister_hooks(Host) ->
+  ejabberd_hooks:delete(syncronization_query, Host, ?MODULE,
+    check_conversation_type, 50),
+  ejabberd_hooks:delete(syncronization_query, Host, ?MODULE,
+    create_synchronization_metadata, 60),
   ejabberd_hooks:delete(iq_result_from_remote_server, Host, ?MODULE,
     iq_result_from_remote_server, 10),
   ejabberd_hooks:delete(synchronization_event, Host, ?MODULE,
@@ -461,16 +472,11 @@ make_responce_to_sync(Sync,LServer,User,Chat,_StampBinary) ->
   Unread = #xabber_conversation_unread{count = Count, 'after' = LastRead},
   XabberDelivered = #xabber_conversation_delivered{id = Delivered},
   XabberDisplayed = #xabber_conversation_displayed{id = Display},
-  Conv = #xabber_conversation{retract = #xabber_conversation_retract{version = Retract},
+  Conv = #xabber_conversation{
     jid = jid:from_string(Chat),
     type = <<"groupchat">>,
     thread = Thread,
-    stamp = integer_to_binary(UpdateAt),
-    delivered = XabberDelivered,
-    displayed = XabberDisplayed,
-    last = LastMessage,
-    call = LastCall,
-    unread = Unread},
+    stamp = integer_to_binary(UpdateAt)},
   Res = #xabber_synchronization{conversation = [Conv], stamp = integer_to_binary(UpdateAt)},
   {stop,{ok,Res}}.
 
@@ -564,11 +570,11 @@ make_result(LServer, LUser, Stamp, RSM) ->
   {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(LServer, QueryCount),
   Count = binary_to_integer(CountBinary),
   ConvRes = convert_result(Res),
-  Conv = lists:map(fun(El) ->
+  ReplacedConv = lists:map(fun(El) ->
     make_result_el(LServer, LUser, El)
                    end, ConvRes
   ),
-  ReplacedConv = replace_invites(LServer, LUser, Conv),
+%%  ReplacedConv = replace_invites(LServer, LUser, Conv),
   LastStamp = get_last_stamp(LServer, LUser),
   ResRSM = case ReplacedConv of
              [_|_] when RSM /= undefined ->
@@ -586,11 +592,11 @@ make_result(LServer, LUser, Stamp, RSM) ->
 
 make_result(LServer, LUser, Stamp) ->
   Sync = get_sync(LServer, LUser, Stamp),
-  Conv = lists:map(fun(El) ->
+  ReplacedConv = lists:map(fun(El) ->
     make_result_el(LServer, LUser, El)
      end, Sync
   ),
-  ReplacedConv = replace_invites(LServer, LUser, Conv),
+%%  ReplacedConv = replace_invites(LServer, LUser, Conv),
   LastStamp = get_last_stamp(LServer, LUser),
   #xabber_synchronization{conversation = ReplacedConv, stamp = LastStamp}.
 
@@ -603,15 +609,22 @@ convert_result(Result) ->
 
 make_result_el(LServer, LUser, El) ->
   {Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,ConversationStatus} = El,
+  ConversationMetadata = ejabberd_hooks:run_fold(syncronization_query,
+    LServer, [], [LUser,LServer,Conversation,Read,Delivered,Display,ConversationStatus,Retract,Type]),
+  #xabber_conversation{stamp = integer_to_binary(UpdateAt), type = Type, thread = Thread, jid = jid:from_string(Conversation), sub_els = ConversationMetadata}.
+
+check_conversation_type(_Acc,_LUser,_LServer,_Conversation,_Read,_Delivered,_Display,ConversationStatus,_Retract,_Type) ->
+  case ConversationStatus of
+    <<"deleted">> ->
+      {stop,[#xabber_deleted_conversation{}]};
+    _ ->
+      []
+  end.
+
+create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Display,_ConversationStatus,Retract,Type) ->
   {PUser, PServer,_} = jid:tolower(jid:from_string(Conversation)),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
   case Type of
-    _ when ConversationStatus == <<"deleted">> ->
-      #xabber_conversation{
-        jid = jid:from_string(Conversation),
-        type = Type,
-        sub_els = [#xabber_deleted_conversation{}]
-      };
     <<"groupchat">> when IsLocal == true ->
       LastRead = get_groupchat_last_readed(PServer,PUser,LServer,LUser),
       User = jid:to_string(jid:make(LUser,LServer)),
@@ -623,16 +636,10 @@ make_result_el(LServer, LUser, El) ->
       Unread = #xabber_conversation_unread{count = Count, 'after' = LastRead},
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
-      #xabber_conversation{retract = #xabber_conversation_retract{version = Retract},
-        jid = jid:from_string(Conversation),
-        type = Type,
-        thread = Thread,
-        stamp = integer_to_binary(UpdateAt),
-        delivered = XabberDelivered,
-        displayed = XabberDisplayed,
-        last = LastMessage,
-        call = LastCall,
-        unread = Unread};
+      SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
+      {stop,[#xabber_metadata{node = ?NS_GROUPCHAT_RETRACT, sub_els = [#xabber_conversation_retract{version = Retract}]},
+        #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+        #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
     <<"groupchat">> when IsLocal == false ->
       Count = length(get_count(LUser, LServer, PUser, PServer)),
       LastMessage = get_last_message(LUser, LServer, PUser, PServer),
@@ -640,40 +647,52 @@ make_result_el(LServer, LUser, El) ->
       Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
-      #xabber_conversation{retract = #xabber_conversation_retract{version = Retract},
-        jid = jid:from_string(Conversation),
-        type = Type,
-        thread = Thread,
-        stamp = integer_to_binary(UpdateAt),
-        delivered = XabberDelivered,
-        displayed = XabberDisplayed,
-        last = LastMessage,
-        call = LastCall,
-        unread = Unread};
+      SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
+      {stop,[#xabber_metadata{node = ?NS_GROUPCHAT_RETRACT, sub_els = [#xabber_conversation_retract{version = Retract}]},
+        #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+        #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
     _ ->
       Count = get_count_messages(LServer,LUser,Conversation,binary_to_integer(Read)),
-      LastMessage = get_last_message(LServer,LUser,Conversation),
+      LastMessage = get_last_informative_message_for_chat(LServer,LUser,Conversation),
       LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
-      #xabber_conversation{retract = #xabber_conversation_retract{version = Retract},
-        jid = jid:from_string(Conversation),
-        type = Type,
-        thread = Thread,
-        stamp = integer_to_binary(UpdateAt),
-        delivered = XabberDelivered,
-        displayed = XabberDisplayed,
-        last = LastMessage,
-        call = LastCall,
-        unread = Unread}
+      SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
+      {stop,[#xabber_metadata{node = ?NS_GROUPCHAT_RETRACT, sub_els = [#xabber_conversation_retract{version = Retract}]},
+        #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+        #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]}
+  end.
+
+get_last_informative_message_for_chat(LServer,LUser,Conversation) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
+     from archive"
+    " where username=%(LUser)s and bare_peer=%(Conversation)s and %(LServer)H and txt notnull and txt !='' and timestamp not in (select timestamp from special_messages where %(LServer)H ) order by timestamp desc limit 1")) of
+    {selected,[<<>>]} ->
+      [];
+    {selected,[{TS, XML, Peer, Kind, Nick}]} ->
+      Reject = get_reject(LServer,LUser,Conversation),
+      case Reject of
+        {TSReject,RejectMessage} when TSReject > TS ->
+          RejectMessage;
+        _ ->
+          convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer)
+      end;
+    _ ->
+      []
   end.
 
 replace_invites(LServer, LUser, Conversations) ->
   AllConversations = lists:map(fun(Conv) ->
-    #xabber_conversation{jid = JID,last = Last, type = Type} = Conv,
+    #xabber_conversation{jid = JID, type = Type} = Conv,
+    FilCon = filter_conv_from_other(Conv),
+    Metadata = xmpp:get_subtag(FilCon,#xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION}),
+    Last = xmpp:get_subtag(Metadata, #xabber_conversation_last{}),
     case Last of
-      undefined ->
+      false ->
         ok;
       #xabber_conversation_last{sub_els = [Message]} when Message == undefined ->
         ok;
@@ -713,40 +732,146 @@ change_invites(LServer, LUser, Conversations,Invites) ->
   replace_invites(LServer, LUser, Conv).
 
 maybe_change_to_previous(LServer, LUser, Conversation,LastMessages) ->
-  #xabber_conversation{last = Last, jid = #jid{luser = PUser, lserver = PServer}} = Conversation,
+  FilCon = filter_conv_from_other(Conversation),
+  Metadata = xmpp:get_subtag(FilCon,#xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION}),
+  Last = xmpp:get_subtag(Metadata, #xabber_conversation_last{}),
+  #xabber_conversation{jid = #jid{luser = PUser, lserver = PServer}} = Conversation,
   case LastMessages of
     [] ->
       Conversation;
-    _ when Last =/= undefined ->
+    _ when Last =/= false ->
       #xabber_conversation_last{sub_els = [Msg]} = Last,
       TS = get_stanza_id(Msg),
       BarePeer = jid:to_string(jid:make(PUser,PServer)),
       Count = get_count_messages(LServer,LUser,BarePeer,binary_to_integer(TS)),
       Unread = #xabber_conversation_unread{count = Count, 'after' = TS},
       Previous = get_last_previous_message(LServer,LUser,BarePeer,TS),
-      NewConv = Conversation#xabber_conversation{last = Previous, unread = Unread},
+      FilterMetadata = filter_from_old_last_count(Metadata),
+      MetadataSubEls = Metadata#xabber_metadata.sub_els,
+      NewEls = [Previous,Unread|MetadataSubEls],
+      NewMetadata = FilterMetadata#xabber_metadata{sub_els = NewEls},
+      FilterConvFromOldMeta = filter_old_metadata(Conversation),
+      FilterConvFromOldMetaEls = FilterConvFromOldMeta#xabber_conversation.sub_els,
+      NewConEls = [NewMetadata | FilterConvFromOldMetaEls],
+      NewConv = Conversation#xabber_conversation{sub_els = NewConEls},
       NewConv;
-    _ when Last == undefined ->
+    _ when Last == false ->
       Conversation
   end.
 
 maybe_replace_last_message(Conversation,LastMessages) ->
-  #xabber_conversation{last = Last} = Conversation,
+  FilCon = filter_conv_from_other(Conversation),
+  Metadata = xmpp:get_subtag(FilCon,#xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION}),
+  Last = xmpp:get_subtag(Metadata, #xabber_conversation_last{}),
+%%  #xabber_conversation{last = Last} = Conversation,
   case LastMessages of
     [] ->
       Conversation;
-    _ when Last =/= undefined ->
+    _ when Last =/= false ->
       #xabber_conversation_last{sub_els = [Msg]} = Last,
       NewestLast = get_newest_last([Msg|LastMessages]),
       NewLast = #xabber_conversation_last{sub_els = [NewestLast]},
-      NewConv = Conversation#xabber_conversation{last = NewLast},
+      FilterMetadata = filter_from_old_last(Metadata),
+      MetadataSubEls = Metadata#xabber_metadata.sub_els,
+      NewEls = [NewLast|MetadataSubEls],
+      NewMetadata = FilterMetadata#xabber_metadata{sub_els = NewEls},
+      FilterConvFromOldMeta = filter_old_metadata(Conversation),
+      FilterConvFromOldMetaEls = FilterConvFromOldMeta#xabber_conversation.sub_els,
+      NewConEls = [NewMetadata | FilterConvFromOldMetaEls],
+      NewConv = Conversation#xabber_conversation{sub_els = NewConEls},
       NewConv;
-    _ when Last == undefined ->
+    _ when Last == false ->
       NewestLast = get_newest_last(LastMessages),
       NewLast = #xabber_conversation_last{sub_els = [NewestLast]},
-      NewConv = Conversation#xabber_conversation{last = NewLast},
+      FilterMetadata = filter_from_old_last(Metadata),
+      MetadataSubEls = Metadata#xabber_metadata.sub_els,
+      NewEls = [NewLast|MetadataSubEls],
+      NewMetadata = FilterMetadata#xabber_metadata{sub_els = NewEls},
+      FilterConvFromOldMeta = filter_old_metadata(Conversation),
+      FilterConvFromOldMetaEls = FilterConvFromOldMeta#xabber_conversation.sub_els,
+      NewConEls = [NewMetadata | FilterConvFromOldMetaEls],
+      NewConv = Conversation#xabber_conversation{sub_els = NewConEls},
       NewConv
   end.
+
+filter_conv_from_other(Pkt) ->
+  Els = xmpp:get_els(Pkt),
+  NewEls = lists:filtermap(
+    fun(El) ->
+      Name = xmpp:get_name(El),
+      NS = xmpp:get_ns(El),
+      if (Name == <<"metadata">> andalso NS == ?NS_XABBER_SYNCHRONIZATION) ->
+        try xmpp:decode(El) of
+          #xabber_metadata{node = Node} ->
+            Node == ?NS_XABBER_SYNCHRONIZATION
+        catch _:{xmpp_codec, _} ->
+          false
+        end;
+        true ->
+          true
+      end
+    end, Els),
+  xmpp:set_els(Pkt, NewEls).
+
+filter_from_old_last(Pkt) ->
+  Els = xmpp:get_els(Pkt),
+  NewEls = lists:filtermap(
+    fun(El) ->
+      Name = xmpp:get_name(El),
+      NS = xmpp:get_ns(El),
+      if (Name == <<"last-message">> andalso NS == ?NS_XABBER_SYNCHRONIZATION) ->
+        try xmpp:decode(El) of
+          #xabber_conversation_last{} ->
+            false
+        catch _:{xmpp_codec, _} ->
+          false
+        end;
+        true ->
+          true
+      end
+    end, Els),
+  xmpp:set_els(Pkt, NewEls).
+
+filter_from_old_last_count(Pkt) ->
+  Els = xmpp:get_els(Pkt),
+  NewEls = lists:filtermap(
+    fun(El) ->
+      Name = xmpp:get_name(El),
+      NS = xmpp:get_ns(El),
+      if (Name == <<"last-message">> andalso NS == ?NS_XABBER_SYNCHRONIZATION);
+      (Name == <<"unread">> andalso NS == ?NS_XABBER_SYNCHRONIZATION) ->
+        try xmpp:decode(El) of
+          #xabber_conversation_last{} ->
+            false;
+          #xabber_conversation_unread{}  ->
+            false
+        catch _:{xmpp_codec, _} ->
+          false
+        end;
+        true ->
+          true
+      end
+    end, Els),
+  xmpp:set_els(Pkt, NewEls).
+
+filter_old_metadata(Pkt) ->
+  Els = xmpp:get_els(Pkt),
+  NewEls = lists:filtermap(
+    fun(El) ->
+      Name = xmpp:get_name(El),
+      NS = xmpp:get_ns(El),
+      if (Name == <<"metadata">> andalso NS == ?NS_XABBER_SYNCHRONIZATION) ->
+        try xmpp:decode(El) of
+          #xabber_metadata{node = Node} ->
+            Node =/= ?NS_XABBER_SYNCHRONIZATION
+        catch _:{xmpp_codec, _} ->
+          false
+        end;
+        true ->
+          true
+      end
+    end, Els),
+  xmpp:set_els(Pkt, NewEls).
 
 get_newest_last(Msgs) ->
   Sorted = lists:reverse(lists:sort(lists:map(fun(Msg)-> {get_stanza_id(Msg),Msg} end,Msgs))),
@@ -829,9 +954,9 @@ get_actual_last_call(LUser, LServer, PUser, PServer) ->
     end, OldCallToDelete),
   ?DEBUG("actual call ~p~n~n TS NOW ~p TS10 ~p",[ActualCall,TS,TS10]),
   case ActualCall of
-    [] -> undefined;
-    [#last_call{packet = Pkt}] -> #xabber_conversation_call{sub_els = [Pkt]};
-    _ -> undefined
+    [] -> [];
+    [#last_call{packet = Pkt}] -> [#xabber_conversation_call{sub_els = [Pkt]}];
+    _ -> []
   end.
 
 store_last_msg(Pkt, Peer, LUser, LServer, TS, OriginIDRecord) ->
@@ -993,7 +1118,7 @@ get_last_message(LUser, LServer, PUser, PServer) ->
       MsgSort = lists:sort(SortFun,MsgRec),
       [Msg|_Rest] = MsgSort,
       #last_msg{packet = Packet} = Msg,
-      #xabber_conversation_last{sub_els = [Packet]}
+      [#xabber_conversation_last{sub_els = [Packet]}]
   end.
 
 get_last_messages(LUser, LServer, PUser, PServer) ->
@@ -1384,7 +1509,7 @@ get_invite(LServer,LUser,Chat) ->
      from special_messages"
     " where username=%(LUser)s and conversation = %(Chat)s and type = 'invite' and %(LServer)H order by timestamp desc limit 1")) of
     {selected,[<<>>]} ->
-      undefined;
+      [];
     {selected,[{TS}]} ->
       case ejabberd_sql:sql_query(
         LServer,
@@ -1393,14 +1518,14 @@ get_invite(LServer,LUser,Chat) ->
      from archive"
         " where username = %(LUser)s and timestamp = %(TS)d and %(LServer)H order by timestamp desc limit 1")) of
         {selected,[<<>>]} ->
-          undefined;
+          [];
         {selected,[{TS, XML, Peer, Kind, Nick}]}->
           convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer);
         _ ->
-          undefined
+          []
       end;
     _ ->
-      undefined
+      []
   end.
 
 get_reject(LServer,LUser,Conversation) ->
@@ -1411,7 +1536,7 @@ get_reject(LServer,LUser,Conversation) ->
      from special_messages"
     " where username=%(LUser)s and conversation = %(Conversation)s and type = 'reject' and %(LServer)H order by timestamp desc limit 1")) of
     {selected,[<<>>]} ->
-      undefined;
+      {0,[]};
     {selected,[{TS}]} ->
       case ejabberd_sql:sql_query(
         LServer,
@@ -1420,14 +1545,14 @@ get_reject(LServer,LUser,Conversation) ->
      from archive"
         " where username = %(LUser)s and timestamp = %(TS)d and %(LServer)H order by timestamp desc limit 1")) of
         {selected,[<<>>]} ->
-          undefined;
+          {0,[]};
         {selected,[{TS, XML, Peer, Kind, Nick}]}->
           {TS,convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer)};
         _ ->
-          undefined
+          {0,[]}
       end;
     _ ->
-      undefined
+      {0,[]}
   end.
 
 get_count_groupchat_messages(LServer,LUser,TS,Conversation,Status) ->
@@ -1476,9 +1601,9 @@ convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer) ->
   case mod_mam_sql:make_archive_el(integer_to_binary(TS), XML, Peer, Kind, Nick, chat, jid:make(LUser,LServer), jid:make(LUser,LServer)) of
     {ok, ArchiveElement} ->
       #forwarded{sub_els = [Message]} = ArchiveElement,
-      #xabber_conversation_last{sub_els = [Message]};
+      [#xabber_conversation_last{sub_els = [Message]}];
     _ ->
-      undefined
+      []
   end.
 
 get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
@@ -1574,6 +1699,24 @@ handle_sub_els(headline, [#xabber_retract_all{version = Version, conversation = 
   Conversation = jid:to_string(ConversationJID),
   delete_all_msgs(LUser, LServer, PUser, PServer),
   update_retract(LServer,LUser,Conversation,Version),
+  ok;
+handle_sub_els(headline, [#xabbergroupchat_x{type = <<"echo">>, sub_els = [Message]}], From, To) ->
+  MessageD = xmpp:decode(Message),
+  {PUser, PServer, _} = jid:tolower(From),
+  PeerJID = jid:make(PUser, PServer),
+  {LUser,LServer,_} = jid:tolower(To),
+  Conversation = jid:to_string(PeerJID),
+  StanzaID = get_stanza_id(MessageD,PeerJID),
+  IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
+  case IsLocal of
+    false ->
+      store_last_msg(MessageD, PeerJID, LUser, LServer, StanzaID),
+      delete_msg(LUser, LServer, PUser, PServer, StanzaID),
+      update_metainfo(read, LServer,LUser,Conversation,StanzaID),
+      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID);
+    _ ->
+      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID)
+  end,
   ok;
 handle_sub_els(_Type, _SubEls, _From, _To) ->
   ok.

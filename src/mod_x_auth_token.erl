@@ -233,8 +233,9 @@ remove_user(User, Server) ->
 
 check_token(User, Server, Token) ->
   UserJid = jid:to_string(jid:make(User,Server,<<>>)),
+  IsExist = ejabberd_auth:user_exists(User, Server),
   case select_token(Server, UserJid, Token) of
-    ok ->
+    ok when IsExist == true ->
       true;
     _ ->
       false

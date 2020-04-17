@@ -1,5 +1,5 @@
 %%%----------------------------------------------------------------------
-%%% ejabberd, Copyright (C) 2017-2020 ProcessOne
+%%% ejabberd, Copyright (C) 2017-2018 ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -16,9 +16,11 @@
 %%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 %%%
 %%%----------------------------------------------------------------------
--record(push_session,
+-record(xabber_push_session,
         {us = {<<"">>, <<"">>}                  :: {binary(), binary()},
          timestamp = p1_time_compat:timestamp() :: erlang:timestamp(),
          service = {<<"">>, <<"">>, <<"">>}     :: ljid(),
          node = <<"">>                          :: binary(),
+         encryption_type = <<"">>               :: binary(),
+         encryption_key = <<"">>                :: binary(),
          xml                                    :: undefined | xmlel()}).

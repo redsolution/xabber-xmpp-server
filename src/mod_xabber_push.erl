@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_push).
+-module(mod_xabber_push).
 -author('holger@zedat.fu-berlin.de').
 -protocol({xep, 357, '0.2'}).
 
@@ -34,7 +34,7 @@
 
 %% ejabberd_hooks callbacks.
 -export([disco_sm_features/5, c2s_session_pending/1, c2s_copy_session/2,
-	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1,
+	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1, encrypt/3, decrypt/2, test_value/0, sm_receive_packet/1,
 	 remove_user/2]).
 
 %% gen_iq_handler callback.
@@ -44,7 +44,7 @@
 -export([get_commands_spec/0, delete_old_sessions/1]).
 
 %% API (used by mod_push_keepalive).
--export([notify/2, notify/4, notify/6, is_message_with_body/1]).
+-export([notify/2, notify/4, notify/8, is_message_with_body/1]).
 
 %% For IQ callbacks
 -export([delete_session/3]).
@@ -58,24 +58,27 @@
 
 -type c2s_state() :: ejabberd_c2s:state().
 -type timestamp() :: erlang:timestamp().
--type push_session() :: {timestamp(), ljid(), binary(), xdata()}.
+-type xabber_push_session() :: {timestamp(), ljid(), binary(), xdata(), binary(), binary()}.
 -type err_reason() :: notfound | db_failure.
 
 -callback init(binary(), gen_mod:opts())
 	  -> any().
 -callback store_session(binary(), binary(), timestamp(), jid(), binary(),
 			xdata())
-	  -> {ok, push_session()} | {error, err_reason()}.
+	  -> {ok, xabber_push_session()} | {error, err_reason()}.
+-callback store_session(binary(), binary(), timestamp(), jid(), binary(),
+		xdata(), binary(), binary())
+			-> {ok, xabber_push_session()} | {error, err_reason()}.
 -callback lookup_session(binary(), binary(), jid(), binary())
-	  -> {ok, push_session()} | {error, err_reason()}.
+	  -> {ok, xabber_push_session()} | {error, err_reason()}.
 -callback lookup_session(binary(), binary(), timestamp())
-	  -> {ok, push_session()} | {error, err_reason()}.
+	  -> {ok, xabber_push_session()} | {error, err_reason()}.
 -callback lookup_sessions(binary(), binary(), jid())
-	  -> {ok, [push_session()]} | {error, err_reason()}.
+	  -> {ok, [xabber_push_session()]} | {error, err_reason()}.
 -callback lookup_sessions(binary(), binary())
-	  -> {ok, [push_session()]} | {error, err_reason()}.
+	  -> {ok, [xabber_push_session()]} | {error, err_reason()}.
 -callback lookup_sessions(binary())
-	  -> {ok, [push_session()]} | {error, err_reason()}.
+	  -> {ok, [xabber_push_session()]} | {error, err_reason()}.
 -callback delete_session(binary(), binary(), timestamp())
 	  -> ok | {error, err_reason()}.
 -callback delete_old_sessions(binary() | global, erlang:timestamp())
@@ -194,6 +197,8 @@ delete_old_sessions(Days) ->
 %%--------------------------------------------------------------------
 -spec register_hooks(binary()) -> ok.
 register_hooks(Host) ->
+	ejabberd_hooks:add(sm_receive_packet, Host, ?MODULE,
+						sm_receive_packet, 60),
     ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
 		       disco_sm_features, 50),
     ejabberd_hooks:add(c2s_session_pending, Host, ?MODULE,
@@ -213,6 +218,8 @@ register_hooks(Host) ->
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
+	ejabberd_hooks:delete(sm_receive_packet, Host, ?MODULE,
+		    sm_receive_packet, 60),
     ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
 			  disco_sm_features, 50),
     ejabberd_hooks:delete(c2s_session_pending, Host, ?MODULE,
@@ -261,13 +268,30 @@ unregister_iq_handlers(Host) ->
 process_iq(#iq{type = get, lang = Lang} = IQ) ->
     Txt = <<"Value 'get' of 'type' attribute is not allowed">>,
     xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
-process_iq(#iq{lang = Lang, sub_els = [#push_enable{node = <<>>}]} = IQ) ->
+process_iq(#iq{lang = Lang, sub_els = [#xabber_push_enable{node = <<>>}]} = IQ) ->
     Txt = <<"Enabling push without 'node' attribute is not supported">>,
     xmpp:make_error(IQ, xmpp:err_feature_not_implemented(Txt, Lang));
 process_iq(#iq{from = #jid{lserver = LServer} = JID,
+	to = #jid{lserver = LServer},
+	lang = Lang,
+	sub_els = [#xabber_push_enable{jid = PushJID,
+		node = Node,
+		xdata = XData, push_security = #xabber_push_security{cipher = Cipher, encryption_key = #xabber_encryption_key{data = EncryptionKey}}}]} = IQ) ->
+	?INFO_MSG("Push with encryption enabled for ~p",[jid:to_string(JID)]),
+	case enable(JID, PushJID, Node, XData, Cipher, EncryptionKey) of
+		ok ->
+			xmpp:make_iq_result(IQ);
+		{error, db_failure} ->
+			Txt = <<"Database failure">>,
+			xmpp:make_error(IQ, xmpp:err_internal_server_error(Txt, Lang));
+		{error, notfound} ->
+			Txt = <<"User session not found">>,
+			xmpp:make_error(IQ, xmpp:err_item_not_found(Txt, Lang))
+	end;
+process_iq(#iq{from = #jid{lserver = LServer} = JID,
 	       to = #jid{lserver = LServer},
 	       lang = Lang,
-	       sub_els = [#push_enable{jid = PushJID,
+	       sub_els = [#xabber_push_enable{jid = PushJID,
 				       node = Node,
 				       xdata = XData}]} = IQ) ->
     case enable(JID, PushJID, Node, XData) of
@@ -283,7 +307,7 @@ process_iq(#iq{from = #jid{lserver = LServer} = JID,
 process_iq(#iq{from = #jid{lserver = LServer} = JID,
 	       to = #jid{lserver = LServer},
 	       lang = Lang,
-	       sub_els = [#push_disable{jid = PushJID,
+	       sub_els = [#xabber_push_disable{jid = PushJID,
 					node = Node}]} = IQ) ->
     case disable(JID, PushJID, Node) of
 	ok ->
@@ -318,6 +342,26 @@ enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
 			 [jid:encode(JID)]),
 	    {error, notfound}
     end.
+
+enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
+		PushJID, Node, XData,Cipher,EncryptionKey) ->
+	case ejabberd_sm:get_session_sid(LUser, LServer, LResource) of
+		{TS, PID} ->
+			case store_session(LUser, LServer, TS, PushJID, Node, XData,Cipher,EncryptionKey) of
+				{ok, _} ->
+					?INFO_MSG("Enabling push notifications for ~s",
+						[jid:encode(JID)]),
+					ejabberd_c2s:cast(PID, push_enable);
+				{error, _} = Err ->
+					?ERROR_MSG("Cannot enable push for ~s: database error",
+						[jid:encode(JID)]),
+					Err
+			end;
+		none ->
+			?WARNING_MSG("Cannot enable push for ~s: session not found",
+				[jid:encode(JID)]),
+			{error, notfound}
+	end.
 
 -spec disable(jid(), jid(), binary() | undefined) -> ok | {error, err_reason()}.
 disable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
@@ -358,7 +402,6 @@ mam_message(#message{} = Pkt, LUser, LServer, _Peer, chat, _Dir) ->
 	{ok, [_|_] = Clients} ->
 	    case drop_online_sessions(LUser, LServer, Clients) of
 		[_|_] = Clients1 ->
-		    ?DEBUG("Notifying ~s@~s of MAM message", [LUser, LServer]),
 		    notify(LUser, LServer, Clients1, Pkt);
 		[] ->
 		    ok
@@ -425,16 +468,18 @@ remove_user(LUser, LServer) ->
 notify(#{jid := #jid{luser = LUser, lserver = LServer}, sid := {TS, _}}, Pkt) ->
     case lookup_session(LUser, LServer, TS) of
 	{ok, Client} ->
+		?INFO_MSG("Notify new way client ~p~n",[Client]),
 	    notify(LUser, LServer, [Client], Pkt);
 	_Err ->
+		?INFO_MSG("Error to notify ~p~n",[LUser]),
 	    ok
     end.
 
--spec notify(binary(), binary(), [push_session()],
+-spec notify(binary(), binary(), [xabber_push_session()],
 	     xmpp_element() | xmlel() | none) -> ok.
 notify(LUser, LServer, Clients, Pkt) ->
     lists:foreach(
-      fun({TS, PushLJID, Node, XData}) ->
+      fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
 	      HandleResponse = fun(#iq{type = result}) ->
 				       ok;
 				  (#iq{type = error}) ->
@@ -443,16 +488,33 @@ notify(LUser, LServer, Clients, Pkt) ->
 				  (timeout) ->
 				       ok % Hmm.
 			       end,
-	      notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse)
+	      notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, Cipher, Key)
       end, Clients).
 
 -spec notify(binary(), ljid(), binary(), xdata(),
-	     xmpp_element() | xmlel() | none,
+	     xmpp_element(), binary(), binary() | xmlel() | none,
 	     fun((iq() | timeout) -> any())) -> ok.
-notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse) ->
+notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, <<>>, <<>>) ->
+	From = jid:make(LServer),
+%%    Summary = make_summary(LServer, Pkt),
+%%	SpecialEls = make_special_els(Pkt),
+%%	Encrypted = make_encryption(SpecialEls, Cipher, Key),
+	Item = #ps_item{sub_els = [#xabber_push_notification{sub_els = []}]},
+	PubSub = #pubsub{publish = #ps_publish{node = Node, items = [Item]},
+		publish_options = XData},
+	IQ = #iq{type = set,
+		from = From,
+		to = jid:make(PushLJID),
+		id = randoms:get_string(),
+		sub_els = [PubSub]},
+	?INFO_MSG("Notify without encryption ~n~p",[IQ]),
+	ejabberd_router:route_iq(IQ, HandleResponse);
+notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, Cipher, Key) ->
     From = jid:make(LServer),
-    Summary = make_summary(LServer, Pkt),
-    Item = #ps_item{sub_els = [#push_notification{xdata = Summary}]},
+%%    Summary = make_summary(LServer, Pkt),
+		SpecialEls = make_special_els(Pkt),
+		Encrypted = make_encryption(SpecialEls, Cipher, Key),
+    Item = #ps_item{sub_els = [#xabber_push_notification{sub_els = [Encrypted]}]},
     PubSub = #pubsub{publish = #ps_publish{node = Node, items = [Item]},
 		     publish_options = XData},
     IQ = #iq{type = set,
@@ -460,6 +522,7 @@ notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse) ->
 	     to = jid:make(PushLJID),
 	     id = randoms:get_string(),
 	     sub_els = [PubSub]},
+	?INFO_MSG("Notify with Encryption ~n~p",[IQ]),
     ejabberd_router:route_iq(IQ, HandleResponse).
 
 %%--------------------------------------------------------------------
@@ -475,7 +538,7 @@ is_message_with_body(_Stanza) ->
 %% Internal functions.
 %%--------------------------------------------------------------------
 -spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata())
-      -> {ok, push_session()} | {error, err_reason()}.
+      -> {ok, xabber_push_session()} | {error, err_reason()}.
 store_session(LUser, LServer, TS, PushJID, Node, XData) ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
     delete_session(LUser, LServer, PushJID, Node),
@@ -494,8 +557,30 @@ store_session(LUser, LServer, TS, PushJID, Node, XData) ->
 	    Mod:store_session(LUser, LServer, TS, PushJID, Node, XData)
     end.
 
+-spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata(),binary(),binary())
+			-> {ok, xabber_push_session()} | {error, err_reason()}.
+store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey) ->
+	Mod = gen_mod:db_mod(LServer, ?MODULE),
+	Cache = use_cache(Mod, LServer),
+	?INFO_MSG("Try to store ~p~nKey ~p~n Cache ~p~n",[Mod, EncryptionKey,Cache]),
+	delete_session(LUser, LServer, PushJID, Node),
+	case use_cache(Mod, LServer) of
+		true ->
+			ets_cache:delete(?PUSH_CACHE, {LUser, LServer},
+				cache_nodes(Mod, LServer)),
+			ets_cache:update(
+				?PUSH_CACHE,
+				{LUser, LServer, TS}, {ok, {TS, PushJID, Node, XData}},
+				fun() ->
+					Mod:store_session(LUser, LServer, TS, PushJID, Node,
+						XData, Cipher, EncryptionKey)
+				end, cache_nodes(Mod, LServer));
+		false ->
+			Mod:store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey)
+	end.
+
 -spec lookup_session(binary(), binary(), timestamp())
-      -> {ok, push_session()} | error | {error, err_reason()}.
+      -> {ok, xabber_push_session()} | error | {error, err_reason()}.
 lookup_session(LUser, LServer, TS) ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
     case use_cache(Mod, LServer) of
@@ -507,7 +592,7 @@ lookup_session(LUser, LServer, TS) ->
 	    Mod:lookup_session(LUser, LServer, TS)
     end.
 
--spec lookup_sessions(binary(), binary()) -> {ok, [push_session()]} | {error, err_reason()}.
+-spec lookup_sessions(binary(), binary()) -> {ok, [xabber_push_session()]} | {error, err_reason()}.
 lookup_sessions(LUser, LServer) ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
     case use_cache(Mod, LServer) of
@@ -541,7 +626,7 @@ delete_session(LUser, LServer, TS) ->
 delete_session(LUser, LServer, PushJID, Node) ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
     case Mod:lookup_session(LUser, LServer, PushJID, Node) of
-	{ok, {TS, _, _, _}} ->
+	{ok, {TS, _, _, _, _, _}} ->
 	    delete_session(LUser, LServer, TS);
 	error ->
 	    {error, notfound};
@@ -585,44 +670,29 @@ delete_sessions(LUser, LServer, LookupFun, Mod) ->
 	    Err
     end.
 
--spec drop_online_sessions(binary(), binary(), [push_session()])
-      -> [push_session()].
+-spec drop_online_sessions(binary(), binary(), [xabber_push_session()])
+      -> [xabber_push_session()].
 drop_online_sessions(LUser, LServer, Clients) ->
     SessIDs = ejabberd_sm:get_session_sids(LUser, LServer),
-    [Client || {TS, _, _, _} = Client <- Clients,
+    [Client || {TS, _, _, _, _, _} = Client <- Clients,
 	       lists:keyfind(TS, 1, SessIDs) == false].
 
--spec make_summary(binary(), xmpp_element() | xmlel() | none)
-      -> xdata() | undefined.
-make_summary(Host, #message{from = From} = Pkt) ->
-    case {gen_mod:get_module_opt(Host, ?MODULE, include_sender),
-	  gen_mod:get_module_opt(Host, ?MODULE, include_body)} of
-	{false, false} ->
-	    undefined;
-	{IncludeSender, IncludeBody} ->
-	    case get_body_text(Pkt) of
-		none ->
-		    undefined;
-		Text ->
-		    Fields1 = case IncludeBody of
-				  StaticText when is_binary(StaticText) ->
-				      [{'last-message-body', StaticText}];
-				  true ->
-				      [{'last-message-body', Text}];
-				  false ->
-				      []
-			      end,
-		    Fields2 = case IncludeSender of
-				  true ->
-				      [{'last-message-sender', From} | Fields1];
-				  false ->
-				      Fields1
-			      end,
-		    #xdata{type = submit, fields = push_summary:encode(Fields2)}
-	    end
-    end;
-make_summary(_Host, _Pkt) ->
-    undefined.
+make_special_els(#message{to = To, meta = #{stanza_id := TS}} = Pkt) ->
+	Acc0 = [#stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}],
+	Acc = case xmpp:get_subtag(Pkt, #jingle_propose{}) of
+					#jingle_propose{} = Propose ->
+						[Propose|Acc0];
+					_ ->
+						Acc0
+				end,
+	Acc;
+make_special_els(Pkt) ->
+	case xmpp:get_subtag(Pkt, #message_displayed{}) of
+		#message_displayed{} = Displayed ->
+			[Displayed];
+		_ ->
+			[]
+	end.
 
 -spec get_body_text(message()) -> binary() | none.
 get_body_text(#message{body = Body} = Msg) ->
@@ -678,3 +748,72 @@ cache_nodes(Mod, Host) ->
 	true -> Mod:cache_nodes(Host);
 	false -> ejabberd_cluster:get_nodes()
     end.
+
+make_encryption(Values, Cipher, KeyBase) ->
+	Key = base64:decode(KeyBase),
+	?INFO_MSG("Cipher ~p~nKey ~p~nValue ~p~n",[Cipher,Key,Values]),
+	{Length, Encrypted} = case Cipher of
+													<<"urn:xmpp:ciphers:blowfish-cbc">> ->
+														encrypt(blowfish_cbc, Key, make_string(Values));
+													_ ->
+														encrypt(aes_cbc256, Key, make_string(Values))
+												end,
+	#encrypted{'iv-length' = Length, data = Encrypted}.
+
+encrypt(blowfish_cbc, Key, Value) ->
+	Length = 8,
+	Mode = blowfish_cbc,
+	Padding = size(Value) rem 16,
+	Bits = (16-Padding)*8,
+	IV = crypto:strong_rand_bytes(Length),
+	Ciphertext = crypto:block_encrypt(Mode,Key,IV,<<Value/binary,0:Bits>>),
+	Secret = <<IV/binary, Ciphertext/binary>>,
+	{Length, Secret};
+encrypt(aes_cbc256, Key, Value) ->
+	Length = 16,
+	Mode = aes_cbc256,
+	Padding = size(Value) rem 16,
+	Bits = (16-Padding)*8,
+	IV = crypto:strong_rand_bytes(Length),
+	Ciphertext = crypto:block_encrypt(Mode,Key,IV,<<Value/binary,0:Bits>>),
+	Secret = <<IV/binary, Ciphertext/binary>>,
+	{Length, Secret}.
+
+decrypt(Key,Encrypted) ->
+	<<IV:16/binary, Text/binary>> = Encrypted,
+	Mode = aes_cbc256,
+	crypto:block_decrypt(Mode, Key, IV, Text).
+
+make_string(Values) ->
+	list_to_binary(lists:map(fun(X) -> fxml:element_to_binary(xmpp:encode(X)) end, Values)).
+
+test_value() ->
+	JID = jid:make(<<"test">>,<<"server.com">>),
+	ID = <<"111">>,
+	[#stanza_id{id = ID, by = JID}, #origin_id{id = ID}].
+
+-spec sm_receive_packet(stanza()) -> stanza().
+sm_receive_packet(#message{body = []} = Pkt) ->
+	search_displayed(Pkt),
+	Pkt;
+sm_receive_packet(Pkt) ->
+	Pkt.
+
+search_displayed(#message{to = #jid{luser = LUser, lserver = LServer} }= Pkt) ->
+	case xmpp:get_subtag(Pkt, #message_displayed{}) of
+		#message_displayed{} ->
+			case lookup_sessions(LUser, LServer) of
+				{ok, [_|_] = Clients} ->
+					case drop_online_sessions(LUser, LServer, Clients) of
+						[_|_] = Clients1 ->
+							notify(LUser, LServer, Clients1, Pkt);
+						[] ->
+							ok
+					end;
+				_ ->
+					ok
+			end,
+			Pkt;
+		_ ->
+			ok
+	end.

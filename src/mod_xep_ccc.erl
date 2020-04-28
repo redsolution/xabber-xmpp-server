@@ -206,6 +206,8 @@ handle_cast({user_send,#message{id = ID, type = chat, from = #jid{luser =  LUser
   case Invite of
     false ->
       update_metainfo(message, LServer,LUser,Conversation,TS),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"outgoing">>, LUser, LServer,
+        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
       update_metainfo(read, LServer,LUser,Conversation,TS);
     _ ->
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"invite">>),
@@ -222,11 +224,13 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
     #message_displayed{id = OriginID} when IsLocal == false andalso Type == <<"groupchat">> ->
       StanzaID = get_stanza_id_of_chat(Displayed,LUser,LServer,PUser,PServer,OriginID),
       update_metainfo(read, LServer,LUser,Conversation,StanzaID),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]),
       delete_msg(LUser, LServer, PUser, PServer, StanzaID);
     #message_displayed{id = OriginID} ->
       BareJID = jid:make(LUser,LServer),
       Displayed2 = filter_packet(Displayed,BareJID),
       StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]),
       update_metainfo(read, LServer,LUser,Conversation,StanzaID);
     _ ->
       ok
@@ -246,6 +250,9 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
       update_metainfo(<<"chat">>, LServer,LUser,Conversation,<<>>)
   end,
   {noreply, State};
+handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
+  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"subcribe">>, LUser, LServer, #presence{type = subscribe, from = From}]),
+  {noreply, State};
 handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, sub_els = SubEls, meta = #{stanza_id := TS}} = Pkt}, State) ->
   Propose = xmpp:get_subtag(Pkt, #jingle_propose{}),
   Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
@@ -253,6 +260,7 @@ handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, 
   {LUser, LServer, _ } = jid:tolower(To),
   case Propose of
     #jingle_propose{} ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Propose]),
       store_last_call(Pkt, From, LUser, LServer, TS);
     _ ->
       ok
@@ -312,16 +320,24 @@ handle_cast({sm,#message{type = chat, from = Peer, to = To, meta = #{stanza_id :
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
       TSGroupchat = StanzaID#stanza_id.id,
       store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
       update_metainfo(message, LServer,LUser,Conversation,TS);
     <<"groupchat">> when IsLocal == false ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
       TSGroupchat = StanzaID#stanza_id.id,
       store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
       update_metainfo(message, LServer,LUser,Conversation,binary_to_integer(TSGroupchat));
     <<"groupchat">> ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
       update_metainfo(message, LServer,LUser,Conversation,TS);
     _ ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
       update_metainfo(message, LServer,LUser,Conversation,TS)
   end,
   {noreply, State};
@@ -1096,7 +1112,7 @@ delete_last_msg(Peer, LUser, LServer) ->
 get_count(LUser, LServer, PUser, PServer) ->
   FN = fun()->
     mnesia:match_object(unread_msg_counter,
-      {unread_msg_counter, {LUser, LServer}, {PUser, PServer,<<>>},'_','_','_'},
+      {unread_msg_counter, {LUser, LServer}, {PUser, PServer,<<>>},'_','_','_','_'},
       read)
        end,
   {atomic,Msgs} = mnesia:transaction(FN),
@@ -1679,26 +1695,37 @@ handle_sub_els(headline, [#xabber_retract_message{version = _Version, conversati
   ok;
 handle_sub_els(headline, [#xabber_retract_message{version =  undefined, conversation = _Conv, id = _ID}], _From, _To) ->
   ok;
-handle_sub_els(headline, [#xabber_retract_message{version = Version, conversation = ConversationJID, id = StanzaID}], _From, To) ->
+handle_sub_els(headline, [#xabber_retract_message{version = Version, conversation = ConversationJID, id = StanzaID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   delete_one_msg(LUser, LServer, PUser, PServer, integer_to_binary(StanzaID)),
   Conversation = jid:to_string(ConversationJID),
   update_retract(LServer,LUser,Conversation,Version),
+  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
   ok;
-handle_sub_els(headline, [#xabber_retract_user{version = Version, id = UserID, conversation = ConversationJID}], _From, To) ->
+handle_sub_els(headline, [#xabber_retract_user{version = Version, id = UserID, conversation = ConversationJID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   delete_user_msg(LUser, LServer, PUser, PServer, UserID),
   Conversation = jid:to_string(ConversationJID),
   update_retract(LServer,LUser,Conversation,Version),
+  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
   ok;
-handle_sub_els(headline, [#xabber_retract_all{version = Version, conversation = ConversationJID}], _From, To) ->
+handle_sub_els(headline, [#xabber_retract_all{version = Version, conversation = ConversationJID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   Conversation = jid:to_string(ConversationJID),
   delete_all_msgs(LUser, LServer, PUser, PServer),
   update_retract(LServer,LUser,Conversation,Version),
+  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
+  ok;
+handle_sub_els(headline, [#xabber_replace{} = Retract], _From, To) ->
+  #jid{luser = LUser, lserver = LServer} = To,
+  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
+  ok;
+handle_sub_els(headline, [#xabbergroupchat_replace{} = Retract], _From, To) ->
+  #jid{luser = LUser, lserver = LServer} = To,
+  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
   ok;
 handle_sub_els(headline, [#xabbergroupchat_x{type = <<"echo">>, sub_els = [Message]}], From, To) ->
   MessageD = xmpp:decode(Message),

@@ -62,7 +62,7 @@ store_session(LUser, LServer, TS, PushJID, Node, XData, EncryptionType, Encripti
 			service = PushLJID,
 			node = Node,
 			xml = encode_xdata(XData),
-			encryption_key = EncriptionKey,
+			encryption_key = base64:encode(EncriptionKey),
 			encryption_type = EncryptionType
 			})
 			end,
@@ -111,8 +111,8 @@ lookup_session(LUser, LServer, PushJID, Node) ->
 			  Rec
 		  end),
     case mnesia:dirty_select(xabber_push_session, MatchSpec) of
-	[#xabber_push_session{timestamp = TS, xml = El}] ->
-	    {ok, {TS, PushLJID, Node, decode_xdata(El)}};
+	[#xabber_push_session{timestamp = TS, xml = El, encryption_key = Key, encryption_type = EncriptionType}] ->
+	    {ok, {TS, PushLJID, Node, decode_xdata(El), EncriptionType, Key}};
 	[] ->
 	    ?DEBUG("No push session found for ~s@~s (~p, ~s)",
 		   [LUser, LServer, PushJID, Node]),
@@ -128,8 +128,8 @@ lookup_session(LUser, LServer, TS) ->
 			  Rec
 		  end),
     case mnesia:dirty_select(xabber_push_session, MatchSpec) of
-	[#xabber_push_session{service = PushLJID, node = Node, xml = El}] ->
-	    {ok, {TS, PushLJID, Node, decode_xdata(El)}};
+	[#xabber_push_session{service = PushLJID, node = Node, xml = El, encryption_key = Key, encryption_type = EncriptionType}] ->
+	    {ok, {TS, PushLJID, Node, decode_xdata(El), EncriptionType, Key}};
 	[] ->
 	    ?DEBUG("No push session found for ~s@~s (~p)",
 		   [LUser, LServer, TS]),
@@ -240,8 +240,10 @@ encode_xdata(XData) ->
     xmpp:encode(XData).
 
 records_to_sessions(Records) ->
-    [{TS, PushLJID, Node, decode_xdata(El)}
+    [{TS, PushLJID, Node, decode_xdata(El), EncriptionType, Key}
      || #xabber_push_session{timestamp = TS,
 		      service = PushLJID,
 		      node = Node,
-		      xml = El} <- Records].
+		      xml = El,
+			    encryption_type = EncriptionType,
+			    encryption_key = Key} <- Records].

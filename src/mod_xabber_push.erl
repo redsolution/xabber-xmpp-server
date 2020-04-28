@@ -34,7 +34,7 @@
 
 %% ejabberd_hooks callbacks.
 -export([disco_sm_features/5, c2s_session_pending/1, c2s_copy_session/2,
-	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1, encrypt/3, decrypt/2, test_value/0, sm_receive_packet/1,
+	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1, encrypt/3, decrypt/2, xabber_push_notification/4, make_encryption/3, test_values/0,
 	 remove_user/2]).
 
 %% gen_iq_handler callback.
@@ -197,8 +197,8 @@ delete_old_sessions(Days) ->
 %%--------------------------------------------------------------------
 -spec register_hooks(binary()) -> ok.
 register_hooks(Host) ->
-	ejabberd_hooks:add(sm_receive_packet, Host, ?MODULE,
-						sm_receive_packet, 60),
+	  ejabberd_hooks:add(xabber_push_notification, Host, ?MODULE,
+			xabber_push_notification, 60),
     ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
 		       disco_sm_features, 50),
     ejabberd_hooks:add(c2s_session_pending, Host, ?MODULE,
@@ -218,8 +218,8 @@ register_hooks(Host) ->
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
-	ejabberd_hooks:delete(sm_receive_packet, Host, ?MODULE,
-		    sm_receive_packet, 60),
+	  ejabberd_hooks:delete(xabber_push_notification, Host, ?MODULE,
+		xabber_push_notification, 60),
     ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
 			  disco_sm_features, 50),
     ejabberd_hooks:delete(c2s_session_pending, Host, ?MODULE,
@@ -248,7 +248,7 @@ disco_sm_features(empty, From, To, Node, Lang) ->
 disco_sm_features({result, OtherFeatures},
 		  #jid{luser = U, lserver = S},
 		  #jid{luser = U, lserver = S}, <<"">>, _Lang) ->
-    {result, [?NS_PUSH_0 | OtherFeatures]};
+    {result, [?NS_XABBER_PUSH | OtherFeatures]};
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
     Acc.
 
@@ -257,12 +257,12 @@ disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
 %%--------------------------------------------------------------------
 -spec register_iq_handlers(binary()) -> ok.
 register_iq_handlers(Host) ->
-    gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_PUSH_0,
+    gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PUSH,
 				  ?MODULE, process_iq).
 
 -spec unregister_iq_handlers(binary()) -> ok.
 unregister_iq_handlers(Host) ->
-    gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_PUSH_0).
+    gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PUSH).
 
 -spec process_iq(iq()) -> iq().
 process_iq(#iq{type = get, lang = Lang} = IQ) ->
@@ -397,19 +397,19 @@ c2s_stanza(State, _Pkt, _SendResult) ->
 
 -spec mam_message(message() | drop, binary(), binary(), jid(),
 		  chat | groupchat, recv | send) -> message().
-mam_message(#message{} = Pkt, LUser, LServer, _Peer, chat, _Dir) ->
-    case lookup_sessions(LUser, LServer) of
-	{ok, [_|_] = Clients} ->
-	    case drop_online_sessions(LUser, LServer, Clients) of
-		[_|_] = Clients1 ->
-		    notify(LUser, LServer, Clients1, Pkt);
-		[] ->
-		    ok
-	    end;
-	_ ->
-	    ok
-    end,
-    Pkt;
+%%mam_message(#message{} = Pkt, LUser, LServer, _Peer, chat, _Dir) ->
+%%    case lookup_sessions(LUser, LServer) of
+%%	{ok, [_|_] = Clients} ->
+%%	    case drop_online_sessions(LUser, LServer, Clients) of
+%%		[_|_] = Clients1 ->
+%%		    notify(LUser, LServer, Clients1, Pkt);
+%%		[] ->
+%%		    ok
+%%	    end;
+%%	_ ->
+%%	    ok
+%%    end,
+%%    Pkt;
 mam_message(Pkt, _LUser, _LServer, _Peer, _Type, _Dir) ->
     Pkt.
 
@@ -514,7 +514,8 @@ notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, Cipher, Key) ->
 %%    Summary = make_summary(LServer, Pkt),
 		SpecialEls = make_special_els(Pkt),
 		Encrypted = make_encryption(SpecialEls, Cipher, Key),
-    Item = #ps_item{sub_els = [#xabber_push_notification{sub_els = [Encrypted]}]},
+		NewXData = make_new_form(<<"message">>),
+    Item = #ps_item{sub_els = [#xabber_push_notification{sub_els = [Encrypted, NewXData]}]},
     PubSub = #pubsub{publish = #ps_publish{node = Node, items = [Item]},
 		     publish_options = XData},
     IQ = #iq{type = set,
@@ -562,7 +563,6 @@ store_session(LUser, LServer, TS, PushJID, Node, XData) ->
 store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey) ->
 	Mod = gen_mod:db_mod(LServer, ?MODULE),
 	Cache = use_cache(Mod, LServer),
-	?INFO_MSG("Try to store ~p~nKey ~p~n Cache ~p~n",[Mod, EncryptionKey,Cache]),
 	delete_session(LUser, LServer, PushJID, Node),
 	case use_cache(Mod, LServer) of
 		true ->
@@ -787,17 +787,7 @@ decrypt(Key,Encrypted) ->
 make_string(Values) ->
 	list_to_binary(lists:map(fun(X) -> fxml:element_to_binary(xmpp:encode(X)) end, Values)).
 
-test_value() ->
-	JID = jid:make(<<"test">>,<<"server.com">>),
-	ID = <<"111">>,
-	[#stanza_id{id = ID, by = JID}, #origin_id{id = ID}].
 
--spec sm_receive_packet(stanza()) -> stanza().
-sm_receive_packet(#message{body = []} = Pkt) ->
-	search_displayed(Pkt),
-	Pkt;
-sm_receive_packet(Pkt) ->
-	Pkt.
 
 search_displayed(#message{to = #jid{luser = LUser, lserver = LServer} }= Pkt) ->
 	case xmpp:get_subtag(Pkt, #message_displayed{}) of
@@ -817,3 +807,60 @@ search_displayed(#message{to = #jid{luser = LUser, lserver = LServer} }= Pkt) ->
 		_ ->
 			ok
 	end.
+
+xabber_push_notification(Type, LUser, LServer, NotificationElement) ->
+	case lookup_sessions(LUser, LServer) of
+		{ok, [_|_] = Clients} ->
+			case drop_online_sessions(LUser, LServer, Clients) of
+				[_|_] = Clients1 ->
+					lists:foreach(
+						fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
+							HandleResponse = fun(#iq{type = result}) ->
+								ok;
+								(#iq{type = error}) ->
+									spawn(?MODULE, delete_session,
+										[LUser, LServer, TS]);
+								(timeout) ->
+									ok % Hmm.
+															 end,
+							make_notification(LServer, PushLJID, Node, XData, NotificationElement, HandleResponse, Cipher, Key, Type)
+						end, Clients);
+				[] ->
+					ok
+			end;
+		_ ->
+			ok
+	end.
+
+make_notification(LServer, PushLJID, Node, XData, NotificationElement, HandleResponse, Cipher, Key, Type) ->
+	From = jid:make(LServer),
+	Encrypted = make_encryption([NotificationElement], Cipher, Key),
+	NewXData = make_new_form(Type),
+	Item = #ps_item{sub_els = [#xabber_push_notification{sub_els = [Encrypted, NewXData]}]},
+	PubSub = #pubsub{publish = #ps_publish{node = Node, items = [Item]},
+		publish_options = XData},
+	IQ = #iq{type = set,
+		from = From,
+		to = jid:make(PushLJID),
+		id = randoms:get_string(),
+		sub_els = [PubSub]},
+	ejabberd_router:route_iq(IQ, HandleResponse).
+
+make_new_form(<<"outgoing">>) ->
+	Fields = [
+		#xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_XABBER_PUSH_INFO]},
+		#xdata_field{var = <<"type">>, values = [<<"message">>]},
+		#xdata_field{var = <<"outgoing">>, values = [<<"true">>]}
+	],
+	#xdata{type = result,
+		fields = Fields};
+make_new_form(Type) ->
+	Fields = [
+		#xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_XABBER_PUSH_INFO]},
+		#xdata_field{var = <<"type">>, values = [Type]}
+	],
+	#xdata{type = result,
+		fields = Fields}.
+
+test_values() ->
+	[#stanza_id{id = <<"123">>, by = jid:make(<<"test">>)}].

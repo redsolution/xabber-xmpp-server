@@ -435,7 +435,7 @@ case ejabberd_sql:sql_query(
     Txt = <<"You are blocked">>,
     UserJID = jid:from_string(User),
     UserCard = #xabbergroupchat_user_card{jid = UserJID},
-    X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_KICK,sub_els = [UserCard]},
+    X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,sub_els = [UserCard]},
     Msg = #message{type = chat, from = FromChat, to = UserJID, id = randoms:get_string(), body = [#text{lang = <<>>,data = Txt}], sub_els = [X], meta = #{}},
     Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
     Unavailable = mod_groupchat_presence:form_presence_unavailable(),

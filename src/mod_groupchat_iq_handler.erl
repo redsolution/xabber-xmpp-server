@@ -157,7 +157,6 @@ process_groupchat(#iq{type=get, to= To, from = From,
   Query = mod_groupchat_inspector:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
   xmpp:make_iq_result(Iq,Query);
 process_groupchat(#iq{from = From, to = To, type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DELETE, cdata = Localpart}]} = IQ) ->
-  ?INFO_MSG("Try to delete chat ~p",[Localpart]),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:make(Localpart,Server)),
@@ -495,14 +494,12 @@ make_action(IQ) ->
   process_groupchat_iq(DecIQ).
 
 process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, id = <<>>, rsm = undefined, version = undefined, sub_els = []}]} = IQ) ->
-  ?INFO_MSG("Request one member ~p~n",[IQ]),
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   LServer = To#jid.lserver,
   Res = mod_groupchat_users:get_user_from_chat(LServer,Chat,User),
   ejabberd_router:route(xmpp:make_iq_result(IQ,Res));
 process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, version = Version, rsm = RSM, sub_els = []}]} = IQ) ->
-  ?INFO_MSG("Request members ~p~n",[IQ]),
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   LServer = To#jid.lserver,
@@ -512,7 +509,6 @@ process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set, sub_els 
   LServer = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
   Admin = jid:to_string(jid:remove_resource(From)),
-  ?INFO_MSG("Admin ~p~nID ~p~nNickname ~p~nBadge ~p~n",[Admin,ID,Nickname,Badge]),
 case ejabberd_hooks:run_fold(groupchat_update_user_hook, LServer, [], [LServer,Chat,Admin,ID,Nickname,Badge,Lang]) of
   ok ->
     ejabberd_router:route(xmpp:make_iq_result(IQ));

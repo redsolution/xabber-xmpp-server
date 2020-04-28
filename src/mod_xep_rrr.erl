@@ -1025,7 +1025,7 @@ get_our_stanza_id(LServer,FUsername,FID) ->
 save_id_in_conversation({ok, OriginPkt}, LServer, StanzaId, _PreviousId) ->
   A = xmpp:get_subtag(OriginPkt, #stanza_id{}),
   PktGrpOnly = filter_all_exept_groupchat(OriginPkt),
-  Reference = xmpp:get_subtag(PktGrpOnly, #xmppreference{type = <<"groupchat">>}),
+  Reference = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   case A of
     #stanza_id{id = FID, by = JID} when Reference == false ->
       To = xmpp:get_to(OriginPkt),

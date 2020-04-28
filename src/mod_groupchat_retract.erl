@@ -364,7 +364,7 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   UserChoose = mod_groupchat_users:choose_name(ActualCard),
   Username = <<UserChoose/binary, ":", "\n">>,
   Length = mod_groupchat_messages:binary_length(Username),
-  NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [ActualCard], 'begin' = 0, 'end' = Length - 1}]},
+  NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [ActualCard], 'begin' = 0, 'end' = Length}]},
   Els1 = strip_els(Sub),
   NewSubRefShift = shift_references(NewSubFiltered, Length),
   Els2 = Els1 ++ [NewX] ++ NewSubRefShift,

@@ -342,20 +342,14 @@ bold() ->
   #xmlel{
     name = <<"bold">>,
     attrs = [
-      {<<"xmlns">>, ?NS_REFERENCE_0}
+      {<<"xmlns">>, ?NS_XABBER_MARKUP}
     ],
     children = []
   }.
 
 uri(User) ->
   XMPP = <<"xmpp:",User/binary>>,
-  #xmlel{
-    name = <<"uri">>,
-    attrs = [
-      {<<"xmlns">>, ?NS_REFERENCE_0}
-    ],
-    children = [{xmlcdata, XMPP}]
-  }.
+  #xabber_groupchat_mention{cdata = XMPP}.
 
 bin_len(Bin) ->
   mod_groupchat_messages:binary_length(Bin).
@@ -379,12 +373,12 @@ newtokenmsg(ClientInfo,DeviceInfo,UID,BareJID,IP) ->
   TextStr = <<FL/binary, SL/binary, ThL/binary,FoL/binary, FiL/binary>>,
   FirstSecondLinesLength = bin_len(FL) + bin_len(SL),
   SettingsRefStart =  FirstSecondLinesLength + bin_len(ThL) + bin_len(FoL) + bin_len(FiLStart),
-  UserRef = #xmppreference{'begin' = bin_len(NewLogin) + bin_len(Dear), 'end' = bin_len(NewLogin) + bin_len(Dear) + bin_len(User) -1, type = <<"mention">>, sub_els = [uri(User)]},
-  NLR = #xmppreference{'begin' = 0, 'end' = bin_len(NewLogin) -1, type = <<"markup">>, sub_els = [bold()]},
-  CIR = #xmppreference{'begin' = bin_len(FL), 'end' = bin_len(FL) + bin_len(ClientInfo) -1, type = <<"markup">>, sub_els = [bold()]},
-  DR = #xmppreference{'begin' = FirstSecondLinesLength, 'end' = FirstSecondLinesLength + bin_len(ThL) -1, type = <<"markup">>, sub_els = [bold()]},
-  SR = #xmppreference{'begin' = SettingsRefStart, 'end' = SettingsRefStart + bin_len(FilMiddle) -1, type = <<"markup">>, sub_els = [bold()]},
-  IPBoldReference = #xmppreference{'begin' = FirstSecondLinesLength + bin_len(ThL) , 'end' = FirstSecondLinesLength + bin_len(ThL) + bin_len(FoL) -1, type = <<"markup">>, sub_els = [bold()]},
+  UserRef = #xmppreference{'begin' = bin_len(NewLogin) + bin_len(Dear), 'end' = bin_len(NewLogin) + bin_len(Dear) + bin_len(User), type = <<"decoration">>, sub_els = [uri(User)]},
+  NLR = #xmppreference{'begin' = 0, 'end' = bin_len(NewLogin), type = <<"decoration">>, sub_els = [bold()]},
+  CIR = #xmppreference{'begin' = bin_len(FL), 'end' = bin_len(FL) + bin_len(ClientInfo), type = <<"decoration">>, sub_els = [bold()]},
+  DR = #xmppreference{'begin' = FirstSecondLinesLength, 'end' = FirstSecondLinesLength + bin_len(ThL), type = <<"decoration">>, sub_els = [bold()]},
+  SR = #xmppreference{'begin' = SettingsRefStart, 'end' = SettingsRefStart + bin_len(FilMiddle) , type = <<"decoration">>, sub_els = [bold()]},
+  IPBoldReference = #xmppreference{'begin' = FirstSecondLinesLength + bin_len(ThL) , 'end' = FirstSecondLinesLength + bin_len(ThL) + bin_len(FoL), type = <<"decoratio">>, sub_els = [bold()]},
   Text = [#text{lang = <<>>,data = TextStr}],
   ID = create_id(),
   OriginID = #origin_id{id = ID},

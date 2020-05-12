@@ -127,6 +127,8 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
       MetaSer = #{},
       MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
       UserID = mod_groupchat_inspector:get_user_id(Server,User,Chat),
+      Err = xmpp:err_not_allowed(),
+      ejabberd_router:route_error(Pkt, Err),
       send_message_no_permission_to_write(UserID,MessageNew);
     blocked ->
       Text = <<"You are blocked in this chat">>,
@@ -139,6 +141,8 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
       ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = [UserCard]}],
       MetaSer = #{},
       MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
+      Err = xmpp:err_not_allowed(),
+      ejabberd_router:route_error(Pkt, Err),
       send_message_no_permission_to_write(UserID,MessageNew);
     {ok,Sub} when ChatStatus =/= <<"inactive">> ->
       Message = change_message(Id,Type,Body,Sub,Meta,To,From),
@@ -152,9 +156,12 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
       MetaSer = #{},
       MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
       UserID = mod_groupchat_inspector:get_user_id(Server,User,Chat),
+      Err = xmpp:err_not_allowed(),
+      ejabberd_router:route_error(Pkt, Err),
       send_message_no_permission_to_write(UserID,MessageNew);
     _ ->
-      ok
+      Err = xmpp:err_not_allowed(),
+      ejabberd_router:route_error(Pkt, Err)
   end.
 
 check_invite(Pkt, {_User,_Chat,_UserExits,_Els}) ->

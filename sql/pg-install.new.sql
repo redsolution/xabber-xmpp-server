@@ -420,8 +420,20 @@ CREATE TABLE push_session (
     PRIMARY KEY (server_host, username, timestamp)
 );
 
-CREATE UNIQUE INDEX i_push_session_susn ON push_session USING btree (server_host, username, service, node);
+CREATE TABLE xabber_push_session (
+    username text NOT NULL,
+    server_host text NOT NULL,
+    timestamp bigint NOT NULL,
+    service text NOT NULL,
+    node text NOT NULL,
+    xml text NOT NULL,
+    cipher text NOT NULL,
+    key text NOT NULL,
+    PRIMARY KEY (server_host, username, timestamp)
+);
 
+CREATE UNIQUE INDEX i_push_session_susn ON push_session USING btree (server_host, username, service, node);
+CREATE UNIQUE INDEX i_xabber_push_session_susn ON xabber_push_session USING btree (server_host, username, service, node);
 
 CREATE TABLE groupchats (
     name text NOT NULL,

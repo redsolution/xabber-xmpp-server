@@ -341,7 +341,7 @@ delete_user(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("update groupchat_users set subscription = 'none',user_updated_at = now() where
-         username=%(User)s and chatgroup=%(Chat)s")) of
+         username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
     {updated,1} ->
       ok;
     _ ->
@@ -1436,7 +1436,9 @@ get_user_from_chat(LServer,Chat,User) ->
              _ ->
                []
            end,
-  #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls}.
+  DateNew = get_chat_version(LServer,Chat),
+  VersionNew = convert_from_datetime_to_unix_time(DateNew),
+  #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls, version = VersionNew}.
 
 get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
   {QueryChats, QueryCount} = make_sql_query(Chat,RSM,Version),
@@ -1457,7 +1459,9 @@ get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
              _ ->
                Users
            end,
-  #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls}.
+  DateNew = get_chat_version(LServer,Chat),
+  VersionNew = convert_from_datetime_to_unix_time(DateNew),
+  #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls, version = VersionNew}.
 
 make_sql_query(SChat,RSM,Version) ->
   {Max, Direction, Item} = get_max_direction_item(RSM),

@@ -430,7 +430,7 @@ kick_user(Server,User,Chat) ->
 case ejabberd_sql:sql_query(
   Server,
   ?SQL("update groupchat_users set subscription = 'none',user_updated_at = now()  where
-         username=%(User)s and chatgroup=%(Chat)s")) of
+         username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
   {updated,1} ->
     Txt = <<"You are blocked">>,
     UserJID = jid:from_string(User),

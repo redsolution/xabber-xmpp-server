@@ -440,6 +440,7 @@ case ejabberd_sql:sql_query(
     Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
     Unavailable = mod_groupchat_presence:form_presence_unavailable(),
     ejabberd_router:route(Msg),
+    mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
     mod_groupchat_messages:send_message(Unsubscribe,[{User}],FromChat),
     mod_groupchat_messages:send_message(Unavailable,[{User}],FromChat);
   _ ->
@@ -449,8 +450,12 @@ end.
 add_user(Server,Member,Role,Groupchat,Subscription) ->
   case mod_groupchat_sql:search_for_chat(Server,Member) of
     {selected,[]} ->
-      mod_groupchat_inspector_sql:add_user(Server,Member,Role,Groupchat,Subscription),
-      ok;
+      case mod_groupchat_users:check_user_if_exist(Server,Member,Groupchat) of
+        not_exist ->
+          mod_groupchat_inspector_sql:add_user(Server,Member,Role,Groupchat,Subscription);
+        _ ->
+          ok
+      end;
     {selected,[_Name]} ->
       {stop,not_ok}
   end.

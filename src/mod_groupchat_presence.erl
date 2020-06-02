@@ -44,7 +44,8 @@
          form_updated_presence/1,
          process_presence/1,
   send_info_to_index/2, get_global_index/1, send_message_to_index/2,
-  chat_created/4, groupchat_changed/4
+  chat_created/4, groupchat_changed/4,
+  change_present_state/2
         ]).
 
 %% records
@@ -301,6 +302,7 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
   case Result of
     ok ->
+      mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
     alone ->
@@ -320,6 +322,7 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
       case Result of
         ok ->
+          mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
         alone ->

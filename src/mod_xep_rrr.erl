@@ -1030,8 +1030,9 @@ save_id_in_conversation({ok, OriginPkt}, LServer, StanzaId, _PreviousId) ->
   A = xmpp:get_subtag(OriginPkt, #stanza_id{}),
   PktGrpOnly = filter_all_exept_groupchat(OriginPkt),
   Reference = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+  SystemMessage = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
   case A of
-    #stanza_id{id = FID, by = JID} when Reference == false ->
+    #stanza_id{id = FID, by = JID} when Reference == false andalso SystemMessage == false ->
       To = xmpp:get_to(OriginPkt),
       FUsername = jid:to_string(jid:remove_resource(JID)),
       OurUser = jid:to_string(jid:remove_resource(To)),

@@ -35,7 +35,7 @@
 ]).
 %% API
 -export([
-  get_chat_sessions/0,set_session/1,delete_session/1, select_sessions/2, delete_session/3
+  get_chat_sessions/0,set_session/1,delete_session/1, select_sessions/2, delete_session/3, delete_all_user_sessions/2
 ]).
 -record(state, {}).
 -include("mod_groupchat_present.hrl").
@@ -106,6 +106,11 @@ select_sessions(User,Chat) ->
       end,
   {atomic,Sessions} = mnesia:transaction(FN),
   Sessions.
+
+delete_all_user_sessions(User,Chat) ->
+  Sessions = select_sessions(User,Chat),
+  lists:foreach(fun(Session) ->
+  delete_session(Session) end, Sessions).
 
 %%%===================================================================
 %%% gen_server callbacks

@@ -360,11 +360,15 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_mess
     true ->
       LUser = To#jid.luser,
       LServer = To#jid.lserver,
-      PeerString = get_bare_peer(LServer,LUser,StanzaID),
-      PeerJID = jid:from_string(PeerString),
-      Version = get_version(LServer,LUser) + 1,
-      Retract = #xabber_retract_message{by = To, id = StanzaID, conversation = PeerJID, symmetric = false, version = Version},
-      start_retract_message(LUser, LServer, StanzaID, IQ, Retract, Version);
+      case PeerString = get_bare_peer(LServer,LUser,StanzaID) of
+        not_found ->
+          xmpp:make_error(IQ, xmpp:err_item_not_found());
+        _ ->
+          PeerJID = jid:from_string(PeerString),
+          Version = get_version(LServer,LUser) + 1,
+          Retract = #xabber_retract_message{by = To, id = StanzaID, conversation = PeerJID, symmetric = false, version = Version},
+          start_retract_message(LUser, LServer, StanzaID, IQ, Retract, Version)
+      end;
     _ ->
       xmpp:make_error(IQ, xmpp:err_bad_request())
   end;

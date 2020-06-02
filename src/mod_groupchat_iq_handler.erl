@@ -493,6 +493,18 @@ make_action(IQ) ->
   DecIQ = xmpp:decode_els(IQ),
   process_groupchat_iq(DecIQ).
 
+process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set, sub_els = [#xabbergroup_kick{} = Kick]} = IQ) ->
+  LServer = To#jid.lserver,
+  Chat = jid:to_string(jid:remove_resource(To)),
+  Admin = jid:to_string(jid:remove_resource(From)),
+  case ejabberd_hooks:run_fold(groupchat_user_kick, LServer, [], [LServer,Chat,Admin,Kick,Lang]) of
+    ok ->
+      ejabberd_router:route(xmpp:make_iq_result(IQ));
+    {error, Error} ->
+      ejabberd_router:route(xmpp:make_error(IQ, Error));
+    _ ->
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:serr_internal_server_error()))
+  end;
 process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, id = <<>>, rsm = undefined, version = undefined, sub_els = []}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),

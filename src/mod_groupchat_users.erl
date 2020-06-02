@@ -74,7 +74,13 @@
 % Delete chat
 -export([check_if_user_owner/4, unsubscribe_all_participants/4]).
 
+% Kick user from groupchat
+-export([check_if_user_can/6, check_kick/6, kick_user/6]).
+
 start(Host, _Opts) ->
+  ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
+  ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
+  ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
   ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, check_if_user_owner, 10),
   ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, unsubscribe_all_participants, 20),
   ejabberd_hooks:add(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
@@ -98,6 +104,9 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
 
 stop(Host) ->
+  ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
+  ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
+  ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
   ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, check_if_user_owner, 10),
   ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, unsubscribe_all_participants, 20),
   ejabberd_hooks:delete(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
@@ -124,6 +133,65 @@ depends(_Host, _Opts) ->  [].
 
 mod_options(_Opts) -> [].
 
+% kick hook
+check_if_user_can(_Acc,_LServer,Chat,Admin,_Kick,_Lang) ->
+  case mod_groupchat_restrictions:is_permitted(<<"block-participants">>,Admin,Chat) of
+    yes ->
+      ok;
+    _ ->
+      {stop, {error, xmpp:err_not_allowed()}}
+  end.
+
+check_kick(_Acc,LServer,Chat,Admin,Kick,_Lang) ->
+  case Kick of
+    #xabbergroup_kick{jid = JIDs, id = IDs} when length(JIDs) > 0 orelse length(IDs) > 0 ->
+      #xabbergroup_kick{jid = JIDs, id = IDs} = Kick,
+      UsersByID = lists:map(fun (Block_ID) ->
+        #block_id{cdata = ID} = Block_ID,
+        get_user_by_id(LServer,Chat,ID) end, IDs),
+      Users = lists:map(fun (Block_JID) ->
+        #block_jid{cdata = JID} = Block_JID,
+        JID end, JIDs),
+      V1 = lists:map(fun(User) -> validate_kick_request(LServer,Chat,Admin,User) end, Users),
+      V2 = lists:map(fun(User) -> validate_kick_request(LServer,Chat,Admin,User) end, UsersByID),
+      Validations = V1 ++ V2,
+      case lists:member(not_ok, Validations) of
+        false ->
+          AllUsers = UsersByID ++ Users,
+          AllUsers;
+        _ ->
+          {stop, {error, xmpp:err_not_allowed()}}
+        end;
+    _ ->
+      {stop, {error, xmpp:err_bad_request()}}
+  end.
+
+kick_user(Acc, LServer, Chat, _Admin, _Kick, _Lang) ->
+  KickedUsers = lists:map(fun(User) -> kick_user_from_chat(LServer,Chat,User) end, Acc),
+  KickedUsers.
+
+validate_kick_request(LServer,Chat, User1, User2) when User1 =/= User2 ->
+  mod_groupchat_restrictions:validate_users(LServer,Chat,User1,User2);
+validate_kick_request(_LServer,_Chat, _User1, _User2) ->
+  not_ok.
+
+kick_user_from_chat(LServer,Chat,User) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update groupchat_users set subscription = 'none',user_updated_at = now() where
+         username=%(User)s and chatgroup=%(Chat)s and (subscription != 'none' or subscription !='wait')")) of
+    {updated,1} ->
+      mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
+      mod_groupchat_sql:update_last_seen(LServer,User,Chat),
+      UserJID = jid:from_string(User),
+      ChatJID = jid:from_string(Chat),
+      ejabberd_router:route(ChatJID,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
+      ejabberd_router:route(ChatJID,UserJID,#presence{type = unavailable, id = randoms:get_string()}),
+      form_user_card(User,Chat);
+    _ ->
+      <<>>
+  end.
+
 % delete groupchat hook
 check_if_user_owner(_Acc, LServer, User, Chat) ->
   case mod_groupchat_restrictions:is_owner(LServer,Chat,User) of
@@ -149,7 +217,6 @@ unsubscribe_all_participants(_Acc, LServer, _User, Chat) ->
 check_if_user_exist(Acc, LServer, User, Chat,_Lang) ->
   case check_user_if_exist(LServer,User,Chat) of
     not_exist ->
-      ?INFO_MSG("Request own rights user ~p chat ~p NOT EXIST",[User,Chat]),
       {stop,{error, xmpp:err_item_not_found()}};
     _ ->
       Acc
@@ -157,7 +224,6 @@ check_if_user_exist(Acc, LServer, User, Chat,_Lang) ->
 
 send_user_rights(_Acc, LServer, User, Chat, Lang) ->
   RightsAndTime = user_rights_and_time(LServer,Chat,User),
-  ?INFO_MSG("Request own rights user ~p chat ~p",[User,Chat]),
   Fields = [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
     #xdata_field{var = <<"user-id">>, type = hidden, values = [<<"">>]}| make_fields_owner_no_options(LServer,RightsAndTime,Lang,'fixed')
@@ -1446,7 +1512,6 @@ get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
   {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(LServer, QueryCount),
   Users = make_query(LServer,Res,RequesterUser,Chat),
   Count = binary_to_integer(CountBinary),
-  ?INFO_MSG("Users in query ~p~nCount ~p~n",[Users,Count]),
   SubEls = case Users of
              [_|_] when RSM /= undefined ->
                #xabbergroupchat_user_card{id = First} = hd(Users),

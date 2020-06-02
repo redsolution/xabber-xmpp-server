@@ -332,6 +332,15 @@ notificate(Server,Chat,Stanza) ->
   lists:foreach(fun(U) ->
     {Member} = U,
     To = jid:from_string(Member),
+    PServer = To#jid.lserver,
+    PUser = To#jid.luser,
+    case PServer of
+      Server when Stanza == #message{} ->
+        #message{sub_els = [Event]} = Stanza,
+        ejabberd_hooks:run(xabber_push_notification, Server, [<<"update">>, PUser, Server, Event]);
+      _ ->
+        ok
+    end,
     ejabberd_router:route(FromChat,To,Stanza) end, UserList
   ).
 

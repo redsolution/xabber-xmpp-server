@@ -334,7 +334,23 @@ get_commands_spec() ->
         result_example = [100500],
         args = [{host, binary}],
         result = {number, integer}
-      }
+      },
+      #ejabberd_commands{name = registered_users, tags = [accounts],
+        desc = "List all registered users in HOST",
+        module = ?MODULE, function = xabber_registered_users,
+        args_desc = ["Local vhost"],
+        args_example = [<<"example.com">>],
+        result_desc = "List of registered accounts usernames",
+        result_example = [<<"user1">>, <<"user2">>],
+        args = [{host, binary}],
+        result = {users, {list, {user, {tuple, [{name, string}, {auth, string}]}}}}},
+      #ejabberd_commands{name = registered_vhosts, tags = [server],
+        desc = "List all registered vhosts in SERVER",
+        module = ?MODULE, function = registered_vhosts,
+        result_desc = "List of available vhosts",
+        result_example = [<<"example.com">>, <<"anon.example.com">>],
+        args = [],
+        result = {vhosts, {list, {vhost, string}}}}
     ].
 
 xabber_registered_vhosts() ->
@@ -413,7 +429,7 @@ xabber_registered_chats_count(Host) ->
   mod_groupchat_chats:get_count_chats(Host).
 
 xabber_registered_users_count(Host) ->
-  length(xabber_all_registered_users(Host)).
+  length(xabber_registered_users(Host)).
 
 xabber_register_chat(Server,Creator,Host,Name,LocalJid,Anon,Searchable,Model,Description) ->
   case validate(Anon,Searchable,Model) of
@@ -453,7 +469,7 @@ xabber_num_active_users(Host, Offset, UserCount) ->
     UsersList ->
       UsersList2 = lists:filtermap(
         fun(U) ->
-          {User, Host} = U,
+          {User, Host, _Type} = U,
           case ejabberd_sm:get_user_resources(User, Host) of
             [] ->
               false;

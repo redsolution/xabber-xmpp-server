@@ -397,19 +397,6 @@ c2s_stanza(State, _Pkt, _SendResult) ->
 
 -spec mam_message(message() | drop, binary(), binary(), jid(),
 		  chat | groupchat, recv | send) -> message().
-%%mam_message(#message{} = Pkt, LUser, LServer, _Peer, chat, _Dir) ->
-%%    case lookup_sessions(LUser, LServer) of
-%%	{ok, [_|_] = Clients} ->
-%%	    case drop_online_sessions(LUser, LServer, Clients) of
-%%		[_|_] = Clients1 ->
-%%		    notify(LUser, LServer, Clients1, Pkt);
-%%		[] ->
-%%		    ok
-%%	    end;
-%%	_ ->
-%%	    ok
-%%    end,
-%%    Pkt;
 mam_message(Pkt, _LUser, _LServer, _Peer, _Type, _Dir) ->
     Pkt.
 
@@ -468,7 +455,6 @@ remove_user(LUser, LServer) ->
 notify(#{jid := #jid{luser = LUser, lserver = LServer}, sid := {TS, _}}, Pkt) ->
     case lookup_session(LUser, LServer, TS) of
 	{ok, Client} ->
-		?INFO_MSG("Notify new way client ~p~n",[Client]),
 	    notify(LUser, LServer, [Client], Pkt);
 	_Err ->
 		?INFO_MSG("Error to notify ~p~n",[LUser]),
@@ -496,9 +482,6 @@ notify(LUser, LServer, Clients, Pkt) ->
 	     fun((iq() | timeout) -> any())) -> ok.
 notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, <<>>, <<>>) ->
 	From = jid:make(LServer),
-%%    Summary = make_summary(LServer, Pkt),
-%%	SpecialEls = make_special_els(Pkt),
-%%	Encrypted = make_encryption(SpecialEls, Cipher, Key),
 	Item = #ps_item{sub_els = [#xabber_push_notification{sub_els = []}]},
 	PubSub = #pubsub{publish = #ps_publish{node = Node, items = [Item]},
 		publish_options = XData},
@@ -507,11 +490,9 @@ notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, <<>>, <<>>) ->
 		to = jid:make(PushLJID),
 		id = randoms:get_string(),
 		sub_els = [PubSub]},
-	?INFO_MSG("Notify without encryption ~n~p",[IQ]),
 	ejabberd_router:route_iq(IQ, HandleResponse);
 notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, Cipher, Key) ->
     From = jid:make(LServer),
-%%    Summary = make_summary(LServer, Pkt),
 		SpecialEls = make_special_els(Pkt),
 		Encrypted = make_encryption(SpecialEls, Cipher, Key),
 		NewXData = make_new_form(<<"message">>),
@@ -523,7 +504,6 @@ notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, Cipher, Key) ->
 	     to = jid:make(PushLJID),
 	     id = randoms:get_string(),
 	     sub_els = [PubSub]},
-	?INFO_MSG("Notify with Encryption ~n~p",[IQ]),
     ejabberd_router:route_iq(IQ, HandleResponse).
 
 %%--------------------------------------------------------------------
@@ -751,7 +731,6 @@ cache_nodes(Mod, Host) ->
 
 make_encryption(Values, Cipher, KeyBase) ->
 	Key = base64:decode(KeyBase),
-	?INFO_MSG("Cipher ~p~nKey ~p~nValue ~p~n",[Cipher,Key,Values]),
 	{Length, Encrypted} = case Cipher of
 													<<"urn:xmpp:ciphers:blowfish-cbc">> ->
 														encrypt(blowfish_cbc, Key, make_string(Values));
@@ -786,27 +765,6 @@ decrypt(Key,Encrypted) ->
 
 make_string(Values) ->
 	list_to_binary(lists:map(fun(X) -> fxml:element_to_binary(xmpp:encode(X)) end, Values)).
-
-
-
-search_displayed(#message{to = #jid{luser = LUser, lserver = LServer} }= Pkt) ->
-	case xmpp:get_subtag(Pkt, #message_displayed{}) of
-		#message_displayed{} ->
-			case lookup_sessions(LUser, LServer) of
-				{ok, [_|_] = Clients} ->
-					case drop_online_sessions(LUser, LServer, Clients) of
-						[_|_] = Clients1 ->
-							notify(LUser, LServer, Clients1, Pkt);
-						[] ->
-							ok
-					end;
-				_ ->
-					ok
-			end,
-			Pkt;
-		_ ->
-			ok
-	end.
 
 xabber_push_notification(Type, LUser, LServer, NotificationElement) ->
 	case lookup_sessions(LUser, LServer) of

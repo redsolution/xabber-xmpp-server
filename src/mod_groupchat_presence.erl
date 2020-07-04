@@ -101,7 +101,9 @@ groupchat_changed(LServer,Chat,Status,_User) ->
     <<"inactive">> ->
       mod_groupchat_messages:send_message(form_presence_unavailable(Chat),Users,FromChat);
     _ ->
-      mod_groupchat_messages:send_message(form_presence(Chat),Users,FromChat)
+      Show = define_show(Status),
+      HumanStatus = define_human_status(Status),
+      mod_groupchat_messages:send_message(form_presence(Chat,Show,HumanStatus),Users,FromChat)
   end.
 
 chat_created(LServer,User,Chat,_Lang) ->
@@ -407,9 +409,10 @@ send_info_to_index(Server,ChatJID) ->
       GlobalIndexs =   get_global_index(Server),
       Chat = jid:to_string(jid:remove_resource(ChatJID)),
       lists:foreach(fun(Index) ->
-        Info = info_about_chat(Chat),
+        {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
         To = jid:from_string(Index),
-        Presence = #presence{id = randoms:get_string(), type = available, from = ChatJID, to = To, sub_els = [Info]},
+        Presence = #presence{id = randoms:get_string(), type = available,
+          from = ChatJID, to = To, sub_els = [Groupchat_x], status = [#text{data = HumanStatus}], show = Show},
         ejabberd_router:route(Presence) end, GlobalIndexs
       );
     _ ->
@@ -452,18 +455,22 @@ form_presence_unavailable() ->
   }.
 
 form_presence_unavailable(Chat) ->
-  Groupchat_x = info_about_chat(Chat),
-  #presence{type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x]}.
+  {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
+  #presence{type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x], status = [#text{data = HumanStatus}], show = Show}.
 
 form_presence_unavailable(Chat,To) ->
-  Groupchat_x = info_about_chat(Chat),
+  {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
   From = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
-  #presence{from = From, to = To, type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x]}.
+  #presence{from = From, to = To, type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x], status = [#text{data = HumanStatus}], show = Show}.
 
 form_presence(ChatJid) ->
-  Groupchat_x = info_about_chat(ChatJid),
+  {Groupchat_x, HumanStatus, Show} = info_about_chat(ChatJid),
 
-  #presence{type = available, id = randoms:get_string(), sub_els = [Groupchat_x]}.
+  #presence{type = available, id = randoms:get_string(), sub_els = [Groupchat_x], status = [#text{data = HumanStatus}], show = Show}.
+
+form_presence(ChatJID, Show, Status) ->
+  {Groupchat_x, _HumanStatus, Show} = info_about_chat(ChatJID),
+  #presence{type = available, id = randoms:get_string(), sub_els = [Groupchat_x], status = [#text{data = Status}], show = Show}.
 
 form_presence(Chat,User) ->
   ChatJID = jid:from_string(Chat),
@@ -534,7 +541,33 @@ form_presence(Chat,User) ->
                  VcardX
                ]
            end,
-  #presence{type = available, id = randoms:get_string(), sub_els = SubEls}.
+  Show = define_show(Status),
+  HumanStatus = define_human_status(Status),
+  #presence{type = available, id = randoms:get_string(), sub_els = SubEls, status = [#text{data = HumanStatus}], show = Show}.
+
+define_human_status(<<"dnd">>) ->
+  <<"Busy">>;
+define_human_status(<<"xa">>) ->
+  <<"Away for long time">>;
+define_human_status(<<"chat">>) ->
+  <<"Ready for chat">>;
+define_human_status(<<"inactive">>) ->
+  <<"Inactive">>;
+define_human_status(_Status) ->
+  <<"Online">>.
+
+define_show(<<"dnd">>) ->
+  'dnd';
+define_show(<<"chat">>) ->
+  'chat';
+define_show(<<"xa">>) ->
+  'xa';
+define_show(<<"away">>) ->
+  'away';
+define_show(<<"inactive">>) ->
+  'dnd';
+define_show(_Status) ->
+  undefined.
 
 info_about_chat(ChatJid) ->
   S = jid:from_string(ChatJid),
@@ -545,7 +578,9 @@ info_about_chat(ChatJid) ->
   AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
   UniqueOnline = lists:usort(AllUsersSession),
   Present = integer_to_binary(length(UniqueOnline)),
-    #xabbergroupchat_x{
+  Show = define_show(Status),
+  HumanStatus = define_human_status(Status),
+  {#xabbergroupchat_x{
       xmlns = ?NS_GROUPCHAT,
       members = integer_to_binary(mod_groupchat_chats:count_users(Server,ChatJid)),
       present = Present,
@@ -560,7 +595,7 @@ info_about_chat(ChatJid) ->
         #xabbergroup_domains{domain = []},
         #xabbergroup_contacts{contact = []},
         #xabbergroupchat_status{cdata = Status}
-      ]}.
+      ]}, HumanStatus, Show}.
 
 
 form_list(Elements) ->

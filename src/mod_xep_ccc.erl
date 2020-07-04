@@ -66,6 +66,13 @@
 %% records
 -record(state, {host = <<"">> :: binary()}).
 
+-record(invite_msg,
+{
+  us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
+  bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_'
+}
+).
+
 -record(last_msg,
 {
   us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
@@ -163,6 +170,10 @@ init([Host, _Opts]) ->
     [{disc_only_copies, [node()]},
       {type, bag},
       {attributes, record_info(fields, unread_msg_counter)}]),
+  ejabberd_mnesia:create(?MODULE, invite_msg,
+    [{disc_only_copies, [node()]},
+      {type, bag},
+      {attributes, record_info(fields, invite_msg)}]),
   register_iq_handlers(Host),
   register_hooks(Host),
   {ok, #state{host = Host}}.
@@ -250,8 +261,14 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
       update_metainfo(<<"chat">>, LServer,LUser,Conversation,<<>>)
   end,
   {noreply, State};
-handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
-  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"subcribe">>, LUser, LServer, #presence{type = subscribe, from = From}]),
+handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LServer, luser = LUser}}},State) ->
+  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"subscribe">>, LUser, LServer, #presence{type = subscribe, from = From}]),
+  {noreply, State};
+handle_cast({sm, #presence{type = unsubscribe,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}}},State) ->
+  maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
+  {noreply, State};
+handle_cast({sm, #presence{type = unsubscribed,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}}},State) ->
+  maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
   {noreply, State};
 handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, sub_els = SubEls, meta = #{stanza_id := TS}} = Pkt}, State) ->
   Propose = xmpp:get_subtag(Pkt, #jingle_propose{}),
@@ -286,7 +303,7 @@ handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els =
   DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
   handle_sub_els(chat,DecSubEls,From,To),
   {noreply, State};
-handle_cast({sm,#message{type = chat, from = Peer, to = To, meta = #{stanza_id := TS}} = Pkt}, State) ->
+handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{stanza_id := TS}} = Pkt}, State) ->
   {LUser, LServer, _ } = jid:tolower(To),
   {PUser, PServer, _} = jid:tolower(Peer),
   PktRefGrp = filter_reference(Pkt,<<"groupchat">>),
@@ -303,18 +320,25 @@ handle_cast({sm,#message{type = chat, from = Peer, to = To, meta = #{stanza_id :
       case ChatJID of
         undefined ->
           store_special_message_id(LServer,LUser,Conversation,TS,OriginID,<<"invite">>),
+          store_invite_information(LUser,LServer,PUser,PServer),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation);
         _ ->
           Chat = jid:to_string(jid:remove_resource(ChatJID)),
           store_special_message_id(LServer,LUser,Chat,TS,OriginID,<<"invite">>),
+          store_invite_information(LUser,LServer,ChatJID#jid.luser,ChatJID#jid.lserver),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat)
       end;
     _ when X =/= false andalso IsLocal == true ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
-      TSGroupchat = StanzaID#stanza_id.id,
-      store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),OriginID,<<"service">>),
-      update_metainfo(message, LServer,LUser,Conversation,TS);
+      case StanzaID of
+        false ->
+          ok;
+        _ ->
+          TSGroupchat = StanzaID#stanza_id.id,
+          store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),OriginID,<<"service">>),
+          update_metainfo(message, LServer,LUser,Conversation,TS)
+      end;
     _ when X =/= false andalso IsLocal == false ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
@@ -336,9 +360,32 @@ handle_cast({sm,#message{type = chat, from = Peer, to = To, meta = #{stanza_id :
         #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
       update_metainfo(message, LServer,LUser,Conversation,TS);
     _ ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-      update_metainfo(message, LServer,LUser,Conversation,TS)
+      Propose = xmpp:get_subtag(Pkt, #jingle_propose{}),
+      Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
+      Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
+      case Propose of
+        #jingle_propose{} ->
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Propose]),
+          store_last_call(Pkt, Peer, LUser, LServer, TS);
+        _ ->
+          ok
+      end,
+      case Accept of
+        #jingle_accept{} ->
+          delete_last_call(Peer, LUser, LServer);
+        _ ->
+          ok
+      end,
+      case Reject of
+        #jingle_reject{} ->
+          Conversation = jid:to_string(jid:remove_resource(Peer)),
+          store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
+          delete_last_call(Peer, LUser, LServer);
+        _ ->
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+            #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
+          update_metainfo(message, LServer,LUser,Conversation,TS)
+      end
   end,
   {noreply, State};
 handle_cast({sm,#message{type = headline, body = [], from = From, to = To, sub_els = SubEls}}, State) ->
@@ -475,19 +522,10 @@ try_to_sync(_Acc,LServer,User,Chat,StampBinary) ->
       {stop,not_ok}
   end.
 
-make_responce_to_sync(Sync,LServer,User,Chat,_StampBinary) ->
-  {Conversation,Retract,_T,Thread,_Read,Delivered,Display,UpdateAt} = Sync,
+make_responce_to_sync(Sync,_LServer,_User,Chat,_StampBinary) ->
+  {_Conversation,_Retract,_T,Thread,_Read,_Delivered,_Display,UpdateAt} = Sync,
   {PUser, PServer,_} = jid:tolower(jid:from_string(Chat)),
-  {LUser, UServer,_} = jid:tolower(jid:from_string(User)),
-  LastRead = get_groupchat_last_readed(PServer,PUser,UServer,LUser),
   Chat = jid:to_string(jid:make(PUser,PServer)),
-  Status = mod_groupchat_users:check_user_if_exist(LServer,User,Chat),
-  Count = get_count_groupchat_messages(PServer,PUser,binary_to_integer(LastRead),Conversation,Status),
-  LastMessage = get_last_groupchat_message(PServer,PUser,Status,LUser),
-  LastCall = get_actual_last_call(LUser, UServer, PUser, PServer),
-  Unread = #xabber_conversation_unread{count = Count, 'after' = LastRead},
-  XabberDelivered = #xabber_conversation_delivered{id = Delivered},
-  XabberDisplayed = #xabber_conversation_displayed{id = Display},
   Conv = #xabber_conversation{
     jid = jid:from_string(Chat),
     type = <<"groupchat">>,
@@ -1342,6 +1380,7 @@ update_metainfo(<<"chat">>, LServer,LUser,Conversation,_StanzaID) ->
 update_metainfo(message, LServer,LUser,Conversation,_StanzaID) ->
   ?DEBUG("save new message ~p ~p ",[LUser,Conversation]),
   TS = time_now(),
+  Status = <<"active">>,
   ?SQL_UPSERT(
     LServer,
     "conversation_metadata",
@@ -1349,6 +1388,7 @@ update_metainfo(message, LServer,LUser,Conversation,_StanzaID) ->
       "!conversation=%(Conversation)s",
       "updated_at=%(TS)d",
       "metadata_updated_at=%(TS)d",
+      "status=%(Status)s",
       "server_host=%(LServer)s"]);
 update_metainfo(delivered, LServer,LUser,Conversation,StanzaID) ->
   ?DEBUG("save delivered ~p ~p ~p",[LUser,Conversation,StanzaID]),
@@ -1431,6 +1471,18 @@ get_conversation_type(LServer,LUser,Conversation) ->
       Type;
     _ ->
       not_ok
+  end.
+
+update_retract(LServer,LUser,Conversation,NewVersion,Stanza)  ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set
+    retract = %(NewVersion)d
+     where username=%(LUser)s and conversation=%(Conversation)s and retract < %(NewVersion)d and %(LServer)H")) of
+    {updated,1} ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, xmpp:decode(Stanza)]);
+    Other ->
+      ok
   end.
 
 update_retract(LServer,LUser,Conversation,NewVersion) ->
@@ -1700,32 +1752,31 @@ handle_sub_els(headline, [#xabber_retract_message{version = Version, conversatio
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   delete_one_msg(LUser, LServer, PUser, PServer, integer_to_binary(StanzaID)),
   Conversation = jid:to_string(ConversationJID),
-  update_retract(LServer,LUser,Conversation,Version),
-  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
+  update_retract(LServer,LUser,Conversation,Version,Retract),
   ok;
 handle_sub_els(headline, [#xabber_retract_user{version = Version, id = UserID, conversation = ConversationJID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   delete_user_msg(LUser, LServer, PUser, PServer, UserID),
   Conversation = jid:to_string(ConversationJID),
-  update_retract(LServer,LUser,Conversation,Version),
-  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
+  update_retract(LServer,LUser,Conversation,Version,Retract),
   ok;
 handle_sub_els(headline, [#xabber_retract_all{version = Version, conversation = ConversationJID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   Conversation = jid:to_string(ConversationJID),
   delete_all_msgs(LUser, LServer, PUser, PServer),
-  update_retract(LServer,LUser,Conversation,Version),
-  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
+  update_retract(LServer,LUser,Conversation,Version,Retract),
   ok;
-handle_sub_els(headline, [#xabber_replace{} = Retract], _From, To) ->
-  #jid{luser = LUser, lserver = LServer} = To,
-  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
+handle_sub_els(headline, [#xabber_replace{version = undefined, conversation = _ConversationJID} = _Retract], _From, _To) ->
   ok;
-handle_sub_els(headline, [#xabbergroupchat_replace{} = Retract], _From, To) ->
+handle_sub_els(headline, [#xabber_replace{version = Version, conversation = ConversationJID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
-  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, Retract]),
+  Conversation = jid:to_string(ConversationJID),
+  update_retract(LServer,LUser,Conversation,Version,Retract),
+  ok;
+handle_sub_els(headline, [#xabbergroupchat_replace{version = Version} = Retract], _From, To) ->
+  #jid{luser = LUser, lserver = LServer} = To,
   ok;
 handle_sub_els(headline, [#xabbergroupchat_x{type = <<"echo">>, sub_els = [Message]}], From, To) ->
   MessageD = xmpp:decode(Message),
@@ -1940,16 +1991,20 @@ delete_conversations(UserJID,Conversations) ->
   LUser = UserJID#jid.luser,
   LServer = UserJID#jid.lserver,
   ConvList = parse_conv(Conversations),
-  TS = time_now(),
   lists:foreach(fun(Conversation) ->
-    case ejabberd_sql:sql_query(
-      LServer,
-      ?SQL("update conversation_metadata set status = 'deleted', updated_at=%(TS)d where username = %(LUser)s and conversation = %(Conversation)s")) of
+    delete_conversation(LServer,LUser,Conversation)
+                end, ConvList).
+
+delete_conversation(LServer,LUser,Conversation) ->
+  TS = time_now(),
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set status = 'deleted', updated_at=%(TS)d where username = %(LUser)s and conversation = %(Conversation)s")) of
     {updated,N} when N > 0 ->
       make_ccc_push(LServer,LUser,Conversation,TS,deleted);
     _ ->
-      bad
-  end end, ConvList).
+      ok
+  end.
 
 parse_conv(Convs) ->
   lists:map(fun(Con) ->
@@ -1957,6 +2012,38 @@ parse_conv(Convs) ->
     jid:to_string(jid:remove_resource(JID))
             end, Convs).
 
+%% invite logic
+
+store_invite_information(LUser,LServer,PUser,PServer) ->
+  NewInvite = #invite_msg{us = {LUser,LServer}, bare_peer = {PUser,PServer,<<>>}},
+  mnesia:dirty_write(NewInvite).
+
+get_invite_information(LUser,LServer,PUser,PServer) ->
+  FN = fun()->
+    mnesia:match_object(invite_msg,
+      {invite_msg, {LUser, LServer}, {PUser, PServer,<<>>}},
+      read)
+       end,
+  {atomic,MsgRec} = mnesia:transaction(FN),
+  MsgRec.
+
+maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer) ->
+  Conversation = jid:to_string(jid:make(PUser,PServer)),
+  Type = get_conversation_type(LServer,LUser,Conversation),
+  case Type of
+    <<"groupchat">> ->
+      Invites = get_invite_information(LUser,LServer,PUser,PServer),
+      lists:foreach(fun(Invite) ->
+        delete_invite(Invite) end, Invites
+      ),
+      Conversation = jid:to_string(jid:make(PUser,PServer)),
+      delete_conversation(LServer,LUser,Conversation);
+    _ ->
+      ok
+  end.
+
+delete_invite(#invite_msg{} = Invite) ->
+  mnesia:dirty_delete_object(Invite).
 %% request jobs
 
 set_request_job(ServerID, {LUser,LServer,LResource}, {PUser,PServer}) ->

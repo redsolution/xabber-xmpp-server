@@ -186,7 +186,7 @@ handle_pubsub(Iq) ->
                #ps_item{id = IdItem} = Item,
                case IdItem of
                  <<>> ->
-                   update_metadata_user_put(Server, UserId, IdItem, <<>>, <<>>, Chat),
+                   update_metadata_user_put(Server, User, IdItem, <<>>, 0, Chat),
                    ItemsD = lists:map(fun(E) -> xmpp:decode(E) end, Items),
                    Event = #ps_event{items = ItemsD},
                    M = #message{type = headline,
@@ -226,8 +226,9 @@ handle_pubsub(Iq) ->
                #ps_item{id = IdItem} = Item,
                case IdItem of
                  <<>> ->
-                   update_metadata_user_put(Server, UserId, IdItem, <<>>, <<>>, Chat),
-                   Event = #ps_event{items = Items},
+                   update_metadata_user_put(Server, User, IdItem, <<>>, 0, Chat),
+                   NewItems = [#ps_item{sub_els = [#avatar_meta{}]}],
+                   Event = #ps_event{items = #ps_items{items = Items}},
                    M = #message{type = headline,
                      from = To,
                      to = jid:remove_resource(From),

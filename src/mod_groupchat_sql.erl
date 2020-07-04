@@ -317,5 +317,5 @@ count_users(Server,Chat) ->
 update_last_seen(Server,User,Chat) ->
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchat_users set last_seen = now()
+    ?SQL("update groupchat_users set last_seen = (now() at time zone 'utc')
   where chatgroup=%(Chat)s and username=%(User)s")).

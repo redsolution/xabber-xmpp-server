@@ -182,7 +182,7 @@ get_commands_spec() ->
 			args_desc = ["Username", "Local vhost served by ejabberd"],
 			args_example = [<<"bob">>, <<"example.com">>],
 			args = [{user, binary}, {host, binary}],
-			result = {res, restuple}},
+			result = {res, rescode}},
      #ejabberd_commands{name = reload_config, tags = [server],
 			desc = "Reload config file in memory",
 			module = ?MODULE, function = reload_config,
@@ -475,7 +475,7 @@ register(User, Host, Password) ->
 
 unregister(User, Host) ->
     ejabberd_auth:remove_user(User, Host),
-    {ok, ""}.
+    not ejabberd_auth:user_exists(User, Host).
 
 registered_users(Host) ->
     Users = ejabberd_auth:get_users(Host),

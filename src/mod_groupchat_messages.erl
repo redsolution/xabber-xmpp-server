@@ -38,7 +38,7 @@
   check_permission_media/2,
   add_path/3,
   strip_stanza_id/2,
-  send_displayed/3, get_card/1,
+  send_displayed/3,
   get_items_from_pep/3, check_invite/2, get_actual_user_info/2, get_displayed_msg/4, shift_references/2, binary_length/1, set_displayed/4
 ]).
 -export([get_last/1, seconds_since_epoch/1]).

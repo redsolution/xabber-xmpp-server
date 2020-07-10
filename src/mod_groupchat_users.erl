@@ -50,6 +50,8 @@
 %%  update_user/2,
 %%  validate_data/2,
 %%  validate_rights/2,
+  check_if_exist/3,
+  check_if_exist_by_id/3,
   convert_from_unix_time_to_datetime/1,
   convert_from_datetime_to_unix_time/1,
   get_users_from_chat/1,
@@ -238,16 +240,16 @@ send_user_rights(_Acc, LServer, User, Chat, Lang) ->
     ]}}}.
 
 check_if_exist(Acc, LServer, User, Chat, _ID, _Lang) ->
-  case check_user_if_exist(LServer,User,Chat) of
-    not_exist ->
+  case check_if_exist(LServer,Chat,User) of
+    false ->
       {stop,not_ok};
     _ ->
       Acc
   end.
 
 check_if_request_user_exist(Acc, LServer, _User, Chat, ID, _Lang) ->
-  case check_user_if_exist_by_id(LServer,ID,Chat) of
-    not_exist ->
+  case check_if_exist_by_id(LServer,Chat,ID) of
+    false ->
       {stop,not_exist};
     _ ->
       Acc
@@ -672,16 +674,28 @@ check_user_if_exist(Server,User,Chat) ->
       Subscription
   end.
 
-check_user_if_exist_by_id(Server,ID,Chat) ->
+check_if_exist(Server,Chat,User) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(subscription)s
          from groupchat_users where chatgroup=%(Chat)s
-              and id=%(ID)s")) of
-    {selected,[]} ->
-      not_exist;
-    {selected,[{Subscription}]} ->
-      Subscription
+              and username=%(User)s and subscription='both'")) of
+    {selected,[{_Subscription}]} ->
+      true;
+    _ ->
+      false
+  end.
+
+check_if_exist_by_id(Server,Chat,ID) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(subscription)s
+         from groupchat_users where chatgroup=%(Chat)s
+              and id=%(ID)s and subscription='both'")) of
+    {selected,[{_Subscription}]} ->
+      true;
+    _ ->
+      false
   end.
 
 update_user_status(Server,User,Chat) ->
@@ -731,6 +745,16 @@ get_user_by_id(Server,Chat,Id) ->
       User;
     _ ->
       none
+  end.
+
+get_existed_user_by_id(Server,Chat,Id) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s from groupchat_users where chatgroup=%(Chat)s and id=%(Id)s and subscription='both'")) of
+    {selected,[{User}]} ->
+      User;
+    _ ->
+      false
   end.
 
 get_user_by_id_and_allow_to_invite(Server,Chat,Id) ->
@@ -883,11 +907,11 @@ validate_data(_Acc, LServer,Chat,Admin,ID,_Nickname,_Badge,_Lang) ->
            <<>> ->
              Admin;
            _ ->
-             get_user_by_id(LServer,Chat,ID)
+             get_existed_user_by_id(LServer,Chat,ID)
          end,
   check_user(User).
 
-check_user(none) ->
+check_user(false) ->
   {stop, {error,xmpp:err_item_not_found()}};
 check_user(User) when is_binary(User) ->
   User.

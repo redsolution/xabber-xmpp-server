@@ -45,7 +45,7 @@
          process_presence/1,
   send_info_to_index/2, get_global_index/1, send_message_to_index/2,
   chat_created/4, groupchat_changed/4,
-  change_present_state/2
+  change_present_state/2, revoke_invite/2
         ]).
 
 %% records
@@ -76,10 +76,12 @@ terminate(_Reason, State) ->
 
 register_hooks(Host) ->
   ejabberd_hooks:add(groupchat_created, Host, ?MODULE, chat_created, 15),
+  ejabberd_hooks:add(revoke_invite, Host, ?MODULE, revoke_invite, 10),
   ejabberd_hooks:add(groupchat_changed, Host, ?MODULE, groupchat_changed, 10).
 
 unregister_hooks(Host) ->
   ejabberd_hooks:delete(groupchat_created, Host, ?MODULE, chat_created, 15),
+  ejabberd_hooks:delete(revoke_invite, Host, ?MODULE, revoke_invite, 10),
   ejabberd_hooks:delete(groupchat_changed, Host, ?MODULE, groupchat_changed, 10).
 
 handle_call(_Request, _From, _State) ->
@@ -92,6 +94,13 @@ handle_cast(#presence{to = To} = Presence, State) ->
   {noreply, State};
 handle_cast(_Request, State) ->
   {noreply, State}.
+
+revoke_invite(Chat,User) ->
+  ChatJID = jid:from_string(Chat),
+  FromChat = jid:replace_resource(ChatJID,<<"Groupchat">>),
+  UserJID = jid:from_string(User),
+  Presence = #presence{from = FromChat, to = UserJID, type = unsubscribe, id = randoms:get_string()},
+  ejabberd_router:route(Presence).
 
 groupchat_changed(LServer,Chat,Status,_User) ->
   ChatJID = jid:from_string(Chat),

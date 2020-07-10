@@ -369,6 +369,7 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"revoke">>,
     yes ->
       case mod_groupchat_inspector:revoke(Server,User,Chat) of
         ok ->
+          ejabberd_hooks:run(revoke_invite, Server, [Chat, User]),
           ResIq = xmpp:make_iq_result(Iq),
           ejabberd_router:route(ResIq);
         _ ->

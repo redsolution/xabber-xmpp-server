@@ -263,6 +263,8 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
   {noreply, State};
 handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LServer, luser = LUser}}},State) ->
   ejabberd_hooks:run(xabber_push_notification, LServer, [<<"subscribe">>, LUser, LServer, #presence{type = subscribe, from = From}]),
+  Conversation = jid:to_string(jid:remove_resource(From)),
+  create_conversation(LServer,LUser,Conversation),
   {noreply, State};
 handle_cast({sm, #presence{type = unsubscribe,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}}},State) ->
   maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
@@ -1775,9 +1777,9 @@ handle_sub_els(headline, [#xabber_replace{version = Version, conversation = Conv
   Conversation = jid:to_string(ConversationJID),
   update_retract(LServer,LUser,Conversation,Version,Retract),
   ok;
-handle_sub_els(headline, [#xabbergroupchat_replace{version = Version} = Retract], _From, To) ->
-  #jid{luser = LUser, lserver = LServer} = To,
-  ok;
+%%handle_sub_els(headline, [#xabbergroupchat_replace{version = Version} = Retract], _From, To) ->
+%%  #jid{luser = LUser, lserver = LServer} = To,
+%%  ok;
 handle_sub_els(headline, [#xabbergroupchat_x{type = <<"echo">>, sub_els = [Message]}], From, To) ->
   MessageD = xmpp:decode(Message),
   {PUser, PServer, _} = jid:tolower(From),
@@ -2073,3 +2075,16 @@ make_ccc_push(LServer,LUser,Conversation, TS, deleted) ->
     IQ = #iq{from = From, to = To, type = set, id = randoms:get_string(), sub_els = [Query]},
     ejabberd_router:route(IQ)
                 end, UserResources).
+
+create_conversation(LServer,LUser,Conversation) ->
+  TS = time_now(),
+  Status = <<"active">>,
+  ?SQL_UPSERT(
+    LServer,
+    "conversation_metadata",
+    ["!username=%(LUser)s",
+      "!conversation=%(Conversation)s",
+      "updated_at=%(TS)d",
+      "metadata_updated_at=%(TS)d",
+      "status=%(Status)s",
+      "server_host=%(LServer)s"]).

@@ -172,7 +172,7 @@ process_groupchat(#iq{from = From, to = To, type = set, sub_els = [#xabbergroupc
 process_groupchat(IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).
 
-make_action(#iq{to = To, from = From, type = get, sub_els = [#xmlel{name = <<"query">>,
+make_action(#iq{lang = Lang, to = To, from = From, type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#block">>}],
   children = []}]} = Iq) ->
   Server = To#jid.lserver,
@@ -183,7 +183,7 @@ make_action(#iq{to = To, from = From, type = get, sub_els = [#xmlel{name = <<"qu
     exist when RightToBlock == yes ->
       ejabberd_router:route(xmpp:make_iq_result(Iq,mod_groupchat_block:query(To)));
     _ ->
-      ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed()))
+      ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed("You do not have permission to see the list of blocked users.",Lang)))
   end;
 make_action(#iq{to = To, type = set, sub_els = [#xmlel{name = <<"unblock">>,
   attrs = [{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#block">>}]}]} = Iq) ->
@@ -345,7 +345,7 @@ make_action(#iq{type = get, lang = Lang, sub_els = [#xmlel{name = <<"query">>,
       ResIq = xmpp:make_iq_result(Iq,Query),
       ejabberd_router:route(ResIq);
     no ->
-      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You have no permission to see list of invited users">>,Lang)))
+      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You do not have permission to see the list of invitations.">>,Lang)))
   end;
 make_action(#iq{to = To, type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/disco#items">>}]}]} = Iq) ->
@@ -377,7 +377,7 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"revoke">>,
           ejabberd_router:route(xmpp:make_error(Iq,Err))
       end;
     no ->
-      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You have no permission to see list of invited users">>,<<"en">>)))
+      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You do not have permission to see the list of invitations.">>,<<"en">>)))
   end;
 make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/disco#info">>}]}]} = Iq) ->

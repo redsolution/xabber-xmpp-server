@@ -54,7 +54,6 @@
   check_if_exist_by_id/3,
   convert_from_unix_time_to_datetime/1,
   convert_from_datetime_to_unix_time/1,
-  get_users_from_chat/1,
   current_chat_version/2,
   subscribe_user/2,
   get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/10,
@@ -767,22 +766,6 @@ get_user_by_id_and_allow_to_invite(Server,Chat,Id) ->
       none
   end.
 
-is_anonim(Server,Chat) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(jid)s from groupchats
-    where jid = %(Chat)s
-    and anonymous = 'incognito'")) of
-    {selected,[{null}]} ->
-      no;
-    {selected,[]} ->
-      no;
-    {selected,[{}]} ->
-      no;
-    _ ->
-      yes
-  end.
-
 % Internal functions
 
 convert_from_unix_time_to_datetime(UnixTime) ->
@@ -826,7 +809,7 @@ get_user_info(User,Chat) ->
   IsAnon = mod_groupchat_chats:is_anonim(Server,Chat),
   {selected,_Tables,Items} = get_user_rules(Server,User,Chat),
   [Item|_] = Items,
-  [Username,Badge,UserId,Chat,_Rule,_RuleDesc,_Type,_Subscription,GV,FN,NickVcard,NickChat,_ValidFrom,_IssuedAt,_IssuedBy,_VcardImage,_Avatar,_LastSeen] = Item,
+  [Username,Badge,UserId,Chat,_Rule,_RuleDesc,_Type,_Subscription,GV,FN,NickVcard,NickChat,_ValidFrom,_IssuedAt,_IssuedBy,VcardImage,_Avatar,_LastSeen] = Item,
   UserRights = [{_R,_RD,T,_VF,_ISA,_ISB}||[UserS,_Badge,_UID,_C,_R,_RD,T,_S,_GV,_FN,_NV,_NC,_VF,_ISA,_ISB,_VI,_AV,_LS] <-Items, UserS == Username, T == <<"permission">> orelse T == <<"restriction">>],
   Nick = case nick(GV,FN,NickVcard,NickChat,IsAnon) of
            empty when IsAnon == no->
@@ -842,7 +825,7 @@ get_user_info(User,Chat) ->
          end,
   Role = calculate_role(UserRights),
   UserJID = jid:from_string(User),
-  AvatarEl = xmpp:decode(mod_groupchat_vcard:get_photo_meta(Server,Username,Chat)),
+  AvatarEl = mod_groupchat_vcard:get_photo_meta(Server,Username,Chat),
   BadgeF = case Badge of
              null ->
                <<>>;
@@ -884,21 +867,6 @@ calculate_role(UserPerm) ->
     _ ->
       <<"owner">>
   end.
-
-get_users_from_chat(Iq) ->
-  #iq{to = To,from = From, lang = Lang} = Iq,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Server = To#jid.lserver,
-  User = jid:to_string(jid:remove_resource(From)),
-  {selected,_Tables,Items} = mod_groupchat_restrictions:user_from_chat_with_rights(Chat,To#jid.lserver),
-  DateNew = get_chat_version(Server,Chat),
-  VersionNew = integer_to_binary(convert_from_datetime_to_unix_time(DateNew)),
-  A = query_chat(parse_items(Items,[],User,Lang),VersionNew),
-  ejabberd_router:route(xmpp:make_iq_result(Iq,A)).
-
-query_chat(Items,Version) ->
-  {xmlel,<<"query">>,[{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#members">>},{<<"version">>,Version}],
-    Items}.
 
 validate_data(_Acc, _LServer,_Chat,_Admin,_ID,undefined, undefined,_Lang) ->
   {stop, {error, xmpp:err_bad_request()}};
@@ -949,102 +917,6 @@ update_user(User, LServer,Chat, _Admin,_ID,Nickname,Badge,_Lang) ->
   insert_badge(LServer,User,Chat,Badge),
   insert_nickname(LServer,User,Chat,Nickname),
   {User,UserCard}.
-
-parse_items([],Acc,_User,_Lang) ->
-  Acc;
-parse_items(Items,Acc,UserRequester,Lang) ->
-  [Item|_RestItems] = Items,
-  [Username,Badge,UserId,Chat,_Rule,_RuleDesc,_Type, Subscription,GV,FN,NickVcard,NickChat,_ValidFrom,_IssuedAt,_IssuedBy,_VcardImage,_Avatar,LastSeen] = Item,
-  UserPerm = [[User,_Badge,_UID,_C,_R,_RD,_T,_S,_GV,_FN,_NV,_NC,_VF,_ISA,_ISB,_VI,_AV,_LS]||[User,_Badge,_UID,_C,_R,_RD,_T,_S,_GV,_FN,_NV,_NC,_VF,_ISA,_ISB,_VI,_AV,_LS] <-Items, User == Username],
-  UserRights = [{_R,_RuD,T,_VF,_ISA,_ISB}||[User,_Badge,_UID,_C,_R,_RuD,T,_S,_GV,_FN,_NV,_NC,_VF,_ISA,_ISB,_VI,_AV,_LS] <-Items, User == Username, T == <<"permission">> orelse T == <<"restriction">>],
-  ChatJid = jid:from_string(Chat),
-  Server = ChatJid#jid.lserver,
-  Nick = case nick(GV,FN,NickVcard,NickChat) of
-           empty ->
-             Username;
-           {ok,Value} ->
-             Value;
-           _ ->
-             <<>>
-         end,
-  Rest = Items -- UserPerm,
-  Role = calculate_role(UserRights),
-  NickNameEl = {xmlel,<<"nickname">>,[],[{xmlcdata, Nick}]},
-  JidEl = {xmlel,<<"jid">>,[],[{xmlcdata, Username}]},
-  UserIdEl = {xmlel,<<"id">>,[],[{xmlcdata, UserId}]},
-  RoleEl = {xmlel,<<"role">>,[],[{xmlcdata, Role}]},
-  SubEl = {xmlel,<<"subscription">>,[],[{xmlcdata, Subscription}]},
-  AvatarEl = mod_groupchat_vcard:get_photo_meta(Server,Username,Chat),
-  BadgeEl = badge(Badge),
-  S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
-  L = length(S),
-  LastSeenEl = case L of
-                 0 ->
-                   {xmlel,<<"present">>,[],[{xmlcdata, LastSeen}]};
-                 _ ->
-                   {xmlel,<<"present">>,[],[{xmlcdata, <<"now">>}]}
-               end,
-  IsAnon = is_anonim(Server,Chat),
-  case UserRights of
-    [] when IsAnon == no ->
-      Children = [UserIdEl, SubEl,LastSeenEl,JidEl,RoleEl,BadgeEl,NickNameEl,AvatarEl],
-      parse_items(Rest,[{xmlel,<<"item">>,[],Children}|Acc],UserRequester,Lang);
-    _ when IsAnon == no->
-      Children = [UserIdEl|[SubEl|[LastSeenEl|[JidEl|[RoleEl|[BadgeEl|[NickNameEl|[AvatarEl|parse_list(UserRights,Lang)]]]]]]]],
-      parse_items(Rest,[{xmlel,<<"item">>,[],Children}|Acc],UserRequester,Lang);
-    [] when IsAnon == yes andalso Username == UserRequester ->
-      Children = [UserIdEl, SubEl,LastSeenEl,JidEl,RoleEl,BadgeEl,NickNameEl,AvatarEl],
-      parse_items(Rest,[{xmlel,<<"item">>,[],Children}|Acc],UserRequester,Lang);
-    _ when IsAnon == yes andalso Username == UserRequester ->
-      Children = [UserIdEl|[SubEl|[LastSeenEl|[JidEl|[RoleEl|[BadgeEl|[NickNameEl|[AvatarEl|parse_list(UserRights,Lang)]]]]]]]],
-      parse_items(Rest,[{xmlel,<<"item">>,[],Children}|Acc],UserRequester,Lang);
-    [] when IsAnon == yes ->
-      Children = [UserIdEl, SubEl,LastSeenEl,RoleEl,BadgeEl,NickNameEl,AvatarEl],
-      parse_items(Rest,[{xmlel,<<"item">>,[],Children}|Acc],UserRequester,Lang);
-    _ when IsAnon == yes->
-      Children = [UserIdEl|[SubEl|[LastSeenEl|[RoleEl|[BadgeEl|[NickNameEl|[AvatarEl|parse_list(UserRights,Lang)]]]]]]],
-      parse_items(Rest,[{xmlel,<<"item">>,[],Children}|Acc],UserRequester,Lang)
-  end.
-
-badge(Badge) ->
-  case Badge of
-    null ->
-      {xmlel,<<"badge">>,[],[{xmlcdata,<<>>}]};
-    _ ->
-      {xmlel,<<"badge">>,[],[{xmlcdata,Badge}]}
-  end.
-
-parse_list(List,Lang) ->
-  lists:map(fun(N) -> parser(N,Lang) end, List).
-
-parser(Right,Lang) ->
-  {Rule,RuleDesc,Type,ValidUntil,IssuedAt,IssuedBy} = Right,
-  {xmlel,Type,[
-    {<<"name">>,Rule},
-    {<<"translation">>,translate:translate(Lang,RuleDesc)},
-    {<<"expires">>,ValidUntil},
-    {<<"issued-by">>,IssuedBy},
-    {<<"issued-at">>,IssuedAt}
-  ],[]}.
-
-nick(GV,FN,NickVcard,NickChat) ->
-  case NickChat of
-    _ when (GV == null orelse GV == <<>>)
-      andalso (FN == null orelse FN == <<>>)
-      andalso (NickVcard == null orelse NickVcard == <<>>)
-      andalso (NickChat == null orelse NickChat == <<>>)->
-      empty;
-    _  when NickChat =/= null andalso NickChat =/= <<>>->
-      {ok,NickChat};
-    _  when NickVcard =/= null andalso NickVcard =/= <<>>->
-      {ok,NickVcard};
-    _  when GV =/= null andalso GV =/= <<>>->
-      {ok,GV};
-    _  when FN =/= null andalso FN =/= <<>>->
-      {ok,FN};
-    _ ->
-      {bad_request}
-  end.
 
 user_no_read(Server,Chat) ->
   ejabberd_sql:sql_query(
@@ -1507,7 +1379,7 @@ get_user_from_chat(LServer,Chat,User) ->
                           <<>>
                       end,
                Role = calculate_role(LServer,Username,Chat),
-               AvatarEl = xmpp:decode(mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat)),
+               AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
                BadgeF = case Badge of
                           null ->
                             <<>>;
@@ -1727,7 +1599,7 @@ make_query(LServer,RawData,RequesterUser,Chat) ->
                  <<>>
              end,
       Role = calculate_role(LServer,Username,Chat),
-      AvatarEl = xmpp:decode(mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat)),
+      AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
       BadgeF = case Badge of
                  null ->
                    <<>>;

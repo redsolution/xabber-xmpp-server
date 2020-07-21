@@ -227,7 +227,7 @@ handle_pubsub(Iq) ->
                case IdItem of
                  <<>> ->
                    update_metadata_user_put(Server, User, IdItem, <<>>, 0, Chat),
-                   NewItems = [#ps_item{sub_els = [#avatar_meta{}]}],
+%%                   NewItems = [#ps_item{sub_els = [#avatar_meta{}]}],
                    Event = #ps_event{items = #ps_items{items = Items}},
                    M = #message{type = headline,
                      from = To,
@@ -466,13 +466,13 @@ handle(#iq{from = From, to = To, sub_els = Els}) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   case length(Els) of
     0 ->
-      do_nothing;
+      ok;
     _  when length(Els) > 0 ->
       Decoded = lists:map(fun(N) -> xmpp:decode(N) end, Els),
       D = lists:keyfind(vcard_temp,1,Decoded),
       case D of
         false ->
-          do_not;
+          ok;
         _ ->
           update_vcard(Server,User,D,Chat)
       end
@@ -532,7 +532,7 @@ update_vcard(Server,User,D,_Chat) ->
     <<"null">> ->
       set_update_status(Server,User,<<"true">>);
     _ ->
-      update_vcard_info(Server,User,LF,FN,NickName)
+      update_vcard_info(Server,User,LF,FN,NickName,D#vcard_temp.photo)
   end.
 
 send_notifications_about_nick_change(Server,User) ->
@@ -553,16 +553,16 @@ notification_message(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [ByUserCard]},
-  By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
+  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
+  By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   #message{from = ChatJID, to = ChatJID, type = headline, id = randoms:get_string(), body = [], sub_els = [X,By], meta = #{}}.
 
 notification_message_about_nick(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_USER_UPDATED, version = Version, sub_els = [ByUserCard]},
-  By = #xmppreference{type = <<"groupchat">>, sub_els = [ByUserCard]},
+  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
+  By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   #message{from = ChatJID, to = ChatJID, type = headline, id = randoms:get_string(), body = [], sub_els = [X,By], meta = #{}}.
 
 get_chat_meta_nodeid(Server,Chat)->
@@ -637,16 +637,16 @@ get_photo_meta(Server,User,Chat)->
       Info = #avatar_info{bytes = AvatarSize, type = AvatarType, id = Hash, url = AvatarUrl},
       #avatar_meta{info = [Info]}
   end,
-  xmpp:encode(Result).
+  Result.
 
 get_photo_data(Server,Hash,UserNode,_User,Chat) ->
   <<"urn:xmpp:avatar:data#", UserID/binary>> = UserNode,
   TypeRaw = get_avatar_type(Server, Hash, UserID,Chat),
   case TypeRaw of
     not_exist ->
-      not_exist;
+      get_vcard_avatar(Server,Hash,UserID,UserNode,Chat);
     not_filed ->
-      not_filed;
+      get_vcard_avatar(Server,Hash,UserID,UserNode,Chat);
     error ->
       error;
     _ ->
@@ -655,6 +655,39 @@ get_photo_data(Server,Hash,UserNode,_User,Chat) ->
       Name = <<Hash/binary, ".", Type/binary >>,
       File = <<Path/binary, "/" , Name/binary>>,
       get_avatar_data(File,Hash,UserNode)
+  end.
+
+get_vcard_avatar(Server,Hash,UserID,UserNode,Chat) ->
+  IsAnon = mod_groupchat_chats:is_anonim(Server,Chat),
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s from groupchat_users
+  where chatgroup=%(Chat)s and id=%(UserID)s")) of
+    {selected, []} ->
+      not_exist;
+    {selected, [<<>>]} ->
+      not_filed;
+    {selected,[{Username}]} when IsAnon == no ->
+      get_vcard_avatar_data(Server,Username,Hash,UserNode);
+    _ ->
+      error
+  end.
+
+get_vcard_avatar_data(Server,Username,Hash,UserNode) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(image)s from groupchat_users_vcard
+  where jid=%(Username)s")) of
+    {selected, []} ->
+      not_exist;
+    {selected, [<<>>]} ->
+      not_filed;
+    {selected,[{Name}]} ->
+      Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+      File = <<Path/binary, "/" , Name/binary>>,
+      get_avatar_data(File,Hash,UserNode);
+    _ ->
+      error
   end.
 
 get_avatar_data(File,Hash,UserNode) ->
@@ -738,15 +771,15 @@ get_image_metadata(Server, User, Chat) ->
     {selected, []} ->
       not_exist;
     {selected, [<<>>]} ->
-      not_filed;
+      get_vcard_avatar(Server,Chat,User);
     {selected, [{_AvaID,0,null,null}]} ->
-      not_filed;
+      get_vcard_avatar(Server,Chat,User);
     {selected, [{_AvaID,_AvaSize,null,null}]} ->
-      not_filed;
+      get_vcard_avatar(Server,Chat,User);
     {selected, [{_AvaID,_AvaSize,_AvaType,null}]} ->
-      not_filed;
+      get_vcard_avatar(Server,Chat,User);
     {selected, [{_AvaID,0,_AvaType,_AvaUrl}]} ->
-      not_filed;
+      get_vcard_avatar(Server,Chat,User);
     {selected,Meta} ->
       Meta;
     _ ->
@@ -772,6 +805,28 @@ get_image_metadata_by_id(Server, UserID, Chat) ->
       not_filed;
     {selected,Meta} ->
       Meta;
+    _ ->
+      error
+  end.
+
+get_vcard_avatar(Server,Chat,User) ->
+  IsAnon = mod_groupchat_chats:is_anonim(Server,Chat),
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(image)s,@(hash)s,@(image_type)s from groupchat_users_vcard
+  where jid=%(User)s")) of
+    {selected,[{Image,Hash,ImageType}]} when Image =/= null andalso Hash =/= null andalso ImageType =/= null andalso IsAnon == no ->
+      Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+      File = <<Path/binary, "/" , Image/binary>>,
+      case file:read_file(File) of
+        {ok,Binary} ->
+          Size = byte_size(Binary),
+          UrlDir = gen_mod:get_module_opt(Server, ?MODULE, get_url),
+          Url = <<UrlDir/binary, "/", File/binary>>,
+          [{Hash,Size,ImageType,Url}];
+        _ ->
+          not_filed
+      end;
     _ ->
       error
   end.
@@ -924,27 +979,34 @@ change_user_updated_at(Server,User) ->
     chatgroup not in (select jid from groupchats where anonymous = 'incognito')
     ")).
 
-update_vcard_info(Server,User,GIVENFAMILYRaw,FNRaw,NICKNAMERaw) ->
+update_vcard_info(Server,User,GIVENFAMILYRaw,FNRaw,NICKNAMERaw,Photo) ->
   NICKNAME = trim(NICKNAMERaw),
   FN = trim(FNRaw),
   GIVENFAMILY = trim(GIVENFAMILYRaw),
   NickLength = string:length(NICKNAME),
   FNLength = string:length(FN),
   GivenLength = string:length(GIVENFAMILY),
+  {Hash,Type} = get_hash_and_type(Photo),
+  Filename = get_name_from_hash_and_type(Photo),
   case NickLength of
     _ when NickLength > 0 orelse FNLength > 0 orelse GivenLength > 0 ->
       case  ejabberd_sql:sql_query(
         Server,
-        ?SQL("update groupchat_users_vcard set givenfamily=%(GIVENFAMILY)s, fn=%(FN)s, nickname=%(NICKNAME)s
-    where jid = %(User)s and (givenfamily !=%(GIVENFAMILY)s or fn!=%(FN)s or nickname!=%(NICKNAME)s)")) of
+        ?SQL("update groupchat_users_vcard set givenfamily=%(GIVENFAMILY)s, fn=%(FN)s, nickname=%(NICKNAME)s, image=%(Filename)s, hash=%(Hash)s, image_type=%(Type)s
+    where jid = %(User)s and (givenfamily !=%(GIVENFAMILY)s or fn!=%(FN)s or nickname!=%(NICKNAME)s or image!=%(Filename)s)")) of
         {updated,0} ->
           ?SQL_UPSERT(Server, "groupchat_users_vcard",
             ["!jid=%(User)s",
               "givenfamily=%(GIVENFAMILY)s",
               "fn=%(FN)s",
-              "nickname=%(NICKNAME)s"
-            ]);
+              "hash=%(Hash)s",
+              "nickname=%(NICKNAME)s",
+              "image=%(Filename)s",
+              "image_type=%(Type)s"
+            ]),
+          handle_vcard_photo(Server,Photo);
         {updated,Num} when Num > 0 ->
+          handle_vcard_photo(Server,Photo),
           send_notifications_about_nick_change(Server,User),
           ok;
         _ ->
@@ -962,6 +1024,8 @@ trim(String) ->
       <<"">>
   end.
 
+check_old_meta(_Server,false)->
+  ok;
 check_old_meta(_Server,not_exist)->
   ok;
 check_old_meta(_Server,not_filed)->
@@ -1001,3 +1065,35 @@ delete_file(Server, Hash, AvatarType) ->
 get_vcard(Chat,Server) ->
   {Name,Desc} = mod_groupchat_chats:get_name_desc(Server,Chat),
   #vcard_temp{jabberid = Chat, nickname = Name, desc = Desc}.
+
+handle_vcard_photo(_Server, undefined) ->
+  ok;
+handle_vcard_photo(Server,Photo) ->
+  #vcard_photo{binval = Binval} = Photo,
+  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+  Name = get_name_from_hash_and_type(Photo),
+  File = <<Path/binary, "/" , Name/binary>>,
+  file:write_file(binary_to_list(File), Binval),
+  ok.
+
+get_name_from_hash_and_type(undefined) ->
+  <<>>;
+get_name_from_hash_and_type(Photo) ->
+  #vcard_photo{type = TypeRaw, binval = Binval} = Photo,
+  <<"image/", Type/binary>> = TypeRaw,
+  Hash = get_hash(Binval),
+  Name = <<Hash/binary, ".", Type/binary >>,
+  Name.
+
+get_hash(Binval) ->
+  H = iolist_to_binary([io_lib:format("~2.16.0B", [X])
+    || X <- binary_to_list(
+      crypto:hash(sha, Binval))]),
+  list_to_binary(string:to_lower(binary_to_list(H))).
+
+get_hash_and_type(undefined) ->
+  {<<>>,<<>>};
+get_hash_and_type(Photo) ->
+  #vcard_photo{type = TypeRaw, binval = Binval} = Photo,
+  Hash = get_hash(Binval),
+  {Hash,TypeRaw}.

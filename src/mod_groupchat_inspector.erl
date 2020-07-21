@@ -636,7 +636,7 @@ parse_items(Items,Acc,UserRequester,Lang) ->
   JidEl = {xmlel,<<"jid">>,[],[{xmlcdata, Username}]},
   UserIdEl = {xmlel,<<"id">>,[],[{xmlcdata, UserId}]},
   RoleEl = {xmlel,<<"role">>,[],[{xmlcdata, Role}]},
-  AvatarEl = mod_groupchat_vcard:get_photo_meta(Server,Username,Chat),
+  AvatarEl = xmpp:encode(mod_groupchat_vcard:get_photo_meta(Server,Username,Chat)),
   BadgeEl = badge(Badge),
   S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
   L = length(S),

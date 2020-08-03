@@ -37,6 +37,7 @@
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
 
+-export([is_archived/5,is_pinned/5]).
 %% gen_mod callbacks.
 -export([start/2,stop/1,reload/3,depends/2,mod_options/1]).
 
@@ -61,7 +62,7 @@
 -export([get_last_sync/4, get_stanza_id_from_counter/5]).
 
 % syncronization_query hook
--export([create_synchronization_metadata/10, check_conversation_type/10]).
+-export([create_synchronization_metadata/11, check_conversation_type/11]).
 -type c2s_state() :: ejabberd_c2s:state().
 %% records
 -record(state, {host = <<"">> :: binary()}).
@@ -216,11 +217,20 @@ handle_cast({user_send,#message{id = ID, type = chat, from = #jid{luser =  LUser
   end,
   case Invite of
     false ->
-      update_metainfo(message, LServer,LUser,Conversation,TS),
+      Encrypted = xmpp:get_subtag(Pkt,#encrypted_message{}),
+      case Encrypted of
+        #encrypted_message{} ->
+          create_conversation(LServer,LUser,Conversation,<<"">>,true),
+          update_metainfo(read, LServer,LUser,Conversation,TS,true);
+        _ ->
+          update_metainfo(message, LServer,LUser,Conversation,TS,false),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"outgoing">>, LUser, LServer,
+            #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
+          update_metainfo(read, LServer,LUser,Conversation,TS,false)
+      end;
+    _ ->
       ejabberd_hooks:run(xabber_push_notification, LServer, [<<"outgoing">>, LUser, LServer,
         #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-      update_metainfo(read, LServer,LUser,Conversation,TS);
-    _ ->
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"invite">>),
       update_metainfo(message, LServer,LUser,Conversation,TS),
       update_metainfo(read, LServer,LUser,Conversation,TS)
@@ -241,8 +251,14 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
       BareJID = jid:make(LUser,LServer),
       Displayed2 = filter_packet(Displayed,BareJID),
       StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]),
-      update_metainfo(read, LServer,LUser,Conversation,StanzaID);
+      IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID),
+      case IsEncrypted of
+        true ->
+          update_metainfo(read, LServer,LUser,Conversation,StanzaID,true);
+        _ ->
+          update_metainfo(read, LServer,LUser,Conversation,StanzaID,false)
+      end,
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]);
     _ ->
       ok
   end,
@@ -264,7 +280,7 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
 handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LServer, luser = LUser}}},State) ->
   ejabberd_hooks:run(xabber_push_notification, LServer, [<<"subscribe">>, LUser, LServer, #presence{type = subscribe, from = From}]),
   Conversation = jid:to_string(jid:remove_resource(From)),
-  create_conversation(LServer,LUser,Conversation),
+  create_conversation(LServer,LUser,Conversation,<<"">>,false),
   {noreply, State};
 handle_cast({sm, #presence{type = unsubscribe,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}}},State) ->
   maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
@@ -384,9 +400,16 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
           store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
           delete_last_call(Peer, LUser, LServer);
         _ ->
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-            #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-          update_metainfo(message, LServer,LUser,Conversation,TS)
+          IsEncrypted = mod_mam_sql:is_encrypted(LServer,TS),
+          case IsEncrypted of
+            true ->
+              create_conversation(LServer,LUser,Conversation,<<"">>,true),
+              update_metainfo(message, LServer,LUser,Conversation,TS,true);
+            _ ->
+              ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+                #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
+              update_metainfo(message, LServer,LUser,Conversation,TS)
+          end
       end
   end,
   {noreply, State};
@@ -583,31 +606,85 @@ user_send_packet(Acc) ->
 %%--------------------------------------------------------------------
 -spec register_iq_handlers(binary()) -> ok.
 register_iq_handlers(Host) ->
+  gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_ARCHIVED,
+    ?MODULE, process_iq),
+  gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PINNED,
+    ?MODULE, process_iq),
   gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_SYNCHRONIZATION,
     ?MODULE, process_iq).
 
 -spec unregister_iq_handlers(binary()) -> ok.
 unregister_iq_handlers(Host) ->
+  gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_ARCHIVED),
+  gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PINNED),
   gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_SYNCHRONIZATION).
 
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = undefined, rsm = undefined}]} = IQ) ->
-  Sync = make_result(LServer, LUser, 0),
-  xmpp:make_iq_result(IQ,Sync);
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = <<>>, rsm = undefined}]} = IQ) ->
-  Sync = make_result(LServer, LUser, 0),
-  xmpp:make_iq_result(IQ,Sync);
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = Stamp, rsm = undefined}]} = IQ) ->
-  Sync = make_result(LServer, LUser, binary_to_integer(Stamp)),
-  xmpp:make_iq_result(IQ,Sync);
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = undefined, rsm = RSM}]} = IQ) ->
-  Sync = make_result(LServer, LUser, <<"0">>, RSM),
-  xmpp:make_iq_result(IQ,Sync);
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = <<>>, rsm = RSM}]} = IQ) ->
-  Sync = make_result(LServer, LUser, <<"0">>, RSM),
-  xmpp:make_iq_result(IQ,Sync);
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = Stamp, rsm = RSM}]} = IQ) ->
-  Sync = make_result(LServer, LUser, Stamp, RSM),
-  xmpp:make_iq_result(IQ,Sync);
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = undefined, rsm = undefined}  = Query], lang = Lang} = IQ) ->
+  SyncQuery = parse_query(Query,Lang),
+  case SyncQuery of
+    {ok,Form} ->
+      Sync = make_result(LServer, LUser, <<"0">>, undefined, Form),
+      xmpp:make_iq_result(IQ,Sync);
+    {error,Err} ->
+      xmpp:make_error(IQ, Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_bad_request())
+  end;
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = <<>>, rsm = undefined} = Query], lang = Lang} = IQ) ->
+  SyncQuery = parse_query(Query,Lang),
+  case SyncQuery of
+    {ok,Form} ->
+      Sync = make_result(LServer, LUser, <<"0">>, undefined, Form),
+      xmpp:make_iq_result(IQ,Sync);
+    {error,Err} ->
+      xmpp:make_error(IQ, Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_bad_request())
+  end;
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = Stamp, rsm = undefined}  = Query], lang = Lang} = IQ) ->
+  SyncQuery = parse_query(Query,Lang),
+  case SyncQuery of
+    {ok,Form} ->
+      Sync = make_result(LServer, LUser, Stamp, undefined, Form),
+      xmpp:make_iq_result(IQ,Sync);
+    {error,Err} ->
+      xmpp:make_error(IQ, Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_bad_request())
+  end;
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = undefined, rsm = RSM} = Query], lang = Lang} = IQ) ->
+  SyncQuery = parse_query(Query,Lang),
+  case SyncQuery of
+    {ok,Form} ->
+      Sync = make_result(LServer, LUser, <<"0">>, RSM, Form),
+      xmpp:make_iq_result(IQ,Sync);
+    {error,Err} ->
+      xmpp:make_error(IQ, Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_bad_request())
+  end;
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = <<>>, rsm = RSM} = Query], lang = Lang} = IQ) ->
+  SyncQuery = parse_query(Query,Lang),
+  case SyncQuery of
+    {ok,Form} ->
+      Sync = make_result(LServer, LUser, <<"0">>, RSM, Form),
+      xmpp:make_iq_result(IQ,Sync);
+    {error,Err} ->
+      xmpp:make_error(IQ, Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_bad_request())
+  end;
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get, sub_els = [#xabber_synchronization_query{stamp = Stamp, rsm = RSM} = Query], lang = Lang} = IQ) ->
+  SyncQuery = parse_query(Query, Lang),
+  case SyncQuery of
+    {ok,Form} ->
+      Sync = make_result(LServer, LUser, Stamp, RSM, Form),
+      xmpp:make_iq_result(IQ,Sync);
+    {error,Err} ->
+      xmpp:make_error(IQ, Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_bad_request())
+  end;
 process_iq(#iq{from = UserJID, type = set, sub_els = [#xabber_delete{conversation = Conversations}]} = IQ ) ->
   case delete_conversations(UserJID,Conversations) of
     ok ->
@@ -615,13 +692,65 @@ process_iq(#iq{from = UserJID, type = set, sub_els = [#xabber_delete{conversatio
     _ ->
       xmpp:make_error(IQ, xmpp:err_bad_request())
   end;
+process_iq(#iq{lang = Lang, from = UserJID, type = set, sub_els = [#xabber_synchronization_pin{conversation = Conversation}]} = IQ ) ->
+  case pin_conversation(UserJID, Conversation, Lang) of
+    ok ->
+      xmpp:make_iq_result(IQ);
+    {error,Err} ->
+      xmpp:make_error(IQ,Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_internal_server_error())
+  end;
+process_iq(#iq{lang = Lang, from = UserJID, type = set, sub_els = [#xabber_synchronization_archive{conversation = Conversation}]} = IQ ) ->
+  case archive_conversation(UserJID, Conversation, Lang) of
+    ok ->
+      xmpp:make_iq_result(IQ);
+    {error,Err} ->
+      xmpp:make_error(IQ,Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_internal_server_error())
+  end;
+process_iq(#iq{lang = Lang, from = UserJID, type = set, sub_els = [#xabber_synchronization_unarchive{conversation = Conversation}]} = IQ ) ->
+  case unarchive_conversation(UserJID, Conversation, Lang) of
+    ok ->
+      xmpp:make_iq_result(IQ);
+    {error,Err} ->
+      xmpp:make_error(IQ,Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_internal_server_error())
+  end;
+process_iq(#iq{lang = Lang, from = UserJID, type = set, sub_els = [#xabber_synchronization_unpin{conversation = Conversation}]} = IQ ) ->
+  case unpin_conversation(UserJID, Conversation, Lang) of
+    ok ->
+      xmpp:make_iq_result(IQ);
+    {error,Err} ->
+      xmpp:make_error(IQ,Err);
+    _ ->
+      xmpp:make_error(IQ, xmpp:err_internal_server_error())
+  end;
 process_iq(IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).
 
+parse_query(#xabber_synchronization_query{xdata = undefined}, _Lang) ->
+  {ok, []};
+parse_query(#xabber_synchronization_query{xdata = #xdata{}} = Query, Lang) ->
+  X = xmpp_util:set_xdata_field(
+    #xdata_field{var = <<"FORM_TYPE">>,
+      type = hidden, values = [?NS_XABBER_SYNCHRONIZATION]},
+    Query#xabber_synchronization_query.xdata),
+  try	sync_query:decode(X#xdata.fields) of
+    Form -> {ok, Form}
+  catch _:{sync_query, Why} ->
+    Txt = sync_query:format_error(Why),
+    {error, xmpp:err_bad_request(Txt, Lang)}
+  end;
+parse_query(#mam_query{}, _Lang) ->
+  {ok, []}.
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-make_result(LServer, LUser, Stamp, RSM) ->
-  {QueryChats, QueryCount} = make_sql_query(LServer, LUser, Stamp, RSM),
+make_result(LServer, LUser, Stamp, RSM, Form) ->
+  {QueryChats, QueryCount} = make_sql_query(LServer, LUser, Stamp, RSM, Form),
   {selected, _, Res} = ejabberd_sql:sql_query(LServer, QueryChats),
   {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(LServer, QueryCount),
   Count = binary_to_integer(CountBinary),
@@ -658,18 +787,34 @@ make_result(LServer, LUser, Stamp) ->
 
 convert_result(Result) ->
   lists:map(fun(El) ->
-    [Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,Status] = El,
-    {Conversation,binary_to_integer(Retract),Type,Thread,Read,Delivered,Display,binary_to_integer(UpdateAt),Status} end, Result
+    [Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,Status,Encrypted] = El,
+    {Conversation,binary_to_integer(Retract),Type,Thread,Read,Delivered,Display,binary_to_integer(UpdateAt),Status, to_atom_t_f(Encrypted)} end, Result
   ).
 
+to_atom_t_f(Binary) ->
+  case Binary of
+    <<"t">> ->
+      true;
+    _ ->
+      false
+  end.
 
 make_result_el(LServer, LUser, El) ->
-  {Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,ConversationStatus} = El,
+  {Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,ConversationStatus,Encrypted} = El,
   ConversationMetadata = ejabberd_hooks:run_fold(syncronization_query,
-    LServer, [], [LUser,LServer,Conversation,Read,Delivered,Display,ConversationStatus,Retract,Type]),
-  #xabber_conversation{stamp = integer_to_binary(UpdateAt), type = Type, thread = Thread, jid = jid:from_string(Conversation), sub_els = ConversationMetadata}.
+    LServer, [], [LUser,LServer,Conversation,Read,Delivered,Display,ConversationStatus,Retract,Type,Encrypted]),
+  ConversationType = define_type(Type,Encrypted),
+  #xabber_conversation{stamp = integer_to_binary(UpdateAt), type = ConversationType, thread = Thread, jid = jid:from_string(Conversation), sub_els = ConversationMetadata}.
 
-check_conversation_type(_Acc,_LUser,_LServer,_Conversation,_Read,_Delivered,_Display,ConversationStatus,_Retract,_Type) ->
+define_type(Type,Encrypted) ->
+  case Encrypted of
+    false ->
+      Type;
+    _ ->
+      <<"encrypted-chat">>
+  end.
+
+check_conversation_type(_Acc,_LUser,_LServer,_Conversation,_Read,_Delivered,_Display,ConversationStatus,_Retract,_Type,_Encrypted) ->
   case ConversationStatus of
     <<"deleted">> ->
       {stop,[#xabber_deleted_conversation{}]};
@@ -677,7 +822,7 @@ check_conversation_type(_Acc,_LUser,_LServer,_Conversation,_Read,_Delivered,_Dis
       []
   end.
 
-create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Display,_ConversationStatus,Retract,Type) ->
+create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Display,_ConversationStatus,Retract,Type,Encrypted) ->
   {PUser, PServer,_} = jid:tolower(jid:from_string(Conversation)),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
   case Type of
@@ -707,6 +852,17 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Di
       {stop,[#xabber_metadata{node = ?NS_GROUPCHAT_RETRACT, sub_els = [#xabber_conversation_retract{version = Retract}]},
         #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
+    _ when Encrypted == true ->
+      Count = get_count_encrypted_messages(LServer,LUser,Conversation,binary_to_integer(Read)),
+      LastMessage = get_last_encrypted_informative_message_for_chat(LServer,LUser,Conversation),
+      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
+      Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
+      XabberDelivered = #xabber_conversation_delivered{id = Delivered},
+      XabberDisplayed = #xabber_conversation_displayed{id = Display},
+      SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
+      {stop,[#xabber_metadata{node = ?NS_GROUPCHAT_RETRACT, sub_els = [#xabber_conversation_retract{version = Retract}]},
+        #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+        #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]};
     _ ->
       Count = get_count_messages(LServer,LUser,Conversation,binary_to_integer(Read)),
       LastMessage = get_last_informative_message_for_chat(LServer,LUser,Conversation),
@@ -726,7 +882,9 @@ get_last_informative_message_for_chat(LServer,LUser,Conversation) ->
     ?SQL("select
     @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
      from archive"
-    " where username=%(LUser)s and bare_peer=%(Conversation)s and %(LServer)H and txt notnull and txt !='' and timestamp not in (select timestamp from special_messages where %(LServer)H ) order by timestamp desc limit 1")) of
+    " where username=%(LUser)s and bare_peer=%(Conversation)s and %(LServer)H and txt notnull and txt !=''
+    and timestamp not in (select timestamp from special_messages where %(LServer)H ) and encrypted = false
+     order by timestamp desc limit 1")) of
     {selected,[<<>>]} ->
       [];
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
@@ -740,6 +898,30 @@ get_last_informative_message_for_chat(LServer,LUser,Conversation) ->
     _ ->
       []
   end.
+
+get_last_encrypted_informative_message_for_chat(LServer,LUser,Conversation) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
+     from archive"
+    " where username=%(LUser)s and bare_peer=%(Conversation)s and %(LServer)H and txt notnull and txt !=''
+    and timestamp not in (select timestamp from special_messages where %(LServer)H ) and encrypted = true
+     order by timestamp desc limit 1")) of
+    {selected,[<<>>]} ->
+      [];
+    {selected,[{TS, XML, Peer, Kind, Nick}]} ->
+      Reject = get_reject(LServer,LUser,Conversation),
+      case Reject of
+        {TSReject,RejectMessage} when TSReject > TS ->
+          RejectMessage;
+        _ ->
+          convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer)
+      end;
+    _ ->
+      []
+  end.
+
 
 replace_invites(LServer, LUser, Conversations) ->
   AllConversations = lists:map(fun(Conv) ->
@@ -1415,6 +1597,49 @@ update_metainfo(displayed, LServer,LUser,Conversation,StanzaID) ->
     ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, displayed_until = %(StanzaID)s
     where username=%(LUser)s and conversation=%(Conversation)s and displayed_until::bigint <= %(StanzaID)d and %(LServer)H")
   ).
+
+update_metainfo(_Any, _LServer,_LUser,_Conversation, empty,_Type) ->
+  ?DEBUG("No id in displayed",[]),
+  ok;
+update_metainfo(message, LServer,LUser,Conversation,_StanzaID,Encrypted) ->
+  ?DEBUG("save new message ~p ~p ",[LUser,Conversation]),
+  TS = time_now(),
+  Status = <<"active">>,
+  ?SQL_UPSERT(
+    LServer,
+    "conversation_metadata",
+    ["!username=%(LUser)s",
+      "!conversation=%(Conversation)s",
+      "!encrypted=%(Encrypted)b",
+      "updated_at=%(TS)d",
+      "metadata_updated_at=%(TS)d",
+      "status=%(Status)s",
+      "server_host=%(LServer)s"]);
+update_metainfo(delivered, LServer,LUser,Conversation,StanzaID,Encrypted) ->
+  ?DEBUG("save delivered ~p ~p ~p",[LUser,Conversation,StanzaID]),
+  TS = time_now(),
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, delivered_until = %(StanzaID)s
+    where username=%(LUser)s and conversation=%(Conversation)s and encrypted = %(Encrypted)b and delivered_until::bigint <= %(StanzaID)d and %(LServer)H")
+  );
+update_metainfo(read, LServer,LUser,Conversation,StanzaID,Encrypted) ->
+  TS = time_now(),
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, read_until = %(StanzaID)s
+    where username=%(LUser)s and conversation=%(Conversation)s and encrypted = %(Encrypted)b and read_until::bigint <= %(StanzaID)d and %(LServer)H")
+  );
+update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Encrypted) ->
+  ?DEBUG("save displayed ~p ~p ~p",[LUser,Conversation,StanzaID]),
+  TS = time_now(),
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, displayed_until = %(StanzaID)s
+    where username=%(LUser)s and conversation=%(Conversation)s and encrypted = %(Encrypted)b and displayed_until::bigint <= %(StanzaID)d and %(LServer)H")
+  ).
+
+
 get_sync(LServer, LUser,Stamp) when Stamp == 0 orelse Stamp == <<"0">> ->
   case ejabberd_sql:sql_query(
     LServer,
@@ -1548,7 +1773,22 @@ get_count_messages(LServer,LUser,PUser,TS) ->
     ?SQL("select
     @(count(*))d
      from archive"
-    " where username=%(LUser)s and bare_peer=%(PUser)s and txt notnull and txt !='' and timestamp > %(TS)d and timestamp not in (select timestamp from special_messages where username = %(LUser)s ) and %(LServer)H")) of
+    " where username=%(LUser)s and bare_peer=%(PUser)s and txt notnull and txt !='' and timestamp > %(TS)d and timestamp not in (select timestamp from special_messages where username = %(LUser)s )
+     and encrypted = false and %(LServer)H")) of
+    {selected,[{Count}]} ->
+      Count;
+    _ ->
+      0
+  end.
+
+get_count_encrypted_messages(LServer,LUser,PUser,TS) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    @(count(*))d
+     from archive"
+    " where username=%(LUser)s and bare_peer=%(PUser)s and txt notnull and txt !='' and timestamp > %(TS)d and timestamp not in (select timestamp from special_messages where username = %(LUser)s )
+    and encrypted = true and %(LServer)H")) of
     {selected,[{Count}]} ->
       Count;
     _ ->
@@ -1684,11 +1924,11 @@ get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
      from origin_id"
     " where id=%(OriginID)s and username=%(LUser)s and %(LServer)H")) of
     {selected,[<<>>]} ->
-      empty;
+      0;
     {selected,[{StanzaID}]} ->
       StanzaID;
     _ ->
-      empty
+      0
   end.
 
 %%%===================================================================
@@ -1710,7 +1950,13 @@ handle_sub_els(chat, [#message_displayed{id = OriginID} = Displayed], From, To) 
     _ ->
       Displayed2 = filter_packet(Displayed,BareJID),
       StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
-      update_metainfo(displayed, LServer,LUser,Conversation,StanzaID)
+      IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID),
+      case IsEncrypted of
+        true ->
+          update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,true);
+        _ ->
+          update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,false)
+      end
   end;
 handle_sub_els(chat, [#message_received{id = OriginID} = Delivered], From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
@@ -1719,7 +1965,13 @@ handle_sub_els(chat, [#message_received{id = OriginID} = Delivered], From, To) -
   BareJID = jid:make(LUser,LServer),
   Delivered2 = filter_packet(Delivered,BareJID),
   StanzaID1 = get_stanza_id(Delivered2,BareJID,LServer,OriginID),
-  update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1);
+  IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID1),
+  case IsEncrypted of
+    true ->
+      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,true);
+    _ ->
+      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,false)
+  end;
 handle_sub_els(headline, [#unique_received{} = UniqueReceived], From, To) ->
   case UniqueReceived of
     #unique_received{forwarded = Forwarded} when Forwarded =/= undefined ->
@@ -1848,11 +2100,38 @@ time_now() ->
   {MSec, Sec, USec} = erlang:timestamp(),
   (MSec*1000000 + Sec)*1000000 + USec.
 
-make_sql_query(LServer, User, TS, RSM) when TS == 0 orelse TS == <<"0">> ->
+make_sql_query(LServer, User, TS, RSM, Form) when TS == 0 orelse TS == <<"0">> ->
   {Max, Direction, Chat} = get_max_direction_chat(RSM),
   SServer = ejabberd_sql:escape(LServer),
   SUser = ejabberd_sql:escape(User),
   Timestamp = TS,
+  Pinned =  proplists:get_value(filter_pinned, Form),
+  PinnedFirst = proplists:get_value(pinned_first, Form),
+  Archived = proplists:get_value(filter_archived, Form),
+  PinnedClause = case Pinned of
+                  false ->
+                    [<<"and pinned = false ">>];
+                  true ->
+                    [<<"and pinned = true ">>];
+                  _ ->
+                    []
+                end,
+  ArchivedClause = case Archived of
+                   false ->
+                     [<<"and archived = false ">>];
+                   true ->
+                     [<<"and archived = true ">>];
+                   _ ->
+                     []
+                 end,
+  PinnedFirstClause = case PinnedFirst of
+                   false ->
+                     [];
+                   true ->
+                     [<<" pinned desc, pinned_at desc, ">>];
+                   _ ->
+                     []
+                 end,
   LimitClause = if is_integer(Max), Max >= 0 ->
     [<<" limit ">>, integer_to_binary(Max)];
                   true ->
@@ -1866,7 +2145,8 @@ make_sql_query(LServer, User, TS, RSM) when TS == 0 orelse TS == <<"0">> ->
   delivered_until,
   displayed_until,
   updated_at,
-  status
+  status,
+  encrypted
   from conversation_metadata where username = '">>,SUser,<<"' and
   metadata_updated_at > '">>,Timestamp,<<"' and status != 'deleted' ">>],
   PageClause = case Chat of
@@ -1885,36 +2165,66 @@ make_sql_query(LServer, User, TS, RSM) when TS == 0 orelse TS == <<"0">> ->
   Query = case ejabberd_sql:use_new_schema() of
             true ->
               [Conversations,<<" and server_host='">>,
-                SServer, <<"' ">>,PageClause];
+                SServer, <<"' ">>,PageClause, PinnedClause, ArchivedClause];
             false ->
-              [Conversations,PageClause]
+              [Conversations,PageClause, PinnedClause, ArchivedClause]
           end,
   QueryPage =
     case Direction of
       before ->
         [<<"SELECT * FROM (">>, Query,
           <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until, displayed_until,
-  updated_at,status ORDER BY updated_at ASC ">>,
-          LimitClause, <<") AS c ORDER BY updated_at DESC;">>];
+  updated_at, status, encrypted, pinned, pinned_at, archived, archived_at ORDER BY updated_at ASC ">>,
+          LimitClause, <<") AS c ORDER BY ">>, PinnedFirstClause ,<<" updated_at DESC;">>];
       _ ->
-        [Query, <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status
-        ORDER BY updated_at DESC ">>,
+        [Query, <<" GROUP BY conversation, retract, type, conversation_thread, read_until,
+        delivered_until,  displayed_until, updated_at, status, encrypted, pinned, pinned_at, archived, archived_at
+        ORDER BY ">>, PinnedFirstClause ,<<" updated_at DESC ">>,
           LimitClause, <<";">>]
     end,
   case ejabberd_sql:use_new_schema() of
     true ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,<<" and server_host='">>,
         SServer, <<"' ">>,
-        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status) as subquery;">>]};
+        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,
+        displayed_until, updated_at, status, encrypted, pinned, pinned_at, archived, archived_at) as subquery;">>]};
     false ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,
-        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status) as subquery;">>]}
+        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,
+        displayed_until, updated_at, status, encrypted, pinned, pinned_at, archived, archived_at) as subquery;">>]}
   end;
-make_sql_query(LServer, User, TS, RSM) ->
+make_sql_query(LServer, User, TS, RSM, Form) ->
   {Max, Direction, Chat} = get_max_direction_chat(RSM),
   SServer = ejabberd_sql:escape(LServer),
   SUser = ejabberd_sql:escape(User),
   Timestamp = ejabberd_sql:escape(TS),
+  Pinned =  proplists:get_value(filter_pinned, Form),
+  PinnedFirst = proplists:get_value(pinned_first, Form),
+  Archived = proplists:get_value(filter_archived, Form),
+  PinnedClause = case Pinned of
+                   false ->
+                     [<<"and pinned = false ">>];
+                   true ->
+                     [<<"and pinned = true ">>];
+                   _ ->
+                     []
+                 end,
+  ArchivedClause = case Archived of
+                     false ->
+                       [<<"and archived = false ">>];
+                     true ->
+                       [<<"and archived = true ">>];
+                     _ ->
+                       []
+                   end,
+  PinnedFirstClause = case PinnedFirst of
+                        false ->
+                          [];
+                        true ->
+                          [<<" pinned desc, pinned_at desc, ">>];
+                        _ ->
+                          []
+                      end,
   LimitClause = if is_integer(Max), Max >= 0 ->
     [<<" limit ">>, integer_to_binary(Max)];
                   true ->
@@ -1928,7 +2238,8 @@ make_sql_query(LServer, User, TS, RSM) ->
   delivered_until,
   displayed_until,
   updated_at,
-  status
+  status,
+  encrypted
   from conversation_metadata where username = '">>,SUser,<<"' and 
   metadata_updated_at > '">>,Timestamp,<<"'">>],
   PageClause = case Chat of
@@ -1947,9 +2258,9 @@ make_sql_query(LServer, User, TS, RSM) ->
   Query = case ejabberd_sql:use_new_schema() of
             true ->
               [Conversations,<<" and server_host='">>,
-                SServer, <<"' ">>,PageClause];
+                SServer, <<"' ">>,PageClause, PinnedClause, ArchivedClause];
             false ->
-              [Conversations,PageClause]
+              [Conversations,PageClause, PinnedClause, ArchivedClause]
           end,
   QueryPage =
     case Direction of
@@ -1959,21 +2270,24 @@ make_sql_query(LServer, User, TS, RSM) ->
         % 2.5 Requesting the Last Page in a Result Set
         [<<"SELECT * FROM (">>, Query,
           <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until, displayed_until,
-  updated_at,status ORDER BY updated_at ASC ">>,
-          LimitClause, <<") AS c ORDER BY updated_at DESC;">>];
+  updated_at, status, encrypted, pinned, pinned_at, archived, archived_at ORDER BY updated_at ASC ">>,
+          LimitClause, <<") AS c ORDER BY ">>, PinnedFirstClause ,<<" updated_at DESC;">>];
       _ ->
-        [Query, <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status
-        ORDER BY updated_at DESC ">>,
+        [Query, <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status, encrypted,
+        pinned, pinned_at, archived, archived_at
+        ORDER BY ">>, PinnedFirstClause ,<<" updated_at DESC ">>,
           LimitClause, <<";">>]
     end,
   case ejabberd_sql:use_new_schema() of
     true ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,<<" and server_host='">>,
         SServer, <<"' ">>,
-        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status) as subquery;">>]};
+        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until,
+        updated_at, status, encrypted, pinned, pinned_at, archived, archived_at ) as subquery;">>]};
     false ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,
-        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status) as subquery;">>]}
+        <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until,
+        updated_at, status, encrypted, pinned, pinned_at, archived, archived_at ) as subquery;">>]}
   end.
 
 
@@ -1997,6 +2311,108 @@ delete_conversations(UserJID,Conversations) ->
     delete_conversation(LServer,LUser,Conversation)
                 end, ConvList).
 
+pin_conversation(#jid{lserver = LServer, luser = LUser}, #xabber_conversation{type = Type, jid = ConversationJID, thread = Thread}, Lang) ->
+  TS = time_now(),
+  Conversation = jid:to_string(ConversationJID),
+  IsArchived = is_archived(LServer,LUser,Conversation,Type,Thread),
+  case IsArchived of
+    false ->
+      case ejabberd_sql:sql_query(
+        LServer,
+        ?SQL("update conversation_metadata set pinned = 'true', pinned_at=%(TS)d where username = %(LUser)s and conversation = %(Conversation)s
+    and type = %(Type)s and conversation_thread = %(Thread)s")) of
+        {updated,N} when N > 0 ->
+          make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,pinned);
+        _ ->
+          {error,xmpp:err_item_not_found()}
+      end;
+    true ->
+      Txt = <<"Message cannot be pinned because it in archive. Remove from archive before pin">>,
+      {error, xmpp:err_bad_request(Txt,Lang)};
+    _ ->
+      error
+  end;
+pin_conversation(_JID,_Conv,_Lang) ->
+  {error,xmpp:err_bad_request()}.
+
+unpin_conversation(#jid{lserver = LServer, luser = LUser}, #xabber_conversation{type = Type, jid = ConversationJID, thread = Thread}, Lang) ->
+  TS = 0,
+  Conversation = jid:to_string(ConversationJID),
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set pinned = 'false', pinned_at=%(TS)d where username = %(LUser)s and conversation = %(Conversation)s
+    and type = %(Type)s and conversation_thread = %(Thread)s")) of
+    {updated,N} when N > 0 ->
+      make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,unpinned);
+    _ ->
+      {error,xmpp:err_item_not_found()}
+  end;
+unpin_conversation(_JID,_Conv,_Lang) ->
+  {error,xmpp:err_bad_request()}.
+
+archive_conversation(#jid{lserver = LServer, luser = LUser}, #xabber_conversation{type = Type, jid = ConversationJID, thread = Thread},Lang) ->
+  TS = time_now(),
+  Conversation = jid:to_string(ConversationJID),
+  IsPinned = is_pinned(LServer,LUser,Conversation,Type,Thread),
+  case IsPinned of
+    false ->
+      case ejabberd_sql:sql_query(
+        LServer,
+        ?SQL("update conversation_metadata set archived = 'true', archived_at=%(TS)d where username = %(LUser)s and conversation = %(Conversation)s
+    and type = %(Type)s and conversation_thread = %(Thread)s")) of
+        {updated,N} when N > 0 andalso IsPinned =/= true ->
+          make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,archived);
+        _ ->
+          {error,xmpp:err_item_not_found()}
+      end;
+    true ->
+      Txt = <<"Unpin message before archivation">>,
+      {error, xmpp:err_bad_request(Txt,Lang)};
+    _ ->
+      error
+  end;
+archive_conversation(_JID,_Conv,_Lang) ->
+  {error,xmpp:err_bad_request()}.
+
+unarchive_conversation(#jid{lserver = LServer, luser = LUser}, #xabber_conversation{type = Type, jid = ConversationJID, thread = Thread},Lang) ->
+  TS = time_now(),
+  Conversation = jid:to_string(ConversationJID),
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set archived = 'false', archived_at=0 where username = %(LUser)s and conversation = %(Conversation)s
+    and type = %(Type)s and conversation_thread = %(Thread)s")) of
+    {updated,N} when N > 0 ->
+      make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,unarchived);
+    _ ->
+      {error,xmpp:err_item_not_found()}
+  end;
+unarchive_conversation(_JID,_Conv,_Lang) ->
+  {error,xmpp:err_bad_request()}.
+
+is_pinned(LServer,LUser,Conversation,Type,Thread) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(pinned)b
+       from conversation_metadata where username = %(LUser)s and conversation = %(Conversation)s
+    and type = %(Type)s and conversation_thread = %(Thread)s")) of
+    {selected,[{Query}]} ->
+      Query;
+    _ ->
+      error
+  end.
+
+is_archived(LServer,LUser,Conversation,Type,Thread) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(archived)b
+       from conversation_metadata where username = %(LUser)s and conversation = %(Conversation)s
+    and type = %(Type)s and conversation_thread = %(Thread)s")) of
+    {selected,[{Query}]} ->
+      Query;
+    _ ->
+      error
+  end.
+
 delete_conversation(LServer,LUser,Conversation) ->
   TS = time_now(),
   case ejabberd_sql:sql_query(
@@ -2010,7 +2426,7 @@ delete_conversation(LServer,LUser,Conversation) ->
 
 parse_conv(Convs) ->
   lists:map(fun(Con) ->
-    #xabber_conversation{jid = JID} = Con,
+    #xabber_conversation{jid = JID, type = Type} = Con,
     jid:to_string(jid:remove_resource(JID))
             end, Convs).
 
@@ -2076,7 +2492,28 @@ make_ccc_push(LServer,LUser,Conversation, TS, deleted) ->
     ejabberd_router:route(IQ)
                 end, UserResources).
 
-create_conversation(LServer,LUser,Conversation) ->
+make_ccc_push(LServer,LUser,Conversation, TS, Type, Thread, PushType) ->
+  Element = case PushType of
+              pinned ->
+                #xabber_pinned_conversation{};
+              archived ->
+                #xabber_archived_conversation{};
+              unarchived ->
+                #xabber_unarchived_conversation{};
+              unpinned ->
+                #xabber_unpinned_conversation{}
+            end,
+  UserResources = ejabberd_sm:user_resources(LUser,LServer),
+  Conv = #xabber_conversation{jid = jid:from_string(Conversation), type = Type, thread = Thread, sub_els = [Element]},
+  Query = #xabber_synchronization_query{stamp = integer_to_binary(TS), sub_els = [Conv]},
+  lists:foreach(fun(Res) ->
+    From = jid:make(LUser,LServer),
+    To = jid:make(LUser,LServer,Res),
+    IQ = #iq{from = From, to = To, type = set, id = randoms:get_string(), sub_els = [Query]},
+    ejabberd_router:route(IQ)
+                end, UserResources).
+
+create_conversation(LServer,LUser,Conversation,Thread,Encrypted) ->
   TS = time_now(),
   Status = <<"active">>,
   ?SQL_UPSERT(
@@ -2084,7 +2521,9 @@ create_conversation(LServer,LUser,Conversation) ->
     "conversation_metadata",
     ["!username=%(LUser)s",
       "!conversation=%(Conversation)s",
+      "!encrypted=%(Encrypted)b",
       "updated_at=%(TS)d",
+      "conversation_thread=%(Thread)s",
       "metadata_updated_at=%(TS)d",
       "status=%(Status)s",
       "server_host=%(LServer)s"]).

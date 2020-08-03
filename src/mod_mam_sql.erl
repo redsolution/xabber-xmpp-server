@@ -30,7 +30,7 @@
 
 %% API
 -export([init/2, remove_user/2, remove_room/3, delete_old_messages/3,
-	 get_columns_and_from/0, get_user_and_bare_peer/3, get_odbctype_and_escape/1,
+	 get_columns_and_from/0, get_user_and_bare_peer/3, get_odbctype_and_escape/1, is_encrypted/2,
 	 extended_fields/0, store/8, write_prefs/4, get_prefs/2, select/6, export/1, make_archive_el/8]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
@@ -91,7 +91,7 @@ delete_old_messages(ServerHost, TimeStamp, Type) ->
     ok.
 
 extended_fields() ->
-    [{withtext, <<"">>},
+    [{withtext, <<"">>},{'stanza-id',<<"">>},
       {last, false}].
 
 -spec get_user_and_bare_peer({binary(), binary()},
@@ -111,6 +111,15 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
             {LUser, LHost}, Type, Peer),
     LPeer = jid:encode(
 	      jid:tolower(Peer)),
+    References = filter_all_except_references(Pkt),
+    Is_image = search_in_references(References,<<"image">>),
+  Is_audio = search_in_references(References,<<"audio">>),
+  Is_video = search_in_references(References,<<"video">>),
+  Is_document = search_in_references(References,<<"application">>),
+  Is_voice = search_element_in_references(References,#voice_message{}),
+  Is_geo = search_element_in_references(References,#geoloc{}),
+  Is_sticker = search_element_in_references(References,#sticker{}),
+  Is_encrypted = is_encrypted(Pkt),
     XML = fxml:element_to_binary(Pkt),
     Body = fxml:get_subtag_cdata(Pkt, <<"body">>),
     SType = misc:atom_to_binary(Type),
@@ -126,12 +135,91 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
                "xml=%(XML)s",
                "txt=%(Body)s",
                "kind=%(SType)s",
+               "image=%(Is_image)b",
+               "video=%(Is_video)b",
+               "audio=%(Is_audio)b",
+               "document=%(Is_document)b",
+                "geo=%(Is_geo)b",
+                "sticker=%(Is_sticker)b",
+                "voice=%(Is_voice)b",
+                "encrypted=%(Is_encrypted)b",
                "nick=%(Nick)s"])) of
 	{updated, _} ->
 	    ok;
 	Err ->
 	    Err
     end.
+
+is_encrypted(LServer,StanzaID) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(encrypted)b
+       from archive where timestamp=%(StanzaID)d")) of
+    {selected,[{Encrypted}]} ->
+      Encrypted;
+    _ ->
+      false
+  end.
+
+is_encrypted(Pkt0) ->
+  Pkt = xmpp:decode(Pkt0),
+  Encrypted = xmpp:get_subtag(Pkt, #encrypted_message{}),
+  case Encrypted of
+    #encrypted_message{} ->
+      true;
+    _ ->
+      false
+  end.
+
+filter_all_except_references(Pkt) ->
+  Els = xmpp:get_els(Pkt),
+  NewEls = lists:filter(
+    fun(El) ->
+      Name = xmpp:get_name(El),
+      NS = xmpp:get_ns(El),
+      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
+        try xmpp:decode(El) of
+          #xmppreference{} ->
+            true
+        catch _:{xmpp_codec, _} ->
+          false
+        end;
+        true ->
+          false
+      end
+    end, Els),
+  DecodedEls = lists:map(fun(El) -> xmpp:decode(El) end, NewEls),
+  DecodedEls.
+
+search_in_references(References,SearchType) ->
+  Array = lists:map(fun(Reference) ->
+    File = xmpp:get_subtag(Reference, #xabber_file_sharing{}),
+    case File of
+      #xabber_file_sharing{file = #xabber_file{type = MediaType}} when MediaType =/= undefined ->
+        Type = hd(binary:split(MediaType,<<"/">>,[global])),
+        case Type of
+          SearchType ->
+            true;
+          _ ->
+            false
+        end;
+      _ ->
+        false
+    end
+            end, References),
+  lists:member(true,Array).
+
+search_element_in_references(References,Element) ->
+  Array = lists:map(fun(Reference) ->
+    File = xmpp:get_subtag(Reference, Element),
+    case File of
+      Element ->
+        true;
+      _ ->
+        false
+    end
+                    end, References),
+  lists:member(true,Array).
 
 write_prefs(LUser, _LServer, #archive_prefs{default = Default,
 					   never = Never,
@@ -303,6 +391,14 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
     With = proplists:get_value(with, MAMQuery),
     WithText = proplists:get_value(withtext, MAMQuery),
     Last = proplists:get_value(last, MAMQuery),
+    FilterAudio = proplists:get_value(filter_audio, MAMQuery),
+    FilterVideo = proplists:get_value(filter_video, MAMQuery),
+    FilterDocument = proplists:get_value(filter_document, MAMQuery),
+    FilterEncrypted = proplists:get_value(filter_encrypted, MAMQuery),
+    FilterVoice = proplists:get_value(filter_voice, MAMQuery),
+    FilterSticker = proplists:get_value(filter_sticker, MAMQuery),
+    FilterGeo = proplists:get_value(filter_geo, MAMQuery),
+    FilterImage = proplists:get_value(filter_image, MAMQuery),
     {Max, Direction, ID} = get_max_direction_id(RSM),
     {ODBCType, Escape} = get_odbctype_and_escape(LServer),
     DistinctColumn = <<"bare_peer">>,
@@ -385,6 +481,70 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
 												 [<<" and timestamp = ">>,
 													 StanzaId]
 										 end,
+    ImageClause = case FilterImage of
+                    false ->
+                      [<<"and image = false ">>];
+                    true ->
+                      [<<"and image = true ">>];
+                    _ ->
+                      []
+                  end,
+  AudioClause = case FilterAudio of
+                  false ->
+                    [<<"and audio = false ">>];
+                  true ->
+                    [<<"and audio = true ">>];
+                  _ ->
+                    []
+                end,
+  VideoClause = case FilterVideo of
+             false ->
+               [<<"and video = false ">>];
+             true ->
+               [<<"and video = true ">>];
+             _ ->
+               []
+           end,
+  GeoClause = case FilterGeo of
+             false ->
+               [<<"and geo = false ">>];
+             true ->
+               [<<"and geo = true ">>];
+             _ ->
+               []
+           end,
+  EncryptedClause = case FilterEncrypted of
+             false ->
+               [<<"and encrypted = false ">>];
+             true ->
+               [<<"and encrypted = true ">>];
+             _ ->
+               []
+           end,
+  VoiceClause = case FilterVoice of
+             false ->
+               [<<"and voice = false ">>];
+             true ->
+               [<<"and voice = true ">>];
+             _ ->
+               []
+           end,
+  StickerClause = case FilterSticker of
+             false ->
+               [<<"and sticker = false ">>];
+             true ->
+               [<<"and sticker = true ">>];
+             _ ->
+               []
+           end,
+  DocumentClause = case FilterDocument of
+             false ->
+               [<<"and document = false ">>];
+             true ->
+               [<<"and document = true ">>];
+             _ ->
+               []
+           end,
     SUser = Escape(User),
     SServer = Escape(LServer),
     {Columns, From} = mod_previous:get_archive_columns_and_from(get_columns_and_from()),
@@ -395,12 +555,14 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
                  <<" WHERE username='">>,
                  SUser, <<"' and archive.server_host='">>,
                  SServer, <<"'">>, WithClause, WithTextClause,
-                 StartClause, EndClause, PageClause,StanzaIdClause];
+                 StartClause, EndClause, PageClause, StanzaIdClause, ImageClause,
+                  AudioClause, VideoClause, VoiceClause, DocumentClause, StickerClause, GeoClause, EncryptedClause];
             false ->
                 [<<"SELECT ">>, TopClause, DistinctClause, Columns, From,
                  <<" WHERE username='">>,
                  SUser, <<"'">>, WithClause, WithTextClause,
-                 StartClause, EndClause, PageClause,StanzaIdClause]
+                 StartClause, EndClause, PageClause, StanzaIdClause, ImageClause,
+                  AudioClause, VideoClause, VoiceClause, DocumentClause, StickerClause, GeoClause, EncryptedClause]
         end,
 
     QueryPage =
@@ -411,12 +573,12 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
 		% 2.5 Requesting the Last Page in a Result Set
 		[<<"SELECT * FROM (">>, Query,
 		 <<" ORDER BY ">>, DistinctOrderByColumn,
-		 <<"timestamp DESC ">>,
+		 <<"timestamp + 0 DESC ">>,
 		 LimitClause, <<") AS t ORDER BY timestamp ASC;">>];
     {_, true} ->
       [<<"SELECT * FROM (">>, Query,
         <<" ORDER BY ">>, DistinctOrderByColumn,
-        <<" timestamp DESC) AS t ORDER BY timestamp ASC ">>,
+        <<" timestamp + 0 DESC) AS t ORDER BY timestamp ASC ">>,
         LimitClause, <<";">>];
 	    _ ->
 		[Query, <<" ORDER BY timestamp ASC ">>,
@@ -428,12 +590,16 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
              [<<"SELECT COUNT(">>, CountExpression,<<") FROM archive WHERE username='">>,
               SUser, <<"' and server_host='">>,
               SServer, <<"'">>, WithClause, WithTextClause,
-              StartClause, EndClause,StanzaIdClause, <<";">>]};
+              StartClause, EndClause, StanzaIdClause, ImageClause,
+               AudioClause, VideoClause, VoiceClause, DocumentClause,
+               StickerClause, GeoClause, EncryptedClause, <<";">>]};
         false ->
             {QueryPage,
              [<<"SELECT COUNT(">>, CountExpression,<<") FROM archive WHERE username='">>,
               SUser, <<"'">>, WithClause, WithTextClause,
-              StartClause, EndClause,StanzaIdClause, <<";">>]}
+              StartClause, EndClause, StanzaIdClause, ImageClause,
+               AudioClause, VideoClause, VoiceClause, DocumentClause,
+               StickerClause, GeoClause, EncryptedClause, <<";">>]}
     end.
 
 -spec get_max_direction_id(rsm_set() | undefined) ->

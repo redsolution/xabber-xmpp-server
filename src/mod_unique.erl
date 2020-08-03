@@ -278,8 +278,8 @@ remove_request(Pkt,_Request) ->
 disco_sm_features({error, Err}, _From, _To, _Node, _Lang) ->
     {error, Err};
 disco_sm_features(empty, _From, _To, <<"">>, _Lang) ->
-    {result, [?NS_UNIQUE]};
+    {result, [?NS_UNIQUE, ?NS_XABBER_ARCHIVE]};
 disco_sm_features({result, Feats}, _From, _To, <<"">>, _Lang) ->
-    {result, [?NS_UNIQUE|Feats]};
+    {result, [?NS_UNIQUE, ?NS_XABBER_ARCHIVE |Feats]};
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
     Acc.

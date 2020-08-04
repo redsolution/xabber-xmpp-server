@@ -507,7 +507,7 @@ handle_pubsub(ChatJID,UserJID,ID,#avatar_data{data = Data}) ->
     [{ID,AvaSize,AvaType,_AvaUrl}] ->
       <<"image/",Type/binary>> = AvaType,
       Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
-      UrlDir = gen_mod:get_module_opt(Server, ?MODULE, get_url),
+      UrlDir = get_url(Server),
       Name = <<ID/binary, ".", Type/binary >>,
       Url = <<UrlDir/binary, "/", Name/binary>>,
       File = <<Path/binary, "/" , Name/binary>>,
@@ -631,7 +631,7 @@ get_photo_meta(Server,User,Chat)->
     _ ->
       [{Hash,AvatarSize,AvatarType,_AvatarOldStyle}] = Meta,
       <<"image/",Type/binary>> = AvatarType,
-      Url = gen_mod:get_module_opt(Server, ?MODULE, get_url),
+      Url = get_url(Server),
       Name = <<Hash/binary, ".", Type/binary >>,
       AvatarUrl = <<Url/binary, "/", Name/binary>>,
       Info = #avatar_info{bytes = AvatarSize, type = AvatarType, id = Hash, url = AvatarUrl},
@@ -821,7 +821,7 @@ get_vcard_avatar(Server,Chat,User) ->
       case file:read_file(File) of
         {ok,Binary} ->
           Size = byte_size(Binary),
-          UrlDir = gen_mod:get_module_opt(Server, ?MODULE, get_url),
+          UrlDir = get_url(Server),
           Url = <<UrlDir/binary, "/", File/binary>>,
           [{Hash,Size,ImageType,Url}];
         _ ->
@@ -889,7 +889,7 @@ update_metadata_user_put_by_id(Server, UserID, AvatarID, AvatarType, AvatarSize,
 
 update_data_user_put(Server, UserID, Data, Hash, Chat) ->
   Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
-  UrlDir = gen_mod:get_module_opt(Server, ?MODULE, get_url),
+  UrlDir = get_url(Server),
   TypeRaw = eimp:get_type(Data),
   Type = atom_to_binary(TypeRaw, latin1),
   Name = <<Hash/binary, ".", Type/binary >>,
@@ -1097,3 +1097,7 @@ get_hash_and_type(Photo) ->
   #vcard_photo{type = TypeRaw, binval = Binval} = Photo,
   Hash = get_hash(Binval),
   {Hash,TypeRaw}.
+
+get_url(Host) ->
+  Url = gen_mod:get_module_opt(Host, ?MODULE, get_url),
+  mod_http_upload:expand_host(Url, Host).

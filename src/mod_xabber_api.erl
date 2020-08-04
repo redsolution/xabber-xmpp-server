@@ -350,7 +350,7 @@ xabber_registered_vhosts() ->
   ?MYHOSTS.
 
 xabber_registered_users(Host) ->
-  Users = ejabberd_auth:get_users(Host),
+  Users = get_users(Host),
   SUsers = lists:sort(Users),
   UserAndBackends = lists:map(fun({U,_S, B}) -> {U,B} end, SUsers),
   UserAndBackends.
@@ -573,3 +573,34 @@ validate_membership(Membership) ->
 
 validate_index(Index) ->
   lists:member(Index,[<<"none">>, <<"local">>, <<"global">>]).
+
+get_users(Server) ->
+  get_users(Server, []).
+
+
+get_users(Server, Opts) ->
+  case jid:nameprep(Server) of
+    error -> [];
+    LServer ->
+      lists:flatmap(
+        fun(M) -> db_get_users(LServer, Opts, M) end,
+        auth_modules(LServer))
+  end.
+
+db_get_users(Server, Opts, {Mod,Auth}) ->
+  case erlang:function_exported(Mod, get_users, 2) of
+    true ->
+      lists:map(fun({U,S}) ->
+        {U,S,Auth} end,
+      Mod:get_users(Server, Opts));
+    false ->
+      []
+  end.
+
+auth_modules(Server) ->
+  LServer = jid:nameprep(Server),
+  Default = [sql, ldap],
+  Methods = ejabberd_config:get_option({auth_method, LServer}, Default),
+  [{ejabberd:module_name([<<"ejabberd">>, <<"auth">>,
+    misc:atom_to_binary(M)]), misc:atom_to_binary(M)}
+    || M <- Methods].

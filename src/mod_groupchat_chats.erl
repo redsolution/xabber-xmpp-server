@@ -861,14 +861,14 @@ form_list(Elements) ->
 get_name_desc(Server,Chat) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(name)s,@(description)s
+    ?SQL("select @(name)s,@(description)s,@(anonymous)s,@(searchable)s,@(model)s,@(parent_chat)s
     from groupchats where jid=%(Chat)s and %(Server)H")) of
     {selected,[]} ->
-      {<<>>,<<>>};
-    {selected,[{Name,Desc}]} ->
-      {Name,Desc};
+      {<<>>,<<>>,<<>>,<<>>,<<>>,undefined};
+    {selected,[{Name,Desc,Privacy,Index,Membership,ParentChat}]} ->
+      {Name,Desc,Privacy,Index,Membership,ParentChat};
     _ ->
-      {<<>>,<<>>}
+      {<<>>,<<>>,<<>>,<<>>,<<>>,undefined}
   end.
 
 get_status_label_name(LServer,Chat,Status) ->

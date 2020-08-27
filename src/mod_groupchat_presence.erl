@@ -45,7 +45,7 @@
          process_presence/1,
   send_info_to_index/2, get_global_index/1, send_message_to_index/2,
   chat_created/4, groupchat_changed/4,
-  change_present_state/2, revoke_invite/2
+  change_present_state/2, revoke_invite/2, define_human_status/1
         ]).
 
 %% records
@@ -311,6 +311,7 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   UserCard = mod_groupchat_users:form_user_card(User,Chat),
   ChatJIDRes = jid:replace_resource(ChatJID,<<"Groupchat">>),
   Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
+  ?INFO_MSG("Unsubscribe hook ~p~n",[Result]),
   case Result of
     ok ->
       mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
@@ -484,46 +485,23 @@ form_presence(ChatJID, Show, Status) ->
 form_presence(Chat,User) ->
   ChatJID = jid:from_string(Chat),
   LServer = ChatJID#jid.lserver,
-  {selected,[{Name,Anonymous,Search,Model,Desc,Message,ContactList,DomainList,ParentChat,Status}]} =
+  {selected,[{Name,Anonymous,_Search,_Model,_Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
     mod_groupchat_chats:get_all_information_chat(Chat,LServer),
   {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(LServer,Chat),
   Members = list_to_binary(MembersC),
-  ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',Chat),
-  AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
-  UniqueOnline = lists:usort(AllUsersSession),
-  Present = integer_to_binary(length(UniqueOnline)),
   {CollectState,P2PState} = mod_groupchat_inspector:get_collect_state(Chat,User),
   Hash = mod_groupchat_inspector:get_chat_avatar_id(Chat),
   VcardX = #vcard_xupdate{hash = Hash},
-  Pinned = case Message of
-             null ->
-               <<>>;
-             0 ->
-               <<>>;
-             _ when is_integer(Message), Message > 0 ->
-               integer_to_binary(Message);
-             _ when is_binary(Message) ->
-               Message
-           end,
   SubEls = case ParentChat of
              <<"0">> ->
                [
                  #xabbergroupchat_x{
                    xmlns = ?NS_GROUPCHAT,
                    members = Members,
-                   present = Present,
                    sub_els = [
-                     #xabbergroupchat_description{cdata = Desc},
-                     #xabbergroupchat_membership{cdata = Model},
-                     #xabbergroupchat_index{cdata = Search},
-                     #xabbergroupchat_name{cdata = Name},
                      #xabbergroupchat_privacy{cdata = Anonymous},
-                     #xabbergroupchat_pinned_message{cdata = Pinned},
-                     #xabbergroup_domains{domain = form_list(DomainList)},
-                     #xabbergroup_contacts{contact = form_list(ContactList)},
                      #collect{cdata = CollectState},
-                     #xabbergroup_peer{cdata = P2PState},
-                     #xabbergroupchat_status{cdata = Status}
+                     #xabbergroup_peer{cdata = P2PState}
                    ]
                  },
                  VcardX
@@ -533,18 +511,10 @@ form_presence(Chat,User) ->
                  #xabbergroupchat_x{
                    xmlns = ?NS_GROUPCHAT,
                    members = Members,
-                   present = Present,
                    parent = jid:from_string(ParentChat),
                    sub_els = [
-                     #xabbergroupchat_description{cdata = Desc},
-                     #xabbergroupchat_membership{cdata = Model},
-                     #xabbergroupchat_index{cdata = Search},
                      #xabbergroupchat_name{cdata = Name},
-                     #xabbergroupchat_privacy{cdata = Anonymous},
-                     #xabbergroupchat_pinned_message{cdata = Pinned},
-                     #xabbergroup_domains{domain = form_list(DomainList)},
-                     #xabbergroup_contacts{contact = form_list(ContactList)},
-                     #xabbergroupchat_status{cdata = Status}
+                     #xabbergroupchat_privacy{cdata = Anonymous}
                    ]
                  },
                  VcardX
@@ -555,11 +525,13 @@ form_presence(Chat,User) ->
   #presence{type = available, id = randoms:get_string(), sub_els = SubEls, status = [#text{data = HumanStatus}], show = Show}.
 
 define_human_status(<<"dnd">>) ->
-  <<"Busy">>;
+  <<"Curfew">>;
 define_human_status(<<"xa">>) ->
-  <<"Away for long time">>;
+  <<"Limited">>;
 define_human_status(<<"chat">>) ->
-  <<"Ready for chat">>;
+  <<"Fiesta">>;
+define_human_status(<<"away">>) ->
+  <<"Away">>;
 define_human_status(<<"inactive">>) ->
   <<"Inactive">>;
 define_human_status(_Status) ->
@@ -581,7 +553,7 @@ define_show(_Status) ->
 info_about_chat(ChatJid) ->
   S = jid:from_string(ChatJid),
   Server = S#jid.lserver,
-  {selected,[{Name,Anonymous,Search,Model,Desc,Message,_ContactList,_DomainList,Status}]} =
+  {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,Status}]} =
     mod_groupchat_chats:get_information_of_chat(ChatJid,Server),
   ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',ChatJid),
   AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
@@ -595,23 +567,10 @@ info_about_chat(ChatJid) ->
       present = Present,
       sub_els =
       [
-        #xabbergroupchat_description{cdata = Desc},
-        #xabbergroupchat_membership{cdata = Model},
-        #xabbergroupchat_index{cdata = Search},
         #xabbergroupchat_name{cdata = Name},
         #xabbergroupchat_privacy{cdata = Anonymous},
-        #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)},
-        #xabbergroup_domains{domain = []},
-        #xabbergroup_contacts{contact = []},
-        #xabbergroupchat_status{cdata = Status}
+        #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)}
       ]}, HumanStatus, Show}.
-
-
-form_list(Elements) ->
-  Splited = binary:split(Elements,<<",">>,[global]),
-  Empty = [X||X <- Splited, X == <<>>],
-  NotEmpty = Splited -- Empty,
-  NotEmpty.
 
 
 form_presence_vcard_update(Hash) ->

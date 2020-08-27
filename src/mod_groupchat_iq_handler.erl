@@ -271,7 +271,7 @@ make_action(#iq{type = set, to = To, from = From,
       NewOwner = Xa#xabbergroupchat_update.owner,
       case NewOwner of
         undefined ->
-          case mod_groupchat_inspector:update_chat(Server,To,ChatJid,Xa) of
+          case mod_groupchat_inspector:update_chat(Server,To,ChatJid,User,Xa) of
             ok ->
               ejabberd_router:route(xmpp:make_iq_result(Iq));
             _ ->
@@ -731,7 +731,8 @@ process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergro
   User = jid:to_string(jid:remove_resource(From)),
   Result = ejabberd_hooks:run_fold(groupchat_info_change, Server, [], [User,Chat,Server,FS]),
   case Result of
-    {ok, Form, Status} ->
+    {ok, Form, Status, Properties} ->
+      ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties]),
       ejabberd_hooks:run(groupchat_changed,Server,[Server,Chat,Status,User]),
       ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT, sub_els = [Form]}));
     not_allowed ->

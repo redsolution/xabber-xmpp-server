@@ -58,7 +58,7 @@
   parse_items_for_message/1,
   chat_information/9, detailed_chat_information/10,
   unblock_parse_chat/3,
-  update_chat/4,
+  update_chat/5,
   kick_user/3,
   update_avatar_id/7,
   update_chat_avatar_id/3,
@@ -95,9 +95,9 @@ depends(_Host, _Opts) -> [].
 
 mod_options(_Opts) -> [].
 
-update_chat(Server,To,ChatJid,Xa) ->
+update_chat(Server,To,Chat,User,Xa) ->
   {selected,[{Name,Anonymous,Search,Model,Desc,ChatMessage,ContactList,DomainList}]} =
-    mod_groupchat_sql:get_information_of_chat(ChatJid,Server),
+    mod_groupchat_sql:get_information_of_chat(Chat,Server),
   NewName = set_value(Name,Xa#xabbergroupchat_update.name),
   NewSearch = set_value(Search,Xa#xabbergroupchat_update.searchable),
   NewDesc = set_value(Desc,Xa#xabbergroupchat_update.description),
@@ -105,12 +105,22 @@ update_chat(Server,To,ChatJid,Xa) ->
   NewMessage = set_message(ChatMessage,Xa#xabbergroupchat_update.pinned),
   NewContactList = set_contacts(ContactList,Xa#xabbergroupchat_update.contacts),
   NewDomainList = set_domains(DomainList,Xa#xabbergroupchat_update.domains),
-  mod_groupchat_sql:update_groupchat(Server,ChatJid,NewName,NewSearch,NewDesc,NewModel,NewMessage,NewDomainList,NewContactList),
-  NewInfo = chat_information(NewName,ChatJid,Anonymous,NewSearch,
+  mod_groupchat_sql:update_groupchat(Server,Chat,NewName,NewSearch,NewDesc,NewModel,NewMessage,NewDomainList,NewContactList),
+  NewInfo = chat_information(NewName,Chat,Anonymous,NewSearch,
     NewModel,NewDesc,NewMessage,NewContactList,NewDomainList),
   mod_admin_extra:set_nickname(To#jid.luser,Server,NewName),
   UpdatePresence = mod_groupchat_presence:form_updated_presence(NewInfo),
-  {selected, AllUsers} = mod_groupchat_sql:user_list_of_channel(Server,ChatJid),
+  IsNameChanged = {name_changed, mod_groupchat_chats:is_value_changed(Name,NewName)},
+  IsDescChanged = {desc_changed, mod_groupchat_chats:is_value_changed(Desc,NewDesc)},
+  IsPinnedChanged = {pinned_changed, mod_groupchat_chats:is_value_changed(ChatMessage,NewMessage)},
+  IsOtherChanged = {properties_changed,
+    lists:member(true,[mod_groupchat_chats:is_value_changed(Search,NewSearch),
+      mod_groupchat_chats:is_value_changed(Model,NewModel),
+      mod_groupchat_chats:is_value_changed(DomainList,NewDomainList),
+      mod_groupchat_chats:is_value_changed(ContactList,NewContactList)])},
+  Properties = [IsNameChanged,IsDescChanged,IsPinnedChanged,IsOtherChanged],
+  ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties]),
+  {selected, AllUsers} = mod_groupchat_sql:user_list_of_channel(Server,Chat),
   FromChat = jid:replace_resource(To,<<"Groupchat">>),
   mod_groupchat_messages:send_message(UpdatePresence,AllUsers,FromChat).
 

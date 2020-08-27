@@ -42,7 +42,7 @@
   get_all_information_chat/2,
   status_options/2,
   get_name_desc/2,
-  get_status_label_name/3
+  get_status_label_name/3, is_value_changed/2
   ]).
 
 % Delete chat hook
@@ -217,9 +217,24 @@ change_chat(Acc,_User,Chat,Server,_FS) ->
   NewContacts = set_value(ContactList,get_value(contacts,Acc)),
   NewDomains = set_value(DomainList,get_value(domains,Acc)),
   update_groupchat(Server,Chat,NewName,NewDesc,NewMessage,NewStatus,NewMembership,NewIndex,NewContacts,NewDomains),
-  {stop, {ok,form_chat_information(Chat,Server,result),NewStatus}}.
+  IsNameChanged = {name_changed, is_value_changed(Name,NewName)},
+  IsDescChanged = {desc_changed, is_value_changed(Desc,NewDesc)},
+  IsStatusChanged = {status_changed, is_value_changed(Status,NewStatus)},
+  IsPinnedChanged = {pinned_changed, is_value_changed(ChatMessage,NewMessage)},
+  IsOtherChanged = {properties_changed, lists:member(true,[is_value_changed(Search,NewIndex),is_value_changed(Model,NewMembership),is_value_changed(DomainList,NewDomains),is_value_changed(ContactList,NewContacts)])},
+  ChangeDiff = [IsNameChanged,IsDescChanged,IsStatusChanged,IsPinnedChanged,IsOtherChanged],
+  ?INFO_MSG("Proplist ~p",[ChangeDiff]),
+  {stop, {ok,form_chat_information(Chat,Server,result),NewStatus,ChangeDiff}}.
 
 %%
+
+is_value_changed(OldValue,NewValue) ->
+  case OldValue of
+    NewValue ->
+      false;
+    _ ->
+      true
+  end.
 
 check_creator(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
   ?DEBUG("start fold ~p ~p ~p", [LServer,Creator, ChatJID]),

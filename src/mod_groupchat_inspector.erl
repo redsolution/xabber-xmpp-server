@@ -38,14 +38,12 @@
   add_user/5,
   get_users_from_chat/1,
   set_value/2,
-  user_handler/2,
   add_to_log/4,
   badge/2,
   nick/4,
   query_chat/1,
   new_parser/4,
   user_rights/5,
-  nick_and_avatar/3,
   create_chat/12,
   invite_right/2,
   user_exist/2,
@@ -68,7 +66,6 @@
   get_chat_avatar_id/1,
   is_anonim/2,
   get_user_id/3,
-  insert_nickname/4,
   is_user_alone/2,
   get_user_by_id/3,
   get_users_id_chat/2,
@@ -243,7 +240,15 @@ add_user_in_chat(_Acc, {_Admin,Chat,Server,
   #xabbergroupchat_invite{invite_jid =  User, reason = _Reason, send = _Send}}) ->
   Role = <<"member">>,
   Subscription = <<"wait">>,
-  add_user(Server,User,Role,Chat,Subscription).
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchat_users set subscription = %(Subscription)s where chatgroup=%(Chat)s
+              and username=%(User)s and subscription='none'")) of
+    {updated,N} when N > 0 ->
+      ok;
+    _ ->
+      add_user(Server,User,Role,Chat,Subscription)
+  end.
 
 send_invite(_Acc, {Admin,Chat,_Server,
   #xabbergroupchat_invite{invite_jid =  User, reason = Reason, send = Send}}) ->
@@ -272,17 +277,6 @@ message_invite(User,Chat,Admin,Reason) ->
       sub_els = [#xabbergroupchat_invite{user = U, reason = Reason}, #xabbergroupchat_x{anonymous = Anonymous}], body = [#text{lang = <<>>,data = Text}], meta = #{}}.
 
 
-insert_nickname(Server,User,Chat,Nick) ->
-  case ?SQL_UPSERT(Server, "groupchat_users",
-    ["!username=%(User)s",
-      "!chatgroup=%(Chat)s",
-      "nickname=%(Nick)s"]) of
-    ok ->
-      ok;
-    _Err ->
-      {error, db_failure}
-  end.
-
 user_rights(Server,Id,Chat,UserRequester,Lang) ->
   case Id of
     none ->
@@ -300,22 +294,6 @@ user_rights(Server,Id,Chat,UserRequester,Lang) ->
       end
   end.
 
-
-
-user_handler(_Acc, Presence) ->
-  #presence{to = To, from = From} = Presence,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  User = jid:to_string(jid:remove_resource(From)),
-  Server = To#jid.lserver,
-  Role = <<"member">>,
-  Subscription = <<"wait">>,
-  Status = mod_groupchat_inspector_sql:check_user(User,Server,Chat),
-  case Status of
-    exist ->
-      {stop,ok};
-    not_exist ->
-      add_user(Server,User,Role,Chat,Subscription)
-  end.
 
 create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,ModelRare,ChatMessage,Contacts,Domains) ->
   Anonymous = set_value(<<"public">>,Anon),
@@ -729,43 +707,6 @@ avatar(VcardImage,Avatar) ->
     _ ->
       bad_request
   end.
-
-nick_and_avatar(Server,User,Chat) ->
-  {selected,_Tables,Items} = ejabberd_sql:sql_query(
-    Server,
-    [
-      <<"select groupchat_users_vcard.givenfamily,groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,groupchat_users_info.nickname,
-  groupchat_users_vcard.image,groupchat_users_info.avatar
-  from ((groupchat_users
-  LEFT JOIN groupchat_users_vcard ON groupchat_users_vcard.jid = groupchat_users.username)
-  LEFT JOIN groupchat_users_info ON groupchat_users_info.username = groupchat_users.username and
-  groupchat_users_info.chatgroup = groupchat_users.chatgroup)
-  where groupchat_users.subscription = 'both' and groupchat_users.chatgroup = ">>,
-      <<"'">>,Chat,<<"' and groupchat_users.username =">>,
-      <<"'">>, User, <<"'">>
-    ])
-  ,
-  [[GV,FN,NickVcard,NickChat,VcardImage,Avatar]] = Items,
-  RandomNick = nick_generator:random_nick(),
-  Nick = case nick(GV,FN,NickVcard,NickChat) of
-           {ok,Nickname} ->
-             Nickname;
-           empty ->
-             insert_nickname(Server,User,Chat,RandomNick),
-             RandomNick;
-           _ ->
-             error
-         end,
-  Ava = case avatar(VcardImage,Avatar) of
-          {ok,Avatarka} ->
-            Avatarka;
-          empty ->
-            <<>>;
-          _ ->
-            error
-        end,
-  {Nick,Ava}.
 
 parse_list(List,Lang) ->
   lists:map(fun(N) -> parser(N,Lang) end, List).

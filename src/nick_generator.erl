@@ -26,7 +26,282 @@
 -module(nick_generator).
 -author('andrey.gagarin@redsolution.com').
 %% API
--export([random_nick/0]).
+-export([random_nick/3, init/1, handle_call/3, handle_cast/2]).
+-export([start/2, stop/1, mod_options/1, depends/2, reload/3, mod_opt_type/1]).
+-export([merge_avatar/3]).
+%%-export([delete_previous_block/3]).
+-behavior(gen_mod).
+-behavior(gen_server).
+-include("logger.hrl").
+-include("xmpp.hrl").
+
+%% records
+-record(state, {host = <<"">> :: binary()}).
+
+
+-spec start(binary(), gen_mod:opts()) -> ok.
+start(Host, Opts) ->
+  gen_mod:start_child(?MODULE, Host, Opts).
+
+-spec stop(binary()) -> ok.
+stop(Host) ->
+  gen_mod:stop_child(?MODULE, Host).
+
+-spec reload(binary(), gen_mod:opts(), gen_mod:opts()) -> ok.
+reload(Host, NewOpts, OldOpts) ->
+  NewMod = gen_mod:db_mod(Host, NewOpts, ?MODULE),
+  OldMod = gen_mod:db_mod(Host, OldOpts, ?MODULE),
+  if NewMod /= OldMod ->
+    NewMod:init(Host, NewOpts);
+    true ->
+      ok
+  end.
+
+%%mod_options(_) ->
+%%  [].
+
+mod_opt_type(pre_generated_images) ->
+  fun iolist_to_binary/1;
+mod_opt_type(pre_generated_images_count) ->
+  fun (I) when is_integer(I), I > 0 -> I end.
+
+mod_options(_Host) ->
+  [
+    %% Required option
+    pre_generated_images,
+    pre_generated_images_count
+  ].
+
+depends(_, _) ->
+  [{mod_groupchat_vcard, hard}].
+
+init([Host, _Opts]) ->
+  pre_generation(Host),
+  {ok, #state{host = Host}}.
+
+handle_call(_Request, _From, _State) ->
+  erlang:error(not_implemented).
+
+handle_cast({update,Server,File}, State) ->
+  ?INFO_MSG("Delete old file ~p and generate new",[File]),
+  file:delete(File),
+  generate_image(Server,1),
+  {noreply, State}.
+
+new_adjectives() ->
+  [
+    "Accepting",
+    "Accomplished",
+    "Aggravated",
+    "Agreeable",
+    "Alone",
+    "Amazed",
+    "Ambivalent",
+    "Amused",
+    "Angry",
+    "Animated",
+    "Annoyed",
+    "Anxious",
+    "Apathetic",
+    "Appreciative",
+    "Ashamed",
+    "Attractive",
+    "Awake",
+    "Awestruck",
+    "Awful",
+    "Bashful",
+    "Beautiful",
+    "Bewildered",
+    "Bitter",
+    "Bittersweet",
+    "Blah",
+    "Blank",
+    "Blissful",
+    "Bold",
+    "Bored",
+    "Bouncy",
+    "Brave",
+    "Calm",
+    "Candid",
+    "Cautious",
+    "Cheerful",
+    "Chilly",
+    "Chipper",
+    "Clever",
+    "Cold",
+    "Comfortable",
+    "Complacent",
+    "Composed",
+    "Confident",
+    "Confused",
+    "Content",
+    "Contented",
+    "Cool",
+    "Cranky",
+    "Crappy",
+    "Crazy",
+    "Crushed",
+    "Curious",
+    "Cynical",
+    "Delightful",
+    "Depressed",
+    "Determined",
+    "Devious",
+    "Dirty",
+    "Disappointed",
+    "Discontent",
+    "Disenchanted",
+    "Disgruntled",
+    "Disgusted",
+    "Distressed",
+    "Ditzy",
+    "Dorky",
+    "Drained",
+    "Dreadful",
+    "Drunk",
+    "Earnest",
+    "Easy",
+    "Easygoing",
+    "Ecstatic",
+    "Elated",
+    "Encouraging",
+    "Energetic",
+    "Enraged",
+    "Enthralled",
+    "Envious",
+    "Evenhanded",
+    "Evil",
+    "Exanimate",
+    "Excited",
+    "Exhausted",
+    "Festive",
+    "Flirty",
+    "Free",
+    "Fresh",
+    "Frustrated",
+    "Full",
+    "Geeky",
+    "Gentle",
+    "Giddy",
+    "Giggly",
+    "Glad",
+    "Gloomy",
+    "Glum",
+    "Good",
+    "Grateful",
+    "Groggy",
+    "Grouchy",
+    "Grumpy",
+    "Guilty",
+    "Happy",
+    "Heavy",
+    "High",
+    "Hopeful",
+    "Horrified",
+    "Hostile",
+    "Hot",
+    "Hungry",
+    "Hurtful",
+    "Hyper",
+    "Impressed",
+    "Indescribable",
+    "Indifferent",
+    "Infuriated",
+    "Intelligent",
+    "Irate",
+    "Irritated",
+    "Jealous",
+    "Jolly",
+    "Joyful",
+    "Jubilant",
+    "Kind",
+    "Lazy",
+    "Lethargic",
+    "Listless",
+    "Lonely",
+    "Loved",
+    "Loving",
+    "Mad",
+    "Melancholy",
+    "Mellow",
+    "Merry",
+    "Mischievous",
+    "Miserable",
+    "Moody",
+    "Morose",
+    "Mysterious",
+    "Nasty",
+    "Naughty",
+    "Nerdy",
+    "Nervous",
+    "Neutral",
+    "Nonpartisan",
+    "Numb",
+    "Obnoxious",
+    "Okay",
+    "Open",
+    "Oppressive",
+    "Optimistic",
+    "Overbearing",
+    "Passive",
+    "Peaceful",
+    "Pessimistic",
+    "Pleased",
+    "Pragmatic",
+    "Predatory",
+    "Proud",
+    "Quixotic",
+    "Quizzical",
+    "Recumbent",
+    "Refreshed",
+    "Rejected",
+    "Rejuvenated",
+    "Relaxed",
+    "Relieved",
+    "Religious",
+    "Resentful",
+    "Reserved",
+    "Respectful",
+    "Restless",
+    "Rushed",
+    "Sad",
+    "Sadistic",
+    "Sarcastic",
+    "Sardonic",
+    "Satisfied",
+    "Secretive",
+    "Secular",
+    "Selfish",
+    "Serene",
+    "Shocked",
+    "Shy",
+    "Sick",
+    "Silly",
+    "Sleepy",
+    "Smart",
+    "Sour",
+    "Stressed",
+    "Strong",
+    "Supportive",
+    "Surprised",
+    "Sweet",
+    "Sympathetic",
+    "Tearful",
+    "Tense",
+    "Terrible",
+    "Thankful",
+    "Tired",
+    "Touched",
+    "Tranquil",
+    "Ugly",
+    "Uncomfortable",
+    "Upbeat",
+    "Vivacious",
+    "Warm",
+    "Weak",
+    "Weird",
+    "Wonderful"
+  ].
 
   adjectives() ->
 [
@@ -390,7 +665,48 @@ animals()->
     "Zonkey",
     "Zorse"].
 
-random_nick() ->
+random_nick(Server, User, Chat) ->
+  Nick = mod_groupchat_users:get_nick_in_chat(Server,User,Chat),
+  NickLength = string:length(Nick),
+  case NickLength of
+    0 ->
+      NewNick = generate_nick_and_avatar(Server, User, Chat),
+      check_unique_and_update(Server,User,Chat,NewNick);
+    _ ->
+      Nick
+  end.
+
+check_unique_and_update(Server, User, Chat, Nick) ->
+  case mod_groupchat_users:is_duplicated_nick(Server,Chat,Nick,User) of
+    false ->
+      Nick;
+    _ ->
+      Adjectives = new_adjectives(),
+      LengthAdjectives = length(Adjectives),
+      RandomAdjectivePosition = rand:uniform(LengthAdjectives),
+      RandomAdjective = list_to_binary(lists:nth(RandomAdjectivePosition,Adjectives)),
+      UpdatedNick = <<RandomAdjective/binary," ", Nick/binary>>,
+      ?INFO_MSG("Duplicated nick ~p - add random adjective ~p",[Nick,RandomAdjective]),
+      UpdatedNick
+  end.
+
+random_avatar(Server, User, Chat, AvatarUrl, File) ->
+  {AvatarID, Type, AvatarSize} = get_image_info(File),
+  AvatarType = <<"image/",Type/binary>>,
+  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+  Name = <<AvatarID/binary, ".", Type/binary>>,
+  FileName = <<Path/binary, "/" , Name/binary>>,
+  file:write_file(binary_to_list(FileName), File),
+  mod_groupchat_vcard:update_avatar(Server, User, Chat, AvatarID, AvatarType, AvatarSize, AvatarUrl).
+
+get_image_info(File) ->
+  Hash = mod_groupchat_vcard:get_hash(File),
+  Type = atom_to_binary(eimp:get_type(File), latin1),
+  Size = byte_size(File),
+  {Hash,Type,Size}.
+
+
+old_random_nick() ->
   Animals = animals(),
   Adjectives = adjectives(),
   LengthAnimals = length(Animals),
@@ -403,3 +719,88 @@ random_nick() ->
   Nick = <<RandomAdjective/binary," ",RandomAnimal/binary," ",
     RandomNum/binary>>,
   Nick.
+
+generate_nick_and_avatar(Server, User, Chat) ->
+  PreImages = gen_mod:get_module_opt(Server,?MODULE,pre_generated_images),
+  ?INFO_MSG("Preimage path ~p",[PreImages]),
+  case file:list_dir(PreImages) of
+    {ok,[]} ->
+      ?INFO_MSG("Start generate all",[]),
+      generate_files(Server,[]);
+    {ok,Files} ->
+      FilesLength = length(Files),
+      RandomPicturePosition =  rand:uniform(FilesLength),
+      Result = list_to_binary(lists:nth(RandomPicturePosition,Files)),
+      FullPath = <<PreImages/binary, "/">>,
+      File = <<FullPath/binary, Result/binary>>,
+      ?INFO_MSG("Choose ~p",[File]),
+      case file:read_file(File) of
+        {ok,F} ->
+          Proc = gen_mod:get_module_proc(Server, ?MODULE),
+          gen_server:cast(Proc, {update,Server,File}),
+          Url = mod_groupchat_vcard:get_url(Server),
+          AvatarUrl = <<Url/binary, "/", Result/binary>>,
+          random_avatar(Server, User, Chat, AvatarUrl, F),
+          hd(binary:split(Result,<<".">>));
+        _ ->
+          old_random_nick()
+      end;
+    _ ->
+      old_random_nick()
+  end.
+
+pre_generation(Host) ->
+  ImagePath = gen_mod:get_module_opt(Host,?MODULE,pre_generated_images),
+  case file:list_dir(ImagePath) of
+    {ok,Files} ->
+      generate_files(Host,Files);
+    {error,_Err} ->
+      ?INFO_MSG("Try to create folder ~p",[ImagePath]),
+      case file:make_dir(ImagePath) of
+        ok ->
+          case file:list_dir(ImagePath) of
+            {ok,Files} ->
+              generate_files(Host,Files);
+            _ ->
+              ?ERROR_MSG("Internal error in nick_generator",[])
+          end;
+        _ ->
+          ?ERROR_MSG("Internal error in nick_generator",[])
+      end
+  end.
+
+generate_files(Host,Files) ->
+  ImagesCount = gen_mod:get_module_opt(Host,?MODULE,pre_generated_images_count),
+  CurrentAmount = length(Files),
+  NeedToGenerate = ImagesCount - CurrentAmount,
+  generate_image(Host,NeedToGenerate).
+
+
+generate_image(_Host,0) ->
+  ok;
+generate_image(Host,Count) when Count > 0 ->
+  generate_image(Host),
+  generate_image(Host, Count - 1);
+generate_image(_Host,_Count) ->
+  ok.
+
+generate_image(Host) ->
+  Path = gen_mod:get_module_opt(Host,?MODULE,pre_generated_images),
+  FullPath = <<Path/binary, "/">>,
+  CMD = binary_to_list(<<"python3 generateavatar.py ", FullPath/binary>>),
+  Result = list_to_binary(os:cmd(CMD)),
+  File = <<FullPath/binary, Result/binary>>,
+  ?INFO_MSG("Creating file ~p",[File]),
+  case file:read_file(File) of
+    {ok,_F} ->
+      ok;
+    _ ->
+      ?ERROR_MSG("Problem to generate image",[])
+  end.
+
+
+%% Merge avatars
+
+merge_avatar(Avatar1, Avatar2, FullPath) ->
+  CMD = binary_to_list(<<"python3 mergeavatars.py ", "'", Avatar1/binary, "' '", Avatar2/binary, "' ", "'",FullPath/binary,"'">>),
+  string:chomp(list_to_binary(os:cmd(CMD))).

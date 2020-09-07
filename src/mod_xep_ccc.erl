@@ -59,7 +59,7 @@
 
 %%
 -export([get_stanza_id/2, update_retract/4, check_user_for_sync/5, try_to_sync/5, make_responce_to_sync/5, iq_result_from_remote_server/1]).
--export([get_last_sync/4, get_stanza_id_from_counter/5]).
+-export([get_last_sync/4, get_stanza_id_from_counter/5, get_last_card/4]).
 
 % syncronization_query hook
 -export([create_synchronization_metadata/11, check_conversation_type/11]).
@@ -71,6 +71,14 @@
 {
   us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
   bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_'
+}
+).
+
+-record(user_card,
+{
+  us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
+  bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_',
+  packet = #xmlel{}                    :: xmlel() | message() | '_'
 }
 ).
 
@@ -152,6 +160,10 @@ mod_options(_Host) ->
 %% gen_server callbacks.
 %%--------------------------------------------------------------------
 init([Host, _Opts]) ->
+  ejabberd_mnesia:create(?MODULE, user_card,
+    [{disc_only_copies, [node()]},
+      {type, bag},
+      {attributes, record_info(fields, user_card)}]),
   ejabberd_mnesia:create(?MODULE, request_job,
     [{disc_only_copies, [node()]},
       {attributes, record_info(fields, request_job)}]),
@@ -270,9 +282,9 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   case IsChat of
     #xabbergroupchat_x{} ->
-      update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,<<>>);
+      update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,IsChat);
     _ when XEl =/= false ->
-      update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,<<>>);
+      update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,XEl);
     _ ->
       update_metainfo(<<"chat">>, LServer,LUser,Conversation,<<>>)
   end,
@@ -293,22 +305,24 @@ handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, 
   Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
   Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
   {LUser, LServer, _ } = jid:tolower(To),
+  Conversation = jid:to_string(jid:remove_resource(From)),
   case Propose of
     #jingle_propose{} ->
       ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Propose]),
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
       store_last_call(Pkt, From, LUser, LServer, TS);
     _ ->
       ok
   end,
   case Accept of
     #jingle_accept{} ->
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
       delete_last_call(From, LUser, LServer);
     _ ->
       ok
   end,
   case Reject of
     #jingle_reject{} ->
-      Conversation = jid:to_string(jid:remove_resource(From)),
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
       delete_last_call(From, LUser, LServer);
     _ ->
@@ -339,10 +353,14 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
         undefined ->
           store_special_message_id(LServer,LUser,Conversation,TS,OriginID,<<"invite">>),
           store_invite_information(LUser,LServer,PUser,PServer),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+            #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation);
         _ ->
           Chat = jid:to_string(jid:remove_resource(ChatJID)),
           store_special_message_id(LServer,LUser,Chat,TS,OriginID,<<"invite">>),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+            #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
           store_invite_information(LUser,LServer,ChatJID#jid.luser,ChatJID#jid.lserver),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat)
       end;
@@ -384,12 +402,14 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
       case Propose of
         #jingle_propose{} ->
           ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Propose]),
+          store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
           store_last_call(Pkt, Peer, LUser, LServer, TS);
         _ ->
           ok
       end,
       case Accept of
         #jingle_accept{} ->
+          store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
           delete_last_call(Peer, LUser, LServer);
         _ ->
           ok
@@ -400,7 +420,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
           store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
           delete_last_call(Peer, LUser, LServer);
         _ ->
-          IsEncrypted = mod_mam_sql:is_encrypted(LServer,TS),
+          IsEncrypted = body_is_encrypted(Pkt),
           case IsEncrypted of
             true ->
               create_conversation(LServer,LUser,Conversation,<<"">>,true),
@@ -408,7 +428,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
             _ ->
               ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
                 #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-              update_metainfo(message, LServer,LUser,Conversation,TS)
+              update_metainfo(message, LServer,LUser,Conversation,TS,false)
           end
       end
   end,
@@ -775,20 +795,10 @@ make_result(LServer, LUser, Stamp, RSM, Form) ->
            end,
   #xabber_synchronization{conversation = ReplacedConv, stamp = LastStamp, rsm = ResRSM}.
 
-make_result(LServer, LUser, Stamp) ->
-  Sync = get_sync(LServer, LUser, Stamp),
-  ReplacedConv = lists:map(fun(El) ->
-    make_result_el(LServer, LUser, El)
-     end, Sync
-  ),
-%%  ReplacedConv = replace_invites(LServer, LUser, Conv),
-  LastStamp = get_last_stamp(LServer, LUser),
-  #xabber_synchronization{conversation = ReplacedConv, stamp = LastStamp}.
-
 convert_result(Result) ->
   lists:map(fun(El) ->
-    [Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,Status,Encrypted] = El,
-    {Conversation,binary_to_integer(Retract),Type,Thread,Read,Delivered,Display,binary_to_integer(UpdateAt),Status, to_atom_t_f(Encrypted)} end, Result
+    [Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,Status,Encrypted,Incognito,P2P] = El,
+    {Conversation,binary_to_integer(Retract),Type,Thread,Read,Delivered,Display,binary_to_integer(UpdateAt),Status, to_atom_t_f(Encrypted), to_atom_t_f(Incognito), to_atom_t_f(P2P)} end, Result
   ).
 
 to_atom_t_f(Binary) ->
@@ -800,18 +810,24 @@ to_atom_t_f(Binary) ->
   end.
 
 make_result_el(LServer, LUser, El) ->
-  {Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,ConversationStatus,Encrypted} = El,
+  {Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,ConversationStatus,Encrypted,Incognito,P2P} = El,
   ConversationMetadata = ejabberd_hooks:run_fold(syncronization_query,
     LServer, [], [LUser,LServer,Conversation,Read,Delivered,Display,ConversationStatus,Retract,Type,Encrypted]),
-  ConversationType = define_type(Type,Encrypted),
+  ConversationType = define_type(Type,Encrypted,Incognito,P2P),
   #xabber_conversation{stamp = integer_to_binary(UpdateAt), type = ConversationType, thread = Thread, jid = jid:from_string(Conversation), sub_els = ConversationMetadata}.
 
-define_type(Type,Encrypted) ->
-  case Encrypted of
-    false ->
-      Type;
+define_type(Type,Encrypted,Incognito,P2P) ->
+  case Type of
+    <<"groupchat">> when Incognito == false andalso P2P == false ->
+      <<"group">>;
+    <<"groupchat">> when Incognito == false andalso P2P =/= false ->
+      <<"chat-incognito">>;
+    <<"groupchat">> when Incognito =/= false andalso P2P == false ->
+      <<"group-incognito">>;
+    _ when Encrypted =/= false ->
+      <<"encrypted-chat">>;
     _ ->
-      <<"encrypted-chat">>
+      Type
   end.
 
 check_conversation_type(_Acc,_LUser,_LServer,_Conversation,_Read,_Delivered,_Display,ConversationStatus,_Retract,_Type,_Encrypted) ->
@@ -837,31 +853,34 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Di
       Unread = #xabber_conversation_unread{count = Count, 'after' = LastRead},
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
+      User = jid:to_string(jid:make(LUser,LServer)),
+      UserCard = mod_groupchat_users:form_user_card(User,Chat),
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#xabber_metadata{node = ?NS_GROUPCHAT_RETRACT, sub_els = [#xabber_conversation_retract{version = Retract}]},
+      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = Retract}]},
         #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+        #xabber_metadata{node = ?NS_GROUPCHAT, sub_els = [UserCard]},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
     <<"groupchat">> when IsLocal == false ->
       Count = length(get_count(LUser, LServer, PUser, PServer)),
+      UserCard = get_user_card(LUser, LServer, PUser, PServer),
       LastMessage = get_last_message(LUser, LServer, PUser, PServer),
       LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#xabber_metadata{node = ?NS_GROUPCHAT_RETRACT, sub_els = [#xabber_conversation_retract{version = Retract}]},
+      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = Retract}]},
         #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+        #xabber_metadata{node = ?NS_GROUPCHAT, sub_els = UserCard},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
     _ when Encrypted == true ->
       Count = get_count_encrypted_messages(LServer,LUser,Conversation,binary_to_integer(Read)),
       LastMessage = get_last_encrypted_informative_message_for_chat(LServer,LUser,Conversation),
-      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#xabber_metadata{node = ?NS_GROUPCHAT_RETRACT, sub_els = [#xabber_conversation_retract{version = Retract}]},
-        #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = Retract}]},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]};
     _ ->
       Count = get_count_messages(LServer,LUser,Conversation,binary_to_integer(Read)),
@@ -871,7 +890,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Di
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#xabber_metadata{node = ?NS_GROUPCHAT_RETRACT, sub_els = [#xabber_conversation_retract{version = Retract}]},
+      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = Retract}]},
         #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]}
   end.
@@ -911,13 +930,7 @@ get_last_encrypted_informative_message_for_chat(LServer,LUser,Conversation) ->
     {selected,[<<>>]} ->
       [];
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
-      Reject = get_reject(LServer,LUser,Conversation),
-      case Reject of
-        {TSReject,RejectMessage} when TSReject > TS ->
-          RejectMessage;
-        _ ->
-          convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer)
-      end;
+      convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer);
     _ ->
       []
   end.
@@ -1277,13 +1290,13 @@ store_last_msg(Pkt, Peer, LUser, LServer, TS) ->
 
 
 get_user_id(Pkt) ->
-  PktRefGrp = filter_reference(Pkt,<<"groupchat">>),
-  X = xmpp:get_subtag(PktRefGrp, #xmppreference{type = <<"groupchat">>}),
+  X = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   case X of
     false ->
       not_ok;
     _ ->
-      Card = xmpp:get_subtag(X, #xabbergroupchat_user_card{}),
+      Ref = xmpp:get_subtag(X,#xmppreference{}),
+      Card = xmpp:get_subtag(Ref, #xabbergroupchat_user_card{}),
       case Card of
         false ->
           not_ok;
@@ -1540,18 +1553,43 @@ update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation) ->
       "metadata_updated_at=%(TS)d",
       "server_host=%(LServer)s"]).
 
+
+get_privacy(#xabbergroupchat_privacy{cdata = Privacy}) ->
+  Privacy;
+get_privacy(_Privacy) ->
+  <<"public">>.
+
 update_metainfo(_Any, _LServer,_LUser,_Conversation, empty) ->
   ?DEBUG("No id in displayed",[]),
   ok;
-update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,_StanzaID) ->
+update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,X) ->
   Type = <<"groupchat">>,
-  ?DEBUG("save groupchat ~p ~p",[LUser,Conversation]),
-  TS = time_now(),
- ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d
+  Privacy = get_privacy(xmpp:get_subtag(X, #xabbergroupchat_privacy{})),
+  Parent = X#xabbergroupchat_x.parent,
+
+  case Privacy of
+    <<"incognito">> when Parent == undefined ->
+      TS = time_now(),
+      ejabberd_sql:sql_query(
+        LServer,
+        ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d,  incognito = 'true'
+    where username=%(LUser)s and conversation=%(Conversation)s and incognito = 'false' and %(LServer)H")
+      );
+    _ when Parent =/= undefined ->
+      TS = time_now(),
+      ejabberd_sql:sql_query(
+        LServer,
+        ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d,  p2p = 'true'
+    where username=%(LUser)s and conversation=%(Conversation)s and p2p = 'false' and %(LServer)H")
+      );
+    _ ->
+      TS = time_now(),
+      ejabberd_sql:sql_query(
+        LServer,
+        ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d
     where username=%(LUser)s and conversation=%(Conversation)s and type != %(Type)s and %(LServer)H")
-  );
+      )
+  end;
 update_metainfo(<<"chat">>, LServer,LUser,Conversation,_StanzaID) ->
   Type = <<"chat">>,
   ?DEBUG("save chat ~p ~p",[LUser,Conversation]),
@@ -2042,6 +2080,7 @@ handle_sub_els(headline, [#xabbergroupchat_x{type = <<"echo">>, sub_els = [Messa
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
   case IsLocal of
     false ->
+      get_and_store_user_card(LServer,LUser,PeerJID,MessageD),
       store_last_msg(MessageD, PeerJID, LUser, LServer, StanzaID),
       delete_msg(LUser, LServer, PUser, PServer, StanzaID),
       update_metainfo(read, LServer,LUser,Conversation,StanzaID),
@@ -2146,7 +2185,9 @@ make_sql_query(LServer, User, TS, RSM, Form) when TS == 0 orelse TS == <<"0">> -
   displayed_until,
   updated_at,
   status,
-  encrypted
+  encrypted,
+  incognito,
+  p2p
   from conversation_metadata where username = '">>,SUser,<<"' and
   metadata_updated_at > '">>,Timestamp,<<"' and status != 'deleted' ">>],
   PageClause = case Chat of
@@ -2174,11 +2215,11 @@ make_sql_query(LServer, User, TS, RSM, Form) when TS == 0 orelse TS == <<"0">> -
       before ->
         [<<"SELECT * FROM (">>, Query,
           <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until, displayed_until,
-  updated_at, status, encrypted, pinned, pinned_at, archived, archived_at ORDER BY updated_at ASC ">>,
+  updated_at, status, encrypted, pinned, pinned_at, archived, archived_at, incognito, p2p ORDER BY updated_at ASC ">>,
           LimitClause, <<") AS c ORDER BY ">>, PinnedFirstClause ,<<" updated_at DESC;">>];
       _ ->
         [Query, <<" GROUP BY conversation, retract, type, conversation_thread, read_until,
-        delivered_until,  displayed_until, updated_at, status, encrypted, pinned, pinned_at, archived, archived_at
+        delivered_until,  displayed_until, updated_at, status, encrypted, pinned, pinned_at, archived, archived_at, incognito, p2p
         ORDER BY ">>, PinnedFirstClause ,<<" updated_at DESC ">>,
           LimitClause, <<";">>]
     end,
@@ -2187,11 +2228,11 @@ make_sql_query(LServer, User, TS, RSM, Form) when TS == 0 orelse TS == <<"0">> -
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,<<" and server_host='">>,
         SServer, <<"' ">>,
         <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,
-        displayed_until, updated_at, status, encrypted, pinned, pinned_at, archived, archived_at) as subquery;">>]};
+        displayed_until, updated_at, status, encrypted, pinned, pinned_at, archived, archived_at, incognito, p2p) as subquery;">>]};
     false ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,
         <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,
-        displayed_until, updated_at, status, encrypted, pinned, pinned_at, archived, archived_at) as subquery;">>]}
+        displayed_until, updated_at, status, encrypted, pinned, pinned_at, archived, archived_at, incognito, p2p) as subquery;">>]}
   end;
 make_sql_query(LServer, User, TS, RSM, Form) ->
   {Max, Direction, Chat} = get_max_direction_chat(RSM),
@@ -2239,7 +2280,9 @@ make_sql_query(LServer, User, TS, RSM, Form) ->
   displayed_until,
   updated_at,
   status,
-  encrypted
+  encrypted,
+  incognito,
+  p2p
   from conversation_metadata where username = '">>,SUser,<<"' and 
   metadata_updated_at > '">>,Timestamp,<<"'">>],
   PageClause = case Chat of
@@ -2270,11 +2313,11 @@ make_sql_query(LServer, User, TS, RSM, Form) ->
         % 2.5 Requesting the Last Page in a Result Set
         [<<"SELECT * FROM (">>, Query,
           <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until, displayed_until,
-  updated_at, status, encrypted, pinned, pinned_at, archived, archived_at ORDER BY updated_at ASC ">>,
+  updated_at, status, encrypted, pinned, pinned_at, archived, archived_at, incognito, p2p ORDER BY updated_at ASC ">>,
           LimitClause, <<") AS c ORDER BY ">>, PinnedFirstClause ,<<" updated_at DESC;">>];
       _ ->
         [Query, <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until, updated_at, status, encrypted,
-        pinned, pinned_at, archived, archived_at
+        pinned, pinned_at, archived, archived_at, incognito, p2p
         ORDER BY ">>, PinnedFirstClause ,<<" updated_at DESC ">>,
           LimitClause, <<";">>]
     end,
@@ -2283,11 +2326,11 @@ make_sql_query(LServer, User, TS, RSM, Form) ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,<<" and server_host='">>,
         SServer, <<"' ">>,
         <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until,
-        updated_at, status, encrypted, pinned, pinned_at, archived, archived_at ) as subquery;">>]};
+        updated_at, status, encrypted, pinned, pinned_at, archived, archived_at, incognito, p2p ) as subquery;">>]};
     false ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,
         <<" GROUP BY conversation, retract, type, conversation_thread, read_until, delivered_until,  displayed_until,
-        updated_at, status, encrypted, pinned, pinned_at, archived, archived_at ) as subquery;">>]}
+        updated_at, status, encrypted, pinned, pinned_at, archived, archived_at, incognito, p2p ) as subquery;">>]}
   end.
 
 
@@ -2417,7 +2460,7 @@ delete_conversation(LServer,LUser,Conversation) ->
   TS = time_now(),
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("update conversation_metadata set status = 'deleted', updated_at=%(TS)d where username = %(LUser)s and conversation = %(Conversation)s")) of
+    ?SQL("update conversation_metadata set status = 'deleted', updated_at=%(TS)d, metadata_updated_at=%(TS)d where username = %(LUser)s and conversation = %(Conversation)s")) of
     {updated,N} when N > 0 ->
       make_ccc_push(LServer,LUser,Conversation,TS,deleted);
     _ ->
@@ -2527,3 +2570,72 @@ create_conversation(LServer,LUser,Conversation,Thread,Encrypted) ->
       "metadata_updated_at=%(TS)d",
       "status=%(Status)s",
       "server_host=%(LServer)s"]).
+
+get_and_store_user_card(LServer,LUser,PeerJID,Message) ->
+  X = xmpp:get_subtag(Message,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+  Ref = xmpp:get_subtag(X,#xmppreference{}),
+  Card = xmpp:get_subtag(Ref,#xabbergroupchat_user_card{}),
+  case Card of
+    false ->
+      ok;
+    _ ->
+      store_card(LServer,LUser,PeerJID,Card)
+  end.
+
+store_card(LServer,LUser,Peer,Pkt) ->
+  case {mnesia:table_info(user_card, disc_only_copies),
+    mnesia:table_info(user_card, memory)} of
+    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
+      ?ERROR_MSG("Last messages too large, won't store message id for ~s@~s",
+        [LUser, LServer]),
+      {error, overflow};
+    _ ->
+      {PUser, PServer, _} = jid:tolower(Peer),
+      F1 = fun() ->
+        mnesia:write(
+          #user_card{us = {LUser, LServer},
+            bare_peer = {PUser, PServer, <<>>},
+            packet = Pkt
+          })
+           end,
+      delete_previous_card(Peer, LUser, LServer),
+      case mnesia:transaction(F1) of
+        {atomic, ok} ->
+          ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
+          ok;
+        {aborted, Err1} ->
+          ?DEBUG("Cannot add last msg for ~s@~s: ~s",
+            [LUser, LServer, Err1]),
+          Err1
+      end
+  end.
+
+delete_previous_card(Peer, LUser, LServer) ->
+  {PUser, PServer,_R} = jid:tolower(Peer),
+  Msgs = get_last_card(LUser, LServer, PUser, PServer),
+  lists:foreach(
+    fun(Msg) ->
+      mnesia:dirty_delete_object(Msg)
+    end, Msgs).
+
+get_last_card(LUser, LServer, PUser, PServer) ->
+  FN = fun()->
+    mnesia:match_object(user_card,
+      {user_card, {LUser, LServer}, {PUser, PServer,<<>>}, '_'},
+      read)
+       end,
+  {atomic,MsgRec} = mnesia:transaction(FN),
+  MsgRec.
+
+get_user_card(LUser, LServer, PUser, PServer) ->
+  case get_last_card(LUser, LServer, PUser, PServer) of
+    [] ->
+      [];
+    [F|_R] ->
+      #user_card{packet = Pkt} = F,
+      [Pkt]
+  end.
+
+-spec body_is_encrypted(message()) -> boolean().
+body_is_encrypted(#message{sub_els = SubEls}) ->
+  lists:keyfind(<<"encrypted">>, #xmlel.name, SubEls) /= false.

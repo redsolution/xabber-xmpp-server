@@ -43,8 +43,9 @@
   update_parse_avatar_option/4,
   get_photo_meta/3, get_photo_data/5, get_avatar_type/4, get_all_image_metadata/2, check_old_meta/2,
   make_chat_notification_message/3, get_pubsub_meta/0, get_pubsub_data/0, handle_pubsub/4, handle_pubsub/3, get_image_id/3,
-  get_vcard/2
+  get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, get_url/1, create_p2p_avatar/6
 ]).
+-export([put_avatar_into_pubsub/3]).
 %% gen_mod behavior
 -export([start/2, stop/1, mod_options/1, depends/2, mod_opt_type/1]).
 -include("ejabberd.hrl").
@@ -147,7 +148,8 @@ handle_pubsub(Iq) ->
   #iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to = To,sub_els = [#xmlel{name = <<"pubsub">>,
     attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}]} ] = Children} = Iq,
   Decoded = lists:map(fun(N) -> xmpp:decode(N) end, Children),
-  NewIq = #iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = Decoded},
+  FromGroupJID = jid:replace_resource(To,<<"Groupchat">>),
+  NewIq = #iq{from = FromGroupJID,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = Decoded},
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
@@ -157,7 +159,6 @@ handle_pubsub(Iq) ->
   #pubsub{publish = Publish} = Pubsub,
   #ps_publish{node = Node, items = Items} = Publish,
   Item = lists:keyfind(ps_item,1,Items),
-  NewIq = #iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = Decoded},
   UserId = mod_groupchat_inspector:get_user_id(Server,User,Chat),
   UserDataNodeId = <<"urn:xmpp:avatar:data#",UserId/binary>>,
   UserMetadataNodeId = <<"urn:xmpp:avatar:metadata#",UserId/binary>>,
@@ -325,6 +326,12 @@ handle_pubsub(Iq) ->
              _ ->
                xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,<<"en">>))
            end,
+  case Result of
+    #iq{type = result} when Node == <<"urn:xmpp:avatar:metadata">> ->
+      ejabberd_hooks:run(groupchat_avatar_changed,Server,[Server, Chat, User]);
+    _ ->
+      ok
+  end,
   ejabberd_router:route(To,From,Result).
 
 notificate_all(ChatJID,Message) ->
@@ -854,6 +861,15 @@ get_all_image_metadata(Server, Chat) ->
       error
   end.
 
+update_avatar(Server, User, Chat, AvatarID, AvatarType, AvatarSize, AvatarUrl) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchat_users set avatar_size = %(AvatarSize)d,
+    avatar_type = %(AvatarType)s,
+    avatar_id = %(AvatarID)s,
+    avatar_url = %(AvatarUrl)s
+  where username = %(User)s and chatgroup = %(Chat)s ")).
+
 update_metadata(Server, User, AvatarID, AvatarType, AvatarSize, AvatarUrl) ->
   ejabberd_sql:sql_query(
     Server,
@@ -875,7 +891,7 @@ update_metadata_user_put(Server, User, AvatarID, AvatarType, AvatarSize, Chat) -
     ?SQL("update groupchat_users set avatar_size = %(AvatarSize)d,
     avatar_type = %(AvatarType)s,
     avatar_id = %(AvatarID)s,
-    parse_vcard= now()
+    parse_vcard= (now() at time zone 'utc')
   where username = %(User)s and chatgroup = %(Chat)s ")).
 
 update_metadata_user_put_by_id(Server, UserID, AvatarID, AvatarType, AvatarSize, Chat) ->
@@ -884,7 +900,7 @@ update_metadata_user_put_by_id(Server, UserID, AvatarID, AvatarType, AvatarSize,
     ?SQL("update groupchat_users set avatar_size = %(AvatarSize)d,
     avatar_type = %(AvatarType)s,
     avatar_id = %(AvatarID)s,
-    parse_vcard= now()
+    parse_vcard= (now() at time zone 'utc')
   where id = %(UserID)s and chatgroup = %(Chat)s ")).
 
 update_data_user_put(Server, UserID, Data, Hash, Chat) ->
@@ -920,7 +936,7 @@ update_id_in_chats(Server,User,Hash,AvatarType,AvatarSize,AvatarUrl) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("update groupchat_users set avatar_id = %(Hash)s,
-    avatar_url = %(AvatarUrl)s, avatar_size = %(AvatarSize)d, avatar_type = %(AvatarType)s, user_updated_at = now()
+    avatar_url = %(AvatarUrl)s, avatar_size = %(AvatarSize)d, avatar_type = %(AvatarType)s, user_updated_at = (now() at time zone 'utc')
     where username = %(User)s and (avatar_id != %(Hash)s or avatar_id is null) and
     chatgroup not in (select jid from groupchats where anonymous = 'incognito')
      and parse_avatar = 'yes' ")) of
@@ -934,7 +950,7 @@ update_avatar_url_chats(Server,User,Hash,_AvatarType,AvatarSize,AvatarUrl) ->
   ChatsToSend = select_chat_for_update(Server,User,AvatarUrl,Hash,AvatarSize),
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchat_users set avatar_url = %(AvatarUrl)s, user_updated_at = now()
+    ?SQL("update groupchat_users set avatar_url = %(AvatarUrl)s, user_updated_at = (now() at time zone 'utc')
     where username = %(User)s and (avatar_url != %(AvatarUrl)s or avatar_url is null) and avatar_id = %(Hash)s and avatar_size = %(AvatarSize)d and
     chatgroup not in (select jid from groupchats where anonymous = 'incognito')
      and parse_avatar = 'yes' ")) of
@@ -974,7 +990,7 @@ select_chat_for_update_nick(Server,User) ->
 change_user_updated_at(Server,User) ->
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchat_users set user_updated_at = now()
+    ?SQL("update groupchat_users set user_updated_at = (now() at time zone 'utc')
     where username = %(User)s and nickname='' and
     chatgroup not in (select jid from groupchats where anonymous = 'incognito')
     ")).
@@ -1063,8 +1079,70 @@ delete_file(Server, Hash, AvatarType) ->
   file:delete(File).
 
 get_vcard(Chat,Server) ->
-  {Name,Desc} = mod_groupchat_chats:get_name_desc(Server,Chat),
-  #vcard_temp{jabberid = Chat, nickname = Name, desc = Desc}.
+  {selected,[{Name,Privacy,Index,Membership,Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
+    mod_groupchat_chats:get_all_information_chat(Chat,Server),
+  HumanStatus = define_human_status(Status),
+  Parent = define_parent_chat(ParentChat),
+  Avatar = get_avatar_from_pubsub(Chat,Server),
+  #vcard_temp{jabberid = Chat, nickname = Name, desc = Desc, index = Index, privacy = Privacy, membership = Membership, parent = Parent, status = HumanStatus, photo = Avatar}.
+
+define_human_status(<<"dnd">>) ->
+  <<"Restricted">>;
+define_human_status(<<"xa">>) ->
+  <<"Limited">>;
+define_human_status(<<"chat">>) ->
+  <<"Fiesta">>;
+define_human_status(<<"away">>) ->
+  <<"Regulated">>;
+define_human_status(<<"active">>) ->
+  <<"Discussion">>;
+define_human_status(<<"inactive">>) ->
+  <<"Inactive">>;
+define_human_status(_Status) ->
+  undefined.
+
+define_parent_chat(<<"0">>) ->
+  undefined;
+define_parent_chat(ParentChat) ->
+  ParentChat.
+
+get_payload_from_pubsub(Chat,LServer,Node) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(payload)s from pubsub_item where nodeid = (select nodeid from pubsub_node where host = %(Chat)s and node = %(Node)s)")) of
+    {selected,[{Payload}]} ->
+      Payload;
+    _ ->
+      undefined
+  end.
+
+get_avatar_from_pubsub(Chat,LServer) ->
+  Data = get_payload_from_pubsub(Chat,LServer,<<"urn:xmpp:avatar:data">>),
+  case Data of
+    undefined ->
+      undefined;
+    _ ->
+      case xmpp:decode(fxml_stream:parse_element(Data)) of
+        #avatar_data{data = Binary} ->
+          get_type_and_create_photo_element(Chat,LServer,Binary);
+        _ ->
+          undefined
+      end
+  end.
+
+get_type_and_create_photo_element(Chat,LServer,Binary) ->
+  MetaData = get_payload_from_pubsub(Chat,LServer,<<"urn:xmpp:avatar:metadata">>),
+  case MetaData of
+    undefined ->
+      undefined;
+    _ ->
+      case xmpp:decode(fxml_stream:parse_element(MetaData)) of
+        #avatar_meta{info = [#avatar_info{type = Type}]} ->
+          #vcard_photo{binval = Binary, type = Type};
+        _ ->
+          undefined
+      end
+  end.
 
 handle_vcard_photo(_Server, undefined) ->
   ok;
@@ -1101,3 +1179,58 @@ get_hash_and_type(Photo) ->
 get_url(Host) ->
   Url = gen_mod:get_module_opt(Host, ?MODULE, get_url),
   mod_http_upload:expand_host(Url, Host).
+
+create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2)
+  when is_binary(AvatarID1) == true andalso is_binary(AvatarID2) == true
+  andalso is_binary(AvatarType1) == true andalso is_binary(AvatarType2) ->
+  L1 = string:length(AvatarID1),
+  L2 = string:length(AvatarID2),
+  case L1 of
+    0 ->
+      ok;
+    _ when L2 > 0 ->
+      <<"image/", Type1/binary>> = AvatarType1,
+      <<"image/", Type2/binary>> = AvatarType2,
+      Path = gen_mod:get_module_opt(LServer,mod_http_fileserver,docroot),
+      Name1 = <<AvatarID1/binary, ".", Type1/binary >>,
+      Name2 = <<AvatarID2/binary, ".", Type2/binary >>,
+      File1 = <<Path/binary, "/" , Name1/binary>>,
+      File2 = <<Path/binary, "/" , Name2/binary>>,
+      Filename = nick_generator:merge_avatar(File1,File2,Path),
+      File = <<Path/binary, "/" , Filename/binary>>,
+      case file:read_file(File) of
+        {ok,F} ->
+          put_avatar_into_pubsub(Chat,F,<<"Groupchat">>);
+        _ ->
+          ok
+      end;
+    _ ->
+      ok
+  end;
+create_p2p_avatar(_LServer,_Chat,_AvatarID1,_AvatarType1,_AvatarID2,_AvatarType2) ->
+  ok.
+
+put_avatar_into_pubsub(Chat,Data,Resource) ->
+  TypeRaw = eimp:get_type(Data),
+  Size = byte_size(Data),
+  HashID = get_hash(Data),
+  Type = atom_to_binary(TypeRaw, latin1),
+  ImageType = <<"image/",Type/binary>>,
+  AvatarInfo = #avatar_info{type = ImageType, bytes = Size, id = HashID},
+  AvatarData = #avatar_data{data = Data},
+  AvatarMeta = #avatar_meta{info = [AvatarInfo]},
+  To = jid:from_string(Chat),
+  FromGroupJID = jid:replace_resource(To,Resource),
+  AvatarItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarData)]},
+  MetaItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarMeta)]},
+  PublishData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_DATA, items = [AvatarItems]}},
+  PublishMetaData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_METADATA, items = [MetaItems]}},
+  IQData = #iq{from = FromGroupJID,to = To,id = randoms:get_string(),type = set, sub_els = [PublishData], meta = #{}},
+  IQMeta = #iq{from = FromGroupJID,to = To,id = randoms:get_string(),type = set, sub_els = [PublishMetaData], meta = #{}},
+  Res = mod_pubsub:iq_sm(IQData),
+  case Res of
+    #iq{type = result} ->
+      mod_pubsub:iq_sm(IQMeta);
+    _ ->
+      ok
+  end .

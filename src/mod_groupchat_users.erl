@@ -47,9 +47,7 @@
   delete_user/2,
   get_updated_users_rights/3,
   get_updated_user_rights/4,
-%%  update_user/2,
-%%  validate_data/2,
-%%  validate_rights/2,
+  is_in_chat/3, is_duplicated_nick/4,
   check_if_exist/3,
   check_if_exist_by_id/3,
   convert_from_unix_time_to_datetime/1,
@@ -330,9 +328,8 @@ get_vcard(_Acc,{Server,To,Chat,_Lang}) ->
       ejabberd_router:route(jid:replace_resource(To,<<"Groupchat">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta()),
       ok;
     yes when Nick == <<>> ->
-      RandomNick = nick_generator:random_nick(),
       mod_groupchat_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),
-      mod_groupchat_inspector:insert_nickname(Server,User,Chat,RandomNick),
+      insert_incognito_nickname(Server,User,Chat),
       ok;
     yes when Nick =/= <<>> ->
       mod_groupchat_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),
@@ -405,11 +402,12 @@ is_lonely_owner(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
   end.
 
 delete_user(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
+  Subscription = check_user(Server,User,Chat),
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc') where
          username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
-    {updated,1} ->
+    {updated,1} when Subscription == <<"both">> ->
       ok;
     _ ->
       {stop,no_user}
@@ -685,6 +683,18 @@ check_if_exist(Server,Chat,User) ->
       false
   end.
 
+is_in_chat(Server,Chat,User) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(subscription)s
+         from groupchat_users where chatgroup=%(Chat)s
+              and username=%(User)s and (subscription='both' or subscription='wait')")) of
+    {selected,[{_Subscription}]} ->
+      true;
+    _ ->
+      false
+  end.
+
 check_if_exist_by_id(Server,Chat,ID) ->
   case ejabberd_sql:sql_query(
     Server,
@@ -709,7 +719,7 @@ insert_badge(_L,_U,_C,undefined) ->
 insert_badge(LServer,User,Chat,Badge) ->
   ejabberd_sql:sql_query(
     LServer,
-    ?SQL("update groupchat_users set badge = %(Badge)s where chatgroup=%(Chat)s and username=%(User)s")).
+    ?SQL("update groupchat_users set badge = %(Badge)s, user_updated_at = (now() at time zone 'utc') where chatgroup=%(Chat)s and username=%(User)s")).
 
 insert_nickname(_L,_U,_C,undefined) ->
   ok;
@@ -720,7 +730,38 @@ insert_nickname(LServer,User,Chat,Nick) ->
   end,
   ejabberd_sql:sql_query(
     LServer,
-    ?SQL("update groupchat_users set nickname = %(Nick)s where chatgroup=%(Chat)s and username=%(User)s")).
+    ?SQL("update groupchat_users set nickname = %(Nick)s, user_updated_at = (now() at time zone 'utc') where chatgroup=%(Chat)s and username=%(User)s")).
+
+insert_incognito_nickname(LServer,User,Chat) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(nickname)s from groupchat_users where chatgroup=%(Chat)s and username=%(User)s")) of
+    {selected,[{Nickname}]} ->
+      TrimedNickLength = str:len(string:trim(Nickname)),
+      case TrimedNickLength of
+        0 ->
+          RandomNick = nick_generator:random_nick(LServer,User,Chat),
+          update_incognito_nickname(LServer,User,Chat,RandomNick),
+          RandomNick;
+        _ ->
+          Nickname
+      end;
+    _ ->
+      RandomNick = nick_generator:random_nick(LServer,User,Chat),
+      update_incognito_nickname(LServer,User,Chat,RandomNick),
+      RandomNick
+  end.
+
+update_incognito_nickname(Server,User,Chat,Nick) ->
+  case ?SQL_UPSERT(Server, "groupchat_users",
+    ["!username=%(User)s",
+      "!chatgroup=%(Chat)s",
+      "nickname=%(Nick)s"]) of
+    ok ->
+      ok;
+    _Err ->
+      {error, db_failure}
+  end.
 
 add_random_badge(LServer,User,Chat) ->
   Badge = rand:uniform(1000),
@@ -809,15 +850,13 @@ get_user_info(User,Chat) ->
   IsAnon = mod_groupchat_chats:is_anonim(Server,Chat),
   {selected,_Tables,Items} = get_user_rules(Server,User,Chat),
   [Item|_] = Items,
-  [Username,Badge,UserId,Chat,_Rule,_RuleDesc,_Type,_Subscription,GV,FN,NickVcard,NickChat,_ValidFrom,_IssuedAt,_IssuedBy,VcardImage,_Avatar,_LastSeen] = Item,
+  [Username,Badge,UserId,Chat,_Rule,_RuleDesc,_Type,_Subscription,GV,FN,NickVcard,NickChat,_ValidFrom,_IssuedAt,_IssuedBy,_VcardImage,_Avatar,_LastSeen] = Item,
   UserRights = [{_R,_RD,T,_VF,_ISA,_ISB}||[UserS,_Badge,_UID,_C,_R,_RD,T,_S,_GV,_FN,_NV,_NC,_VF,_ISA,_ISB,_VI,_AV,_LS] <-Items, UserS == Username, T == <<"permission">> orelse T == <<"restriction">>],
   Nick = case nick(GV,FN,NickVcard,NickChat,IsAnon) of
            empty when IsAnon == no->
              Username;
            empty when IsAnon == yes ->
-             RandomNick = nick_generator:random_nick(),
-             insert_nickname(Server,Username,Chat,RandomNick),
-             RandomNick;
+             insert_incognito_nickname(Server,Username,Chat);
            {ok,Value} ->
              Value;
            _ ->
@@ -1370,9 +1409,7 @@ get_user_from_chat(LServer,Chat,User) ->
                         empty when IsAnon == no->
                           Username;
                         empty when IsAnon == yes ->
-                          RandomNick = nick_generator:random_nick(),
-                          insert_nickname(LServer,Username,Chat,RandomNick),
-                          RandomNick;
+                          insert_incognito_nickname(LServer,User,Chat);
                         {ok,Value} ->
                           Value;
                         _ ->
@@ -1410,8 +1447,8 @@ get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
   Count = binary_to_integer(CountBinary),
   SubEls = case Users of
              [_|_] when RSM /= undefined ->
-               #xabbergroupchat_user_card{id = First} = hd(Users),
-               #xabbergroupchat_user_card{id = Last} = lists:last(Users),
+               #xabbergroupchat_user_card{nickname = First} = hd(Users),
+               #xabbergroupchat_user_card{nickname = Last} = lists:last(Users),
                [#rsm_set{first = #rsm_first{data = First},
                  last = Last,
                  count = Count}|Users];
@@ -1422,107 +1459,50 @@ get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
            end,
   DateNew = get_chat_version(LServer,Chat),
   VersionNew = convert_from_datetime_to_unix_time(DateNew),
-  ?INFO_MSG("New Version ~p",[VersionNew]),
   #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls, version = VersionNew}.
 
-make_sql_query(SChat,RSM,Version) when Version == 0 ->
-  {Max, Direction, Item} = get_max_direction_item(RSM),
-  Chat = ejabberd_sql:escape(SChat),
-  LimitClause = if is_integer(Max), Max >= 0 ->
-    [<<" limit ">>, integer_to_binary(Max)];
-                  true ->
-                    []
-                end,
-  Users = [<<"select
-  groupchat_users.username,
-  groupchat_users.id,
-  groupchat_users.badge,
-  groupchat_users.nickname,
-  groupchat_users_vcard.givenfamily,
-  groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
-  groupchat_users.subscription
-  from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username where chatgroup = '">>,Chat,<<"'
-   and subscription = 'both' ">>],
-  PageClause = case Item of
-                 B when is_binary(B) ->
-                   case Direction of
-                     before ->
-                       [<<" AND groupchat_users.nickname > '">>, Item,<<"' ">>];
-                     'after' ->
-                       [<<" AND groupchat_users.nickname < '">>, Item,<<"' ">>];
-                     _ ->
-                       []
-                   end;
-                 _ ->
-                   []
-               end,
-  VersionClause = case Version of
-                    I when is_integer(I) ->
-                      Date = convert_from_unix_time_to_datetime(Version),
-                      [<<" and (groupchat_users.user_updated_at > ">>,
-                        <<"'">>, Date, <<"' or groupchat_users.last_seen > ">>,
-                        <<"'">>, Date, <<"')">>];
-                    _ ->
-                      []
-                  end,
-  Query = [Users,VersionClause,PageClause],
-  QueryPage =
-    case Direction of
-      before ->
-        % ID can be empty because of
-        % XEP-0059: Result Set Management
-        % 2.5 Requesting the Last Page in a Result Set
-        [<<"SELECT * FROM (">>, Query,
-          <<" GROUP BY
-  groupchat_users.username,
-  groupchat_users.id,
-  groupchat_users.badge,
-  groupchat_users.nickname,
-  groupchat_users_vcard.givenfamily,
-  groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
-  groupchat_users.subscription
-  ORDER BY groupchat_users.id ASC ">>,
-          LimitClause, <<") AS c ORDER BY groupchat_users.id DESC;">>];
-      _ ->
-        [Query, <<" GROUP BY
-  groupchat_users.username, groupchat_users.id, groupchat_users.badge, groupchat_users.nickname, groupchat_users_vcard.givenfamily, groupchat_users_vcard.fn, groupchat_users_vcard.nickname,COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST')), groupchat_users.subscription
-        ORDER BY groupchat_users.id DESC ">>,
-          LimitClause, <<";">>]
-    end,
-
-  {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Users,
-    <<" GROUP BY groupchat_users.username, groupchat_users.id, groupchat_users.badge, groupchat_users.nickname, groupchat_users_vcard.givenfamily, groupchat_users_vcard.fn, groupchat_users_vcard.nickname, COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST')), groupchat_users.subscription) as subquery;">>]};
 make_sql_query(SChat,RSM,Version) ->
   {Max, Direction, Item} = get_max_direction_item(RSM),
   Chat = ejabberd_sql:escape(SChat),
+  SubscriptionClause = case Version of
+                         0 ->
+                           <<"subscription = 'both'">>;
+                         _ ->
+                           <<"(subscription = 'both' or subscription = 'none')">>
+                       end,
   LimitClause = if is_integer(Max), Max >= 0 ->
     [<<" limit ">>, integer_to_binary(Max)];
                   true ->
                     []
                 end,
-  Users = [<<"select
+  Users = [<<"WITH group_members AS (select
   groupchat_users.username,
+  groupchat_users.chatgroup,
   groupchat_users.id,
   groupchat_users.badge,
-  groupchat_users.nickname,
-  groupchat_users_vcard.givenfamily,
-  groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
-  groupchat_users.subscription
-  from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username where chatgroup = '">>,Chat,<<"'
-   and (subscription = 'both' or subscription = 'none') ">>],
+  groupchat_users.user_updated_at,
+  groupchat_users.last_seen,
+  groupchat_users.subscription,
+  CASE
+  WHEN groupchat_users.nickname != '' and groupchat_users.nickname is not null THEN groupchat_users.nickname
+  WHEN groupchat_users_vcard.nickname != '' and groupchat_users_vcard.nickname is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.nickname
+  WHEN groupchat_users_vcard.givenfamily != '' and groupchat_users_vcard.givenfamily is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.givenfamily
+  WHEN groupchat_users_vcard.fn != '' and groupchat_users_vcard.fn is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.fn
+  WHEN groupchats.anonymous = 'public' THEN groupchat_users.username
+  ELSE groupchat_users.id
+  END AS effective_nickname
+  from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username
+  left join groupchats on groupchats.jid = '">>,Chat,<<"') select username,id,badge,
+  COALESCE(to_char(last_seen,'YYYY-MM-DDZHH24:MI:SST')),subscription,effective_nickname from group_members
+   where chatgroup = '">>,Chat,<<"'
+   and ">>,SubscriptionClause,<<" ">>],
   PageClause = case Item of
                  B when is_binary(B) ->
                    case Direction of
                      before ->
-                       [<<" AND groupchat_users.nickname > '">>, Item,<<"' ">>];
+                       [<<" AND effective_nickname < '">>, Item,<<"' ">>];
                      'after' ->
-                       [<<" AND groupchat_users.nickname < '">>, Item,<<"' ">>];
+                       [<<" AND effective_nickname > '">>, Item,<<"' ">>];
                      _ ->
                        []
                    end;
@@ -1532,8 +1512,8 @@ make_sql_query(SChat,RSM,Version) ->
   VersionClause = case Version of
                     I when is_integer(I) ->
                       Date = convert_from_unix_time_to_datetime(Version),
-                      [<<" and (groupchat_users.user_updated_at > ">>,
-                        <<"'">>, Date, <<"' or groupchat_users.last_seen > ">>,
+                      [<<" and (user_updated_at > ">>,
+                        <<"'">>, Date, <<"' or last_seen > ">>,
                         <<"'">>, Date, <<"')">>];
                     _ ->
                       []
@@ -1547,26 +1527,27 @@ make_sql_query(SChat,RSM,Version) ->
         % 2.5 Requesting the Last Page in a Result Set
         [<<"SELECT * FROM (">>, Query,
           <<" GROUP BY
-  groupchat_users.username,
-  groupchat_users.id,
-  groupchat_users.badge,
-  groupchat_users.nickname,
-  groupchat_users_vcard.givenfamily,
-  groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
-  groupchat_users.subscription
-  ORDER BY groupchat_users.id ASC ">>,
-          LimitClause, <<") AS c ORDER BY groupchat_users.id DESC;">>];
+  username,
+  id,
+  badge,
+  COALESCE(to_char(last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
+  subscription,
+  effective_nickname
+  ORDER BY effective_nickname DESC ">>,
+          LimitClause, <<") AS c ORDER BY effective_nickname ASC;">>];
       _ ->
         [Query, <<" GROUP BY
-  groupchat_users.username, groupchat_users.id, groupchat_users.badge, groupchat_users.nickname, groupchat_users_vcard.givenfamily, groupchat_users_vcard.fn, groupchat_users_vcard.nickname,COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST')), groupchat_users.subscription
-        ORDER BY groupchat_users.id DESC ">>,
+  username, id, badge,
+  COALESCE(to_char(last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
+  subscription, effective_nickname
+        ORDER BY effective_nickname ASC ">>,
           LimitClause, <<";">>]
     end,
 
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Users,
-        <<" GROUP BY groupchat_users.username, groupchat_users.id, groupchat_users.badge, groupchat_users.nickname, groupchat_users_vcard.givenfamily, groupchat_users_vcard.fn, groupchat_users_vcard.nickname, COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST')), groupchat_users.subscription) as subquery;">>]}.
+        <<" GROUP BY username, id, badge,
+        COALESCE(to_char(last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
+        subscription, effective_nickname) as subquery;">>]}.
 
 get_max_direction_item(RSM) ->
   case RSM of
@@ -1585,19 +1566,7 @@ make_query(LServer,RawData,RequesterUser,Chat) ->
   RequesterUserRole = calculate_role(LServer,RequesterUser,Chat),
   lists:map(
     fun(UserInfo) ->
-      [Username,Id,Badge,NickChat,GF,FullName,NickVcard,LastSeen,Subscription] = UserInfo,
-      Nick = case nick(GF,FullName,NickVcard,NickChat,IsAnon) of
-               empty when IsAnon == no->
-                 Username;
-               empty when IsAnon == yes ->
-                 RandomNick = nick_generator:random_nick(),
-                 insert_nickname(LServer,Username,Chat,RandomNick),
-                 RandomNick;
-               {ok,Value} ->
-                 Value;
-               _ ->
-                 <<>>
-             end,
+      [Username,Id,Badge,LastSeen,Subscription,Nick] = UserInfo,
       Role = calculate_role(LServer,Username,Chat),
       AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
       BadgeF = case Badge of

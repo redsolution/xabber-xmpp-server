@@ -96,8 +96,8 @@ depends(_Host, _Opts) -> [].
 mod_options(_Opts) -> [].
 
 update_chat(Server,To,Chat,User,Xa) ->
-  {selected,[{Name,Anonymous,Search,Model,Desc,ChatMessage,ContactList,DomainList}]} =
-    mod_groupchat_sql:get_information_of_chat(Chat,Server),
+  {selected,[{Name,Anonymous,Search,Model,Desc,ChatMessage,ContactList,DomainList,Status}]} =
+    mod_groupchat_chats:get_information_of_chat(Chat,Server),
   NewName = set_value(Name,Xa#xabbergroupchat_update.name),
   NewSearch = set_value(Search,Xa#xabbergroupchat_update.searchable),
   NewDesc = set_value(Desc,Xa#xabbergroupchat_update.description),
@@ -119,7 +119,7 @@ update_chat(Server,To,Chat,User,Xa) ->
       mod_groupchat_chats:is_value_changed(DomainList,NewDomainList),
       mod_groupchat_chats:is_value_changed(ContactList,NewContactList)])},
   Properties = [IsNameChanged,IsDescChanged,IsPinnedChanged,IsOtherChanged],
-  ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties]),
+  ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
   {selected, AllUsers} = mod_groupchat_sql:user_list_of_channel(Server,Chat),
   FromChat = jid:replace_resource(To,<<"Groupchat">>),
   mod_groupchat_messages:send_message(UpdatePresence,AllUsers,FromChat).
@@ -417,7 +417,7 @@ kick_user(Server,User,Chat) ->
   FromChat = jid:replace_resource(From,<<"Groupchat">>),
 case ejabberd_sql:sql_query(
   Server,
-  ?SQL("update groupchat_users set subscription = 'none',user_updated_at = now()  where
+  ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc')  where
          username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
   {updated,1} ->
     Txt = <<"You are blocked">>,

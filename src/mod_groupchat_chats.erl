@@ -34,7 +34,9 @@
 %% API
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1]).
 -export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all/1, get_all_info/3, get_count_chats/1, get_depended_chats/2, get_detailed_information_of_chat/2]).
--export([check_creator/4, check_user/4, check_chat/4,create_peer_to_peer/4, send_invite/4, check_if_peer_to_peer_exist/4, groupchat_exist/2]).
+-export([check_creator/4, check_user/4, check_chat/4,
+  create_peer_to_peer/4, send_invite/4, check_if_users_invited/4,
+  check_if_peer_to_peer_exist/4, groupchat_exist/2]).
 -export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5, change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5,
   get_chat_active/2,
   get_information_of_chat/2,
@@ -62,6 +64,7 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_chat, 15),
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_user, 20),
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_if_peer_to_peer_exist, 25),
+  ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_if_users_invited, 27),
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, create_peer_to_peer, 30),
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, send_invite, 40),
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_chat, 35).
@@ -80,6 +83,7 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_chat, 15),
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_user, 20),
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_if_peer_to_peer_exist, 25),
+  ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_if_users_invited, 27),
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, create_peer_to_peer, 30),
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, send_invite, 40),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_chat, 35).
@@ -223,7 +227,6 @@ change_chat(Acc,_User,Chat,Server,_FS) ->
   IsPinnedChanged = {pinned_changed, is_value_changed(ChatMessage,NewMessage)},
   IsOtherChanged = {properties_changed, lists:member(true,[is_value_changed(Search,NewIndex),is_value_changed(Model,NewMembership),is_value_changed(DomainList,NewDomains),is_value_changed(ContactList,NewContacts)])},
   ChangeDiff = [IsNameChanged,IsDescChanged,IsStatusChanged,IsPinnedChanged,IsOtherChanged],
-  ?INFO_MSG("Proplist ~p",[ChangeDiff]),
   {stop, {ok,form_chat_information(Chat,Server,result),NewStatus,ChangeDiff}}.
 
 %%
@@ -277,9 +280,41 @@ check_if_peer_to_peer_exist(User, LServer, Creator,  #xabbergroup_peer{jid = Cha
   Chat = jid:to_string(ChatJID),
   case check_if_not_p2p_exist(LServer,Chat,Creator,User) of
     {false,ExistedChat} ->
-      {stop,{exist,ExistedChat}};
+      {exist,ExistedChat,User};
     _ ->
       User
+  end.
+
+check_if_users_invited(Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
+  case Acc of
+    {exist,ExistedChat,User} ->
+      Chat = jid:to_string(ChatJID),
+      CreatorSubscription = mod_groupchat_users:check_user_if_exist(LServer,Creator,ExistedChat),
+      UserSubscription = mod_groupchat_users:check_user_if_exist(LServer,User,ExistedChat),
+      case UserSubscription of
+        <<"both">> ->
+          ok;
+        <<"none">> ->
+          send_invite_to_p2p(LServer,Creator,User,ExistedChat,Chat);
+        <<"wait">> ->
+          send_invite_to_p2p(LServer,Creator,User,ExistedChat,Chat);
+        _ ->
+          ok
+      end,
+      case CreatorSubscription of
+        <<"both">> ->
+          {stop,{exist,ExistedChat}};
+        <<"none">> ->
+          send_invite_to_p2p(LServer,User,Creator,ExistedChat,Chat),
+          {stop,{exist,ExistedChat}};
+        <<"wait">> ->
+          send_invite_to_p2p(LServer,User,Creator,ExistedChat,Chat),
+          {stop,{exist,ExistedChat}};
+        _ ->
+          {stop,{exist,ExistedChat}}
+      end;
+    _ ->
+      Acc
   end.
 
 create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
@@ -295,14 +330,14 @@ create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
       Desc = <<"Private chat">>,
       create_groupchat(LServer,Localpart,Creator,ChatName,Chat,
         <<"incognito">>,<<"none">>,<<"member-only">>,Desc,<<"0">>,<<"">>,<<"">>,OldChat),
-      mod_admin_extra:set_nickname(Localpart,LServer,ChatName),
-      add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
-      add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
+      {AvatarID1,AvatarType1} = add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
+      {AvatarID2,AvatarType2} = add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
       Expires = <<"1000 years">>,
       IssuedBy = <<"server">>,
       Rule = <<"send-invitations">>,
       mod_groupchat_restrictions:insert_rule(LServer,Chat,User,Rule,Expires,IssuedBy),
       mod_groupchat_restrictions:insert_rule(LServer,Chat,Creator,Rule,Expires,IssuedBy),
+      mod_groupchat_vcard:create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2),
       {User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, ChatJID};
     _ ->
       {stop, not_ok}
@@ -333,6 +368,35 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
   ejabberd_router:route(Message),
   Created = created(ChatName,Chat,Anonymous,Search,Model,Desc,<<"0">>,<<"">>,<<"">>),
   {stop,{ok,Created}}.
+
+send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
+  User1Nick = mod_groupchat_users:get_nick_in_chat(LServer,Creator,OldChat),
+  User2Nick = mod_groupchat_users:get_nick_in_chat(LServer,User,OldChat),
+  ChatName = <<User1Nick/binary," and ",User2Nick/binary, " chat">>,
+  Desc = <<"Private chat">>,
+  OldChatJID = jid:from_string(OldChat),
+  Anonymous = <<"incognito">>,
+  Search = <<"none">>,
+  Model = <<"member-only">>,
+  OldChatName = get_chat_name(OldChat,LServer),
+  BareOldChatJID = jid:remove_resource(OldChatJID),
+  ChatInfo = #xabbergroupchat_x{anonymous = Anonymous,model = Model, description = Desc, name = ChatName, searchable = Search, parent = BareOldChatJID},
+  ChatJID = jid:from_string(Chat),
+  Text = <<"You was invited to ",Chat/binary," Please add it to the contacts to join a group chat">>,
+  Reason = <<User1Nick/binary,
+    " from ",OldChatName/binary, " invited you to chat privately."
+    " If you accept this invitation, you won't see each other's real XMPP IDs."
+    " You will be known as ", User2Nick/binary
+  >>,
+  Invite = #xabbergroupchat_invite{reason = Reason, jid = ChatJID},
+  Message = #message{
+    type = chat,
+    id = randoms:get_string(),
+    from = jid:replace_resource(ChatJID,<<"Groupchat">>),
+    to = jid:from_string(User),
+    body = [#text{lang = <<>>,data = Text}],
+    sub_els = [Invite,ChatInfo]},
+  ejabberd_router:route(Message).
 
 delete_chat(_Acc,{LServer,_User,Chat,_UserCard,_Lang})->
   DeleteChat = gen_mod:get_module_opt(LServer, ?MODULE, annihilation),
@@ -496,7 +560,7 @@ add_user_to_peer_to_peer_chat(LServer, User, NewChat,OldChat) ->
   {AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge} =
     mod_groupchat_users:get_user_info_for_peer_to_peer(LServer,User,OldChat),
   mod_groupchat_users:add_user_to_peer_to_peer_chat(LServer,User,NewChat,AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge),
-  Nickname.
+  {AvatarID,AvatarType}.
 
 delete(Chat) ->
   ChatJID = jid:from_string(Chat),
@@ -848,11 +912,11 @@ create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,Contacts,Domain
 
 status_options(LServer, Chat) ->
   Predefined = [
-    #xdata_option{label = <<"Ready for chat">>, value = [<<"chat">>]},
-    #xdata_option{label = <<"Online">>, value = [<<"active">>]},
-    #xdata_option{label = <<"Away">>, value = [<<"away">>]},
-    #xdata_option{label = <<"Away for long time">>, value = [<<"xa">>]},
-    #xdata_option{label = <<"Busy">>, value = [<<"dnd">>]},
+    #xdata_option{label = <<"Fiesta">>, value = [<<"chat">>]},
+    #xdata_option{label = <<"Discussion">>, value = [<<"active">>]},
+    #xdata_option{label = <<"Regulated">>, value = [<<"away">>]},
+    #xdata_option{label = <<"Limited">>, value = [<<"xa">>]},
+    #xdata_option{label = <<"Restricted">>, value = [<<"dnd">>]},
     #xdata_option{label = <<"Inactive">>, value = [<<"inactive">>]}],
   Result = ejabberd_hooks:run_fold(chat_status_options, LServer, Predefined, [Chat]),
   Result.

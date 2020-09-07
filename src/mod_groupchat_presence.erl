@@ -422,7 +422,7 @@ send_info_to_index(Server,ChatJID) ->
         {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
         To = jid:from_string(Index),
         Presence = #presence{id = randoms:get_string(), type = available,
-          from = ChatJID, to = To, sub_els = [Groupchat_x], status = [#text{data = HumanStatus}], show = Show},
+          from = ChatJID, to = To, sub_els = [Groupchat_x], status = HumanStatus, show = Show},
         ejabberd_router:route(Presence) end, GlobalIndexs
       );
     _ ->
@@ -466,21 +466,21 @@ form_presence_unavailable() ->
 
 form_presence_unavailable(Chat) ->
   {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
-  #presence{type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x], status = [#text{data = HumanStatus}], show = Show}.
+  #presence{type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x], status = HumanStatus, show = Show}.
 
 form_presence_unavailable(Chat,To) ->
   {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
   From = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
-  #presence{from = From, to = To, type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x], status = [#text{data = HumanStatus}], show = Show}.
+  #presence{from = From, to = To, type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x], status = HumanStatus, show = Show}.
 
 form_presence(ChatJid) ->
   {Groupchat_x, HumanStatus, Show} = info_about_chat(ChatJid),
 
-  #presence{type = available, id = randoms:get_string(), sub_els = [Groupchat_x], status = [#text{data = HumanStatus}], show = Show}.
+  #presence{type = available, id = randoms:get_string(), sub_els = [Groupchat_x], status = HumanStatus, show = Show}.
 
 form_presence(ChatJID, Show, Status) ->
   {Groupchat_x, _HumanStatus, Show} = info_about_chat(ChatJID),
-  #presence{type = available, id = randoms:get_string(), sub_els = [Groupchat_x], status = [#text{data = Status}], show = Show}.
+  #presence{type = available, id = randoms:get_string(), sub_els = [Groupchat_x], status = Status, show = Show}.
 
 form_presence(Chat,User) ->
   ChatJID = jid:from_string(Chat),
@@ -499,6 +499,7 @@ form_presence(Chat,User) ->
                    xmlns = ?NS_GROUPCHAT,
                    members = Members,
                    sub_els = [
+                     #xabbergroupchat_name{cdata = Name},
                      #xabbergroupchat_privacy{cdata = Anonymous},
                      #collect{cdata = CollectState},
                      #xabbergroup_peer{cdata = P2PState}
@@ -522,20 +523,20 @@ form_presence(Chat,User) ->
            end,
   Show = define_show(Status),
   HumanStatus = define_human_status(Status),
-  #presence{type = available, id = randoms:get_string(), sub_els = SubEls, status = [#text{data = HumanStatus}], show = Show}.
+  #presence{type = available, id = randoms:get_string(), sub_els = SubEls, status = HumanStatus, show = Show}.
 
 define_human_status(<<"dnd">>) ->
-  <<"Curfew">>;
+  [#text{data = <<"Restricted">>}];
 define_human_status(<<"xa">>) ->
-  <<"Limited">>;
+  [#text{data = <<"Limited">>}];
 define_human_status(<<"chat">>) ->
-  <<"Fiesta">>;
+  [#text{data = <<"Fiesta">>}];
 define_human_status(<<"away">>) ->
-  <<"Away">>;
-define_human_status(<<"inactive">>) ->
-  <<"Inactive">>;
+  [#text{data = <<"Regulated">>}];
+define_human_status(<<"active">>) ->
+  [#text{data = <<"Discussion">>}];
 define_human_status(_Status) ->
-  <<"Online">>.
+  [].
 
 define_show(<<"dnd">>) ->
   'dnd';
@@ -545,8 +546,6 @@ define_show(<<"xa">>) ->
   'xa';
 define_show(<<"away">>) ->
   'away';
-define_show(<<"inactive">>) ->
-  'dnd';
 define_show(_Status) ->
   undefined.
 

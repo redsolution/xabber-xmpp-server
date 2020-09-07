@@ -1,0 +1,1 @@
+ALTER TABLE groupchats ADD COLUMN created_at timestamp without time zone not null default now();

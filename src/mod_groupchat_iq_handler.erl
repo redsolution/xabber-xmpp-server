@@ -126,8 +126,10 @@ process_groupchat(#iq{type = set, to = To, from = From,
       NewSub = [#xabbergroupchat_x{jid = ExistedChatJID}],
       NewIq = xmpp:set_els(Iq,NewSub),
       xmpp:make_error(NewIq, xmpp:err_conflict());
+    stop ->
+      ok;
     _ ->
-      xmpp:make_error(Iq, xmpp:err_not_allowed(<<"You have no permission to invite">>,<<"en">>))
+      xmpp:make_error(Iq, xmpp:serr_internal_server_error(<<"Internal server error">>,<<"en">>))
   end;
 process_groupchat(#iq{type = set, to = To, from = From, lang = Lang,
   sub_els = [#xabbergroupchat_create{name = Name, anonymous=Anon, localpart=LocalJid,
@@ -732,7 +734,7 @@ process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergro
   Result = ejabberd_hooks:run_fold(groupchat_info_change, Server, [], [User,Chat,Server,FS]),
   case Result of
     {ok, Form, Status, Properties} ->
-      ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties]),
+      ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
       ejabberd_hooks:run(groupchat_changed,Server,[Server,Chat,Status,User]),
       ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT, sub_els = [Form]}));
     not_allowed ->

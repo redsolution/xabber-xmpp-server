@@ -76,7 +76,12 @@
 % Kick user from groupchat
 -export([check_if_user_can/6, check_kick/6, kick_user/6]).
 
+% Decline hook
+-export([decline_hook_check_if_exist/4, decline_hook_delete_invite/4]).
+
 start(Host, _Opts) ->
+  ejabberd_hooks:add(groupchat_decline_invite, Host, ?MODULE, decline_hook_check_if_exist, 10),
+  ejabberd_hooks:add(groupchat_decline_invite, Host, ?MODULE, decline_hook_delete_invite, 20),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
@@ -103,6 +108,8 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
 
 stop(Host) ->
+  ejabberd_hooks:delete(groupchat_decline_invite, Host, ?MODULE, decline_hook_check_if_exist, 10),
+  ejabberd_hooks:delete(groupchat_decline_invite, Host, ?MODULE, decline_hook_delete_invite, 20),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
@@ -131,6 +138,31 @@ stop(Host) ->
 depends(_Host, _Opts) ->  [].
 
 mod_options(_Opts) -> [].
+
+% decline invite hooks
+
+decline_hook_check_if_exist(Acc, User,Chat,Server) ->
+  case is_in_chat(Server,Chat,User) of
+    true ->
+      Acc;
+    _ ->
+      Txt = <<"Member ", User/binary, " is not in chat">>,
+      {stop,{error, xmpp:err_item_not_found(Txt, <<"en">>)}}
+  end.
+
+decline_hook_delete_invite(_Acc, User, Chat, Server) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc') where
+         username=%(User)s and chatgroup=%(Chat)s and  subscription = 'wait' ")) of
+    {updated,1} ->
+      {stop, ok};
+    {updated,0} ->
+      Txt = <<"No invitation for ", User/binary, " is found in chat">>,
+      {stop,{error, xmpp:err_item_not_found(Txt, <<"en">>)}};
+    _ ->
+      {error,xmpp:err_internal_server_error()}
+  end.
 
 % kick hook
 check_if_user_can(_Acc,_LServer,Chat,Admin,_Kick,_Lang) ->

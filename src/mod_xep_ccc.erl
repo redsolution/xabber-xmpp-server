@@ -62,7 +62,7 @@
 -export([get_last_sync/4, get_stanza_id_from_counter/5, get_last_card/4]).
 
 % syncronization_query hook
--export([create_synchronization_metadata/11, check_conversation_type/11]).
+-export([create_synchronization_metadata/11, check_conversation_type/11, get_invite_information/4]).
 -type c2s_state() :: ejabberd_c2s:state().
 %% records
 -record(state, {host = <<"">> :: binary()}).
@@ -208,6 +208,19 @@ handle_cast({request,User,Chat}, State) ->
   NewIQ = #iq{type = get, id = NewID, from = From, to = Chat, sub_els = [#xabber_synchronization_query{stamp = <<"0">>}]},
   set_request_job(NewID,{LUser,LServer,LResource},{PUser,PServer}),
   ejabberd_router:route(NewIQ),
+  {noreply, State};
+handle_cast({user_send, #iq{from = #jid{luser = LUser, lserver = LServer}, to = #jid{luser = PUser, lserver = PServer}} = IQ}, State) ->
+  Decline = xmpp:get_subtag(IQ,#xabbergroup_decline{}),
+  case Decline of
+    false ->
+      ok;
+    _ ->
+      maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer)
+  end,
+  {noreply, State};
+handle_cast({user_send, #presence{type = Type, from = #jid{luser = LUser, lserver = LServer},
+  to = #jid{luser = PUser, lserver = PServer}}}, State) when Type == subscribe orelse Type == subscribed  ->
+  delete_old_invites(LUser,LServer,PUser,PServer),
   {noreply, State};
 handle_cast({user_send,#message{id = ID, type = chat, from = #jid{luser =  LUser,lserver = LServer}, to = #jid{lserver = PServer, luser = PUser} = To, meta = #{stanza_id := TS, mam_archived := true}} = Pkt}, State) ->
   Invite = xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}),
@@ -615,6 +628,14 @@ sm_receive_packet(Acc) ->
 -spec user_send_packet({stanza(), c2s_state()})
       -> {stanza(), c2s_state()}.
 user_send_packet({#message{} = Pkt, #{lserver := LServer}} = Acc) ->
+  Proc = gen_mod:get_module_proc(LServer, ?MODULE),
+  gen_server:cast(Proc, {user_send,Pkt}),
+  Acc;
+user_send_packet({#presence{} = Pkt, #{lserver := LServer}} = Acc) ->
+  Proc = gen_mod:get_module_proc(LServer, ?MODULE),
+  gen_server:cast(Proc, {user_send,Pkt}),
+  Acc;
+user_send_packet({#iq{type = set} = Pkt, #{lserver := LServer}} = Acc) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
   gen_server:cast(Proc, {user_send,Pkt}),
   Acc;
@@ -1541,6 +1562,7 @@ get_last_sync(ChatName, ChatServer, PUser, PServer) ->
 
 update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation) ->
   Type = <<"groupchat">>,
+  Status = <<"active">>,
   ?DEBUG("save groupchat ~p ~p",[LUser,Conversation]),
   TS = time_now(),
   ?SQL_UPSERT(
@@ -1550,6 +1572,7 @@ update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation) ->
       "!conversation=%(Conversation)s",
       "type=%(Type)s",
       "updated_at=%(TS)d",
+      "status=%(Status)s",
       "metadata_updated_at=%(TS)d",
       "server_host=%(LServer)s"]).
 
@@ -2477,6 +2500,7 @@ parse_conv(Convs) ->
 
 store_invite_information(LUser,LServer,PUser,PServer) ->
   NewInvite = #invite_msg{us = {LUser,LServer}, bare_peer = {PUser,PServer,<<>>}},
+  ?INFO_MSG("Store invite ~p",[NewInvite]),
   mnesia:dirty_write(NewInvite).
 
 get_invite_information(LUser,LServer,PUser,PServer) ->
@@ -2494,14 +2518,24 @@ maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer) ->
   case Type of
     <<"groupchat">> ->
       Invites = get_invite_information(LUser,LServer,PUser,PServer),
-      lists:foreach(fun(Invite) ->
-        delete_invite(Invite) end, Invites
-      ),
-      Conversation = jid:to_string(jid:make(PUser,PServer)),
-      delete_conversation(LServer,LUser,Conversation);
+      case Invites of
+        [] -> ok;
+        _ ->
+          lists:foreach(fun(Invite) ->
+            delete_invite(Invite) end, Invites
+          ),
+          ?INFO_MSG("Try to delete conversation ~p from meta ~p",[Conversation,LUser]),
+          delete_conversation(LServer,LUser,Conversation)
+      end;
     _ ->
       ok
   end.
+
+delete_old_invites(LUser,LServer,PUser,PServer) ->
+  Invites = get_invite_information(LUser,LServer,PUser,PServer),
+  lists:foreach(fun(Invite) ->
+    delete_invite(Invite) end, Invites
+  ).
 
 delete_invite(#invite_msg{} = Invite) ->
   mnesia:dirty_delete_object(Invite).

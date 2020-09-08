@@ -742,6 +742,20 @@ process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergro
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()))
   end;
+process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergroup_decline{}]} = IQ) ->
+  Chat = jid:to_string(jid:remove_resource(To)),
+  Server = To#jid.lserver,
+  User = jid:to_string(jid:remove_resource(From)),
+  Result = ejabberd_hooks:run_fold(groupchat_decline_invite, Server, [], [User,Chat,Server]),
+  case Result of
+    ok ->
+      ejabberd_router:route(xmpp:make_iq_result(IQ));
+    {error,Error} ->
+      ejabberd_router:route(xmpp:make_error(IQ,Error));
+    _ ->
+      Err = xmpp:err_internal_server_error(),
+      ejabberd_router:route(xmpp:make_error(IQ,Err))
+  end;
   process_groupchat_iq(#iq{type = result} = IQ) ->
   ?DEBUG("Drop result iq ~p",[IQ]);
 process_groupchat_iq(#iq{type = error} = IQ) ->

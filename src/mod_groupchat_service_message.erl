@@ -43,7 +43,7 @@
   anon/1,
   send_to_all/2,
   chat_created/4,
-  user_rights_changed/6
+  user_rights_changed/6, form_message/3
   ]).
 -export([groupchat_changed/5, groupchat_avatar_changed/3]).
 -export([start/2, stop/1, depends/2, mod_options/1]).
@@ -126,6 +126,9 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
              true when IsOtherChanged =/= true andalso IsDescChanged == true
                andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
                <<UserID/binary, " changed group name and description">>;
+             true when IsOtherChanged == true andalso IsDescChanged == true
+               andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
+               <<UserID/binary, " changed group name, description and updated properties">>;
              _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged == true
                andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
                <<UserID/binary, " changed group description">>;
@@ -136,12 +139,24 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
                andalso IsStatusChanged == true andalso IsPinnedChanged =/= true ->
                <<UserID/binary, " changed group status to ", Label/binary>>;
              _ ->
-               <<UserID/binary, " update group properties">>
+               <<UserID/binary, " updated group properties">>
            end,
   Body = [#text{lang = <<>>,data = MsgTxt}],
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
-  SubEls =  [X,By],
+
+  {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,Status}]} =
+    mod_groupchat_chats:get_information_of_chat(Chat,LServer),
+  Group_X = #xabbergroupchat_x{
+    xmlns = ?NS_GROUPCHAT,
+    members = integer_to_binary(mod_groupchat_chats:count_users(LServer,Chat)),
+    sub_els =
+    [
+      #xabbergroupchat_name{cdata = Name},
+      #xabbergroupchat_privacy{cdata = Anonymous},
+      #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)}
+    ]},
+  SubEls =  [X,By,Group_X],
   M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M).
 
@@ -220,13 +235,14 @@ created_chat(Created,User,ChatJID,Lang) ->
     domains = Domains,
     contacts = Contacts
   } = Created,
+  Privacy = #xabbergroupchat_privacy{cdata = Anon},
+  Membership = #xabbergroupchat_membership{cdata = Model},
+  Desc = #xabbergroupchat_description{cdata = Description},
+  Index = #xabbergroupchat_index{cdata = Search},
+  NameEl = #xabbergroupchat_name{cdata = Name},
   XEl = #xabbergroupchat_x{
     xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,
-    name = Name,
-    description = Description,
-    searchable = Search,
-    model = Model,
-    anonymous = Anon,
+  sub_els = [NameEl,Privacy,Membership,Desc,Index],
     domains = Domains,
     contacts = Contacts
   },
@@ -250,13 +266,14 @@ chat_created(LServer,User,Chat,Lang) ->
   Body = [#text{lang = <<>>,data = MsgTxt}],
   {selected,[{Name,Anonymous,Search,Model,Desc,_Message,_ContactList,_DomainList,_ParentChat}]} =
     mod_groupchat_chats:get_detailed_information_of_chat(Chat,LServer),
+  Privacy = #xabbergroupchat_privacy{cdata = Anonymous},
+  Membership = #xabbergroupchat_membership{cdata = Model},
+  Description = #xabbergroupchat_description{cdata = Desc},
+  Index = #xabbergroupchat_index{cdata = Search},
+  NameEl = #xabbergroupchat_name{cdata = Name},
   XEl = #xabbergroupchat_x{
     xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,
-    name = Name,
-    description = Desc,
-    searchable = Search,
-    model = Model,
-    anonymous = Anonymous
+    sub_els = [NameEl,Privacy,Membership,Description,Index]
   },
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
   SubEls = [XEl,By],
@@ -389,7 +406,7 @@ user_join(_Acc,{Server,To,Chat,Lang}) ->
   send_presences(Server,Chat),
   {stop,ok}.
 
-user_updated({User,OldCard}, LServer,Chat, Admin,_ID,Nick,Badge,Lang) ->
+user_updated({User,OldCard}, LServer,Chat, Admin,_ID,Nick,_Badge,Lang) ->
   ByUserCard = mod_groupchat_users:form_user_card(Admin,Chat),
   UpdatedUser = mod_groupchat_users:form_user_card(User,Chat),
   OldName = case anon(UpdatedUser) of
@@ -524,28 +541,6 @@ permission_text(Perms,OldUserCard,UpdateUserCard) ->
       <<" permissions were changed by ">>;
     _ ->
       <<" permission was changed by ">>
-  end.
-
-restriction_text(Restrictions) ->
-  ResExpire = lists:map(fun(R) ->
-    #xabbergroupchat_restriction{expires = Expire} = R,
-    Expire end, Restrictions
-  ),
-  NowExpireList = lists:filter(fun(El) ->
-    El == <<"now">> end, ResExpire
-  ),
-  DiffList = ResExpire--NowExpireList,
-  case length(DiffList) of
-    0 when length(NowExpireList) > 1 ->
-      <<" restrictions were canceled by ">>;
-    0 ->
-      <<" restriction was canceled by ">>;
-    _ when NowExpireList == [] ->
-      <<" was restricted by ">>;
-    _ when length(Restrictions) > 1 ->
-      <<" restrictions were changed by ">>;
-    _ ->
-      <<" restriction was changed by ">>
   end.
 
 new_restriction_text(Restrictions) ->

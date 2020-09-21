@@ -195,7 +195,7 @@ check_user_permission(_Acc,User,Chat,_Server,_FS) ->
     yes ->
       ok;
     _ ->
-      {stop, not_allowed}
+      {stop, {error, xmpp:err_not_allowed()}}
   end.
 
 validate_fs(_Acc,_User, Chat, LServer,FS) ->
@@ -212,22 +212,34 @@ validate_fs(_Acc,_User, Chat, LServer,FS) ->
 change_chat(Acc,_User,Chat,Server,_FS) ->
   {selected,[{Name,_Anonymous,Search,Model,Desc,ChatMessage,ContactList,DomainList,Status}]} =
     get_information_of_chat(Chat,Server),
-  NewName = set_value(Name,get_value(name,Acc)),
-  NewDesc = set_value(Desc,get_value(description,Acc)),
-  NewMessage = set_message(ChatMessage,get_value(message,Acc)),
   NewStatus = set_value(Status,get_value(status,Acc)),
-  NewMembership = set_value(Model,get_value(membership,Acc)),
-  NewIndex = set_value(Search,get_value(index,Acc)),
-  NewContacts = set_value(ContactList,get_value(contacts,Acc)),
-  NewDomains = set_value(DomainList,get_value(domains,Acc)),
-  update_groupchat(Server,Chat,NewName,NewDesc,NewMessage,NewStatus,NewMembership,NewIndex,NewContacts,NewDomains),
-  IsNameChanged = {name_changed, is_value_changed(Name,NewName)},
-  IsDescChanged = {desc_changed, is_value_changed(Desc,NewDesc)},
-  IsStatusChanged = {status_changed, is_value_changed(Status,NewStatus)},
-  IsPinnedChanged = {pinned_changed, is_value_changed(ChatMessage,NewMessage)},
-  IsOtherChanged = {properties_changed, lists:member(true,[is_value_changed(Search,NewIndex),is_value_changed(Model,NewMembership),is_value_changed(DomainList,NewDomains),is_value_changed(ContactList,NewContacts)])},
-  ChangeDiff = [IsNameChanged,IsDescChanged,IsStatusChanged,IsPinnedChanged,IsOtherChanged],
-  {stop, {ok,form_chat_information(Chat,Server,result),NewStatus,ChangeDiff}}.
+  StatusState = is_value_changed(Status,NewStatus),
+  case Status of
+    <<"inactive">> when StatusState == false ->
+      {stop, {error, xmpp:err_not_allowed(<<"You need to active group">>,<<"en">>)}};
+    _ ->
+      NewName = set_value(Name,get_value(name,Acc)),
+      NewDesc = set_value(Desc,get_value(description,Acc)),
+      NewMessage = set_message(ChatMessage,get_value(message,Acc)),
+      NewStatus = set_value(Status,get_value(status,Acc)),
+      NewMembership = set_value(Model,get_value(membership,Acc)),
+      NewIndex = set_value(Search,get_value(index,Acc)),
+      NewContacts = set_value(ContactList,get_value(contacts,Acc)),
+      NewDomains = set_value(DomainList,get_value(domains,Acc)),
+      IsNameChanged = {name_changed, is_value_changed(Name,NewName)},
+      IsDescChanged = {desc_changed, is_value_changed(Desc,NewDesc)},
+      IsStatusChanged = {status_changed, StatusState},
+      IsPinnedChanged = {pinned_changed, is_value_changed(ChatMessage,NewMessage)},
+      IsOtherChanged = {properties_changed,
+        lists:member(true,[
+          is_value_changed(Search,NewIndex),
+          is_value_changed(Model,NewMembership),
+          is_value_changed(DomainList,NewDomains),
+          is_value_changed(ContactList,NewContacts)])},
+      ChangeDiff = [IsNameChanged,IsDescChanged,IsStatusChanged,IsPinnedChanged,IsOtherChanged],
+      update_groupchat(Server,Chat,NewName,NewDesc,NewMessage,NewStatus,NewMembership,NewIndex,NewContacts,NewDomains),
+      {stop, {ok,form_chat_information(Chat,Server,result),NewStatus,ChangeDiff}}
+  end.
 
 %%
 
@@ -305,11 +317,13 @@ check_if_users_invited(Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID})
         <<"both">> ->
           {stop,{exist,ExistedChat}};
         <<"none">> ->
-          send_invite_to_p2p(LServer,User,Creator,ExistedChat,Chat),
-          {stop,{exist,ExistedChat}};
+          Created = created(<<"Private chat">>,ExistedChat,<<"incognito">>,
+            <<"none">>,<<"member-only">>,<<"Private chat">>,<<"0">>,<<"">>,<<"">>),
+          {stop,{ok,Created}};
         <<"wait">> ->
-          send_invite_to_p2p(LServer,User,Creator,ExistedChat,Chat),
-          {stop,{exist,ExistedChat}};
+          Created = created(<<"Private chat">>,ExistedChat,<<"incognito">>,
+            <<"none">>,<<"member-only">>,<<"Private chat">>,<<"0">>,<<"">>,<<"">>),
+          {stop,{ok,Created}};
         _ ->
           {stop,{exist,ExistedChat}}
       end;
@@ -349,7 +363,11 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
   Model = <<"member-only">>,
   OldChatName = get_chat_name(OldChat,LServer),
   BareOldChatJID = jid:remove_resource(OldChatJID),
-  ChatInfo = #xabbergroupchat_x{anonymous = Anonymous,model = Model, description = Desc, name = ChatName, searchable = Search, parent = BareOldChatJID},
+  Privacy = #xabbergroupchat_privacy{cdata = Anonymous},
+  Membership = #xabbergroupchat_membership{cdata = Model},
+  Description = #xabbergroupchat_description{cdata = Desc},
+  Index = #xabbergroupchat_index{cdata = Search},
+  ChatInfo = #xabbergroupchat_x{parent = BareOldChatJID, sub_els = [Privacy, Membership, Description, Index]},
   ChatJID = jid:from_string(Chat),
   Text = <<"You was invited to ",Chat/binary," Please add it to the contacts to join a group chat">>,
   Reason = <<User1Nick/binary,
@@ -380,7 +398,12 @@ send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
   Model = <<"member-only">>,
   OldChatName = get_chat_name(OldChat,LServer),
   BareOldChatJID = jid:remove_resource(OldChatJID),
-  ChatInfo = #xabbergroupchat_x{anonymous = Anonymous,model = Model, description = Desc, name = ChatName, searchable = Search, parent = BareOldChatJID},
+  Name = #xabbergroupchat_name{cdata = ChatName},
+  Privacy = #xabbergroupchat_privacy{cdata = Anonymous},
+  Membership = #xabbergroupchat_membership{cdata = Model},
+  Description = #xabbergroupchat_description{cdata = Desc},
+  Index = #xabbergroupchat_index{cdata = Search},
+  ChatInfo = #xabbergroupchat_x{parent = BareOldChatJID, sub_els = [Name, Privacy, Membership, Description, Index]},
   ChatJID = jid:from_string(Chat),
   Text = <<"You was invited to ",Chat/binary," Please add it to the contacts to join a group chat">>,
   Reason = <<User1Nick/binary,
@@ -673,11 +696,11 @@ form_chat_information(Chat,LServer,Type) ->
   #xdata{type = Type, title = <<"Groupchat change">>, instructions = [<<"Fill out this form to change the group chat">>], fields = Fields}.
 
 get_chat_fields(Chat,LServer) ->
-  {selected,[{Name,_Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,Status}]} =
+  {selected,[{Name,_Anonymous,Search,Model,Desc,Message,ContactList,DomainList,_ParentChat,Status}]} =
     get_all_information_chat(Chat,LServer),
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
-    #xdata_field{var = <<"pinned-message">>, type = hidden, values = [<<"true">>], label = <<"Change pinned message">>},
+    #xdata_field{var = <<"pinned-message">>, type = 'text-single', values = [integer_to_binary(Message)], label = <<"Change pinned message">>},
     #xdata_field{var = <<"change-avatar">>, type = hidden, values = [<<"true">>], label = <<"Change avatar">>},
     #xdata_field{var = <<"name">>, type = 'text-single', values = [Name], label = <<"Name">>},
     #xdata_field{var = <<"index">>, type = 'list-single', values = [Search], label = <<"Index">>, options = index_options()},

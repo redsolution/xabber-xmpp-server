@@ -133,11 +133,8 @@ process_presence({selected,[]},Packet) ->
   Packet;
 process_presence(false, Packet) ->
   Packet;
-process_presence(<<"inactive">>, Packet) ->
-  #presence{from = From, to = To} = Packet,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  P = form_presence_unavailable(Chat,From),
-  ejabberd_router:route(P);
+process_presence(<<"inactive">>, _Packet) ->
+  drop;
 process_presence(_,Packet) ->
   answer_presence(Packet).
 
@@ -468,11 +465,6 @@ form_presence_unavailable(Chat) ->
   {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
   #presence{type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x], status = HumanStatus, show = Show}.
 
-form_presence_unavailable(Chat,To) ->
-  {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
-  From = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
-  #presence{from = From, to = To, type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x], status = HumanStatus, show = Show}.
-
 form_presence(ChatJid) ->
   {Groupchat_x, HumanStatus, Show} = info_about_chat(ChatJid),
 
@@ -522,7 +514,12 @@ form_presence(Chat,User) ->
                ]
            end,
   Show = define_show(Status),
-  HumanStatus = define_human_status(Status),
+  HumanStatus = case ParentChat of
+                  <<"0">> ->
+                    define_human_status(Status);
+                  _ ->
+                    [#text{data = <<"Private chat">>}]
+                end,
   #presence{type = available, id = randoms:get_string(), sub_els = SubEls, status = HumanStatus, show = Show}.
 
 define_human_status(<<"dnd">>) ->
@@ -552,18 +549,30 @@ define_show(_Status) ->
 info_about_chat(ChatJid) ->
   S = jid:from_string(ChatJid),
   Server = S#jid.lserver,
-  {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,Status}]} =
-    mod_groupchat_chats:get_information_of_chat(ChatJid,Server),
+  {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,ParentChat,Status}]} =
+    mod_groupchat_chats:get_all_information_chat(ChatJid,Server),
   ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',ChatJid),
   AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
   UniqueOnline = lists:usort(AllUsersSession),
   Present = integer_to_binary(length(UniqueOnline)),
   Show = define_show(Status),
-  HumanStatus = define_human_status(Status),
+  HumanStatus =  case ParentChat of
+                   <<"0">> ->
+                     define_human_status(Status);
+                   _ ->
+                     [#text{data = <<"Private chat">>}]
+                 end,
+  Parent = case ParentChat of
+             <<"0">> ->
+               undefined;
+             _ ->
+               jid:from_string(ParentChat)
+           end,
   {#xabbergroupchat_x{
       xmlns = ?NS_GROUPCHAT,
       members = integer_to_binary(mod_groupchat_chats:count_users(Server,ChatJid)),
       present = Present,
+      parent = Parent,
       sub_els =
       [
         #xabbergroupchat_name{cdata = Name},

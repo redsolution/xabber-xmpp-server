@@ -207,44 +207,6 @@ make_action(#iq{to = To, type = set, sub_els = [#xmlel{name = <<"block">>,
     ok ->
       ejabberd_router:route(xmpp:make_iq_result(Iq))
   end;
-%%make_action(#iq{from = From, to = To, type = get, sub_els = [#xmlel{name = <<"query">>,
-%%  attrs = [{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#members">>},{<<"version">>,_Version}],
-%%  children = []}]} = Iq) ->
-%%  Server = To#jid.lserver,
-%%  Chat = jid:to_string(jid:remove_resource(To)),
-%%  User = jid:to_string(jid:remove_resource(From)),
-%%  case mod_groupchat_inspector_sql:check_user(User,Server,Chat) of
-%%    exist ->
-%%      mod_groupchat_users:get_users_list_with_version(Iq);
-%%    _ ->
-%%      ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed()))
-%%  end;
-%%make_action(#iq{from = From, to = To, type = get, sub_els = [#xmlel{name = <<"query">>,
-%%  attrs = [{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#members">>}],
-%%  children = []}]} = Iq) ->
-%%  Server = To#jid.lserver,
-%%  Chat = jid:to_string(jid:remove_resource(To)),
-%%  User = jid:to_string(jid:remove_resource(From)),
-%%  case mod_groupchat_inspector_sql:check_user(User,Server,Chat) of
-%%    exist ->
-%%      mod_groupchat_users:get_users_from_chat(Iq);
-%%    _ ->
-%%      ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed()))
-%%  end;
-%%make_action(#iq{lang = Lang, from = From, to = To, type = set, sub_els = [#xmlel{ name = <<"query">> ,
-%%  attrs = [{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#members">>}]}] = Sub } = Iq) ->
-%%  Server = To#jid.lserver,
-%%  Chat = jid:to_string(jid:remove_resource(To)),
-%%  Server = To#jid.lserver,
-%%  Admin = jid:to_string(jid:remove_resource(From)),
-%%  [Els|_Rest] = Sub,
-%%  E = xmpp:decode(Els),
-%%  case ejabberd_hooks:run_fold(groupchat_update_user_hook, Server, [], [{Server,Chat,Admin,E,Lang}]) of
-%%    ok ->
-%%      ejabberd_router:route(xmpp:make_iq_result(Iq));
-%%    _ ->
-%%      ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed()))
-%%  end;
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"jabber:iq:version">>}]}]} = Iq) ->
   Result = mod_groupchat_vcard:give_client_vesrion(),
@@ -276,8 +238,8 @@ make_action(#iq{type = set, to = To, from = From,
           case mod_groupchat_inspector:update_chat(Server,To,ChatJid,User,Xa) of
             ok ->
               ejabberd_router:route(xmpp:make_iq_result(Iq));
-            _ ->
-              drop
+            {error, Err} ->
+              ejabberd_router:route(xmpp:make_error(Iq,Err))
           end;
         _  when IsOwner == yes->
           Expires = <<"1000 years">>,
@@ -737,8 +699,8 @@ process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergro
       ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
       ejabberd_hooks:run(groupchat_changed,Server,[Server,Chat,Status,User]),
       ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT, sub_els = [Form]}));
-    not_allowed ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()));
+    {error, Err} ->
+      ejabberd_router:route(xmpp:make_error(IQ, Err));
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()))
   end;

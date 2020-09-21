@@ -56,7 +56,7 @@
   subscribe_user/2,
   get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/10,
   update_user_status/3, user_no_read/2, get_users_page/3, get_nick_in_chat/3, get_user_by_id_and_allow_to_invite/3,
-  pre_approval/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2, add_wait_for_vcard/2, change_peer_to_peer_invitation_state/4
+  pre_approval/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2, add_wait_for_vcard/2, change_peer_to_peer_invitation_state/4, check_if_unique/5
 ]).
 
 -export([is_exist/2,is_owner/2]).
@@ -748,14 +748,16 @@ update_user_status(Server,User,Chat) ->
 
 insert_badge(_L,_U,_C,undefined) ->
   ok;
-insert_badge(LServer,User,Chat,Badge) ->
+insert_badge(LServer,User,Chat,BadgeRaw) ->
+  Badge = str:strip(BadgeRaw),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL("update groupchat_users set badge = %(Badge)s, user_updated_at = (now() at time zone 'utc') where chatgroup=%(Chat)s and username=%(User)s")).
 
 insert_nickname(_L,_U,_C,undefined) ->
   ok;
-insert_nickname(LServer,User,Chat,Nick) ->
+insert_nickname(LServer,User,Chat,NickRaw) ->
+  Nick = str:strip(NickRaw),
   case is_duplicated_nick(LServer,Chat,Nick,User) of
     true -> add_random_badge(LServer,User,Chat);
     _ -> ok
@@ -897,12 +899,7 @@ get_user_info(User,Chat) ->
   Role = calculate_role(UserRights),
   UserJID = jid:from_string(User),
   AvatarEl = mod_groupchat_vcard:get_photo_meta(Server,Username,Chat),
-  BadgeF = case Badge of
-             null ->
-               <<>>;
-             Another ->
-               Another
-           end,
+  BadgeF = validate_badge_and_nick(Server,Chat,User,Nick,Badge),
   {Role,UserJID,BadgeF,UserId,Nick,AvatarEl,IsAnon}.
 
 nick(GV,FN,NickVcard,NickChat,IsAnon) ->
@@ -922,6 +919,55 @@ nick(GV,FN,NickVcard,NickChat,IsAnon) ->
       {ok,FN};
     _ ->
       empty
+  end.
+
+validate_badge_and_nick(LServer,Chat,User,Nick,Badge) ->
+  case check_if_unique(LServer,Chat,User,Nick,Badge) of
+    [_F|_R] = List ->
+      NewBadge = generate_badge(List, 5),
+      insert_badge(LServer,User,Chat,NewBadge),
+      NewBadge;
+    _ when is_binary(Badge) == true ->
+      Badge;
+    _ ->
+      <<>>
+  end.
+
+generate_badge(_List,0) ->
+  randoms:get_string();
+generate_badge(List,N) ->
+  Badge = integer_to_binary(rand:uniform(1000)),
+  case lists:member(Badge,List) of
+    false ->
+      Badge;
+    _ ->
+      generate_badge(List,N -1)
+  end.
+
+check_if_unique(LServer,Chat,User,Nick,Badge) ->
+ case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL(
+  "WITH group_members AS (select
+    groupchat_users.username,
+    groupchat_users.badge,
+    groupchat_users.chatgroup,
+    CASE
+    WHEN groupchat_users.nickname != '' and groupchat_users.nickname is not null THEN groupchat_users.nickname
+    WHEN groupchat_users_vcard.nickname != '' and groupchat_users_vcard.nickname is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.nickname
+    WHEN groupchat_users_vcard.givenfamily != '' and groupchat_users_vcard.givenfamily is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.givenfamily
+    WHEN groupchat_users_vcard.fn != '' and groupchat_users_vcard.fn is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.fn
+    WHEN groupchats.anonymous = 'public' THEN groupchat_users.username
+    ELSE groupchat_users.id
+    END AS effective_nickname
+    from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username
+    left join groupchats on groupchats.jid = %(Chat)s) select @(badge)s,
+    @(effective_nickname)s from group_members
+     where chatgroup = %(Chat)s and username != %(User)s and effective_nickname = %(Nick)s")) of
+    {selected, [_F|_R] = List} ->
+      [B || {B,_N} <- List, B == Badge];
+    _ ->
+      []
   end.
 
 calculate_role(UserPerm) ->
@@ -955,32 +1001,136 @@ check_user(false) ->
 check_user(User) when is_binary(User) ->
   User.
 
-validate_rights(Admin,_LServer,_Chat,Admin,_ID,_Nickname,undefined,_Lang) ->
-  Admin;
-validate_rights(User, _LServer,Chat,Admin,_ID,Nickname,undefined,_Lang) when Nickname =/= undefined ->
+validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
+  validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
+validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickname =/= undefined ->
   SetNick = mod_groupchat_restrictions:is_permitted(<<"change-nicknames">>,Admin,Chat),
   case SetNick of
     yes ->
-      User;
+      validate_unique(LServer,Chat,User,Nickname,undefined,Lang);
     _ ->
-      {stop, {error, xmpp:err_not_allowed()}}
+      Message = <<"You have no rights to change a nickname">>,
+      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
-validate_rights(User, _LServer,Chat,Admin,_ID,undefined,Badge,_Lang) when Badge =/= undefined ->
+validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/= undefined ->
   SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-badges">>,Admin,Chat),
   case SetBadge of
     yes ->
-      User;
+      validate_unique(LServer,Chat,User,undefined,Badge,Lang);
     _ ->
-      {stop, {error, xmpp:err_not_allowed()}}
+      Message = <<"You have no rights to change a badge">>,
+      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
-validate_rights(User, _LServer,Chat,Admin,_ID,Nickname,Badge,_Lang) when Badge =/= undefined andalso Nickname =/= undefined ->
+validate_rights(User, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) when Badge =/= undefined andalso Nickname =/= undefined ->
   SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-badges">>,Admin,Chat),
   SetNick = mod_groupchat_restrictions:is_permitted(<<"change-nicknames">>,Admin,Chat),
   case SetBadge of
     yes when SetNick == yes ->
+      validate_unique(LServer,Chat,User,Nickname,Badge,Lang);
+    _ ->
+      Message = <<"You have no rights to change a nickname and a badge">>,
+      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
+  end.
+
+validate_unique(LServer,Chat,User,NickRaw,undefined,Lang) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL(
+      "WITH group_members AS (select
+        groupchat_users.username,
+        groupchat_users.badge,
+        groupchat_users.chatgroup,
+        CASE
+        WHEN groupchat_users.nickname != '' and groupchat_users.nickname is not null THEN groupchat_users.nickname
+        WHEN groupchat_users_vcard.nickname != '' and groupchat_users_vcard.nickname is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.nickname
+        WHEN groupchat_users_vcard.givenfamily != '' and groupchat_users_vcard.givenfamily is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.givenfamily
+        WHEN groupchat_users_vcard.fn != '' and groupchat_users_vcard.fn is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.fn
+        WHEN groupchats.anonymous = 'public' THEN groupchat_users.username
+        ELSE groupchat_users.id
+        END AS effective_nickname
+        from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username
+        left join groupchats on groupchats.jid = %(Chat)s) select @(username)s,@(badge)s,
+        @(effective_nickname)s from group_members
+         where chatgroup = %(Chat)s")) of
+    {selected, [_F|_R] = List} ->
+      Nick = str:strip(NickRaw),
+      CurrentNickBadge = lists:keyfind(User,1,List),
+      case CurrentNickBadge of
+        {User,CurrentBadge,_CurrentNick} ->
+          NewList0 = List -- [CurrentNickBadge],
+          NewNickBadge = {User,CurrentBadge,Nick},
+          NewList = NewList0 ++ [NewNickBadge],
+          ListToCheck = [{B,N} || {_U,B,N} <- NewList],
+          LengthNotUnique = length(ListToCheck),
+          LengthUnique = length(lists:usort(ListToCheck)),
+          case LengthNotUnique of
+            LengthUnique ->
+              User;
+            _ ->
+              Message = <<"Duplicated combination of nickname and badge is not allowed">>,
+              {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
+          end;
+        _ ->
+          Message = <<"Not found">>,
+          {stop, {error, xmpp:err_item_not_found(Message, Lang)}}
+      end;
+    _ ->
+      Message = <<"Not found">>,
+      {stop, {error, xmpp:err_item_not_found(Message, Lang)}}
+  end;
+validate_unique(LServer,Chat,User,undefined,BadgeRaw,Lang) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL(
+      "WITH group_members AS (select
+        groupchat_users.username,
+        groupchat_users.badge,
+        groupchat_users.chatgroup,
+        CASE
+        WHEN groupchat_users.nickname != '' and groupchat_users.nickname is not null THEN groupchat_users.nickname
+        WHEN groupchat_users_vcard.nickname != '' and groupchat_users_vcard.nickname is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.nickname
+        WHEN groupchat_users_vcard.givenfamily != '' and groupchat_users_vcard.givenfamily is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.givenfamily
+        WHEN groupchat_users_vcard.fn != '' and groupchat_users_vcard.fn is not null and groupchats.anonymous = 'public' THEN groupchat_users_vcard.fn
+        WHEN groupchats.anonymous = 'public' THEN groupchat_users.username
+        ELSE groupchat_users.id
+        END AS effective_nickname
+        from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username
+        left join groupchats on groupchats.jid = %(Chat)s) select @(username)s,@(badge)s,
+        @(effective_nickname)s from group_members
+         where chatgroup = %(Chat)s")) of
+    {selected, [_F|_R] = List} ->
+      CurrentNickBadge = lists:keyfind(User,1,List),
+      case CurrentNickBadge of
+        {User,_CurrentBadge,CurrentNick} ->
+          Badge = str:strip(BadgeRaw),
+          NewList0 = List -- [CurrentNickBadge],
+          NewNickBadge = {User,Badge,CurrentNick},
+          NewList = NewList0 ++ [NewNickBadge],
+          ListToCheck = [{B,N} || {_U,B,N} <- NewList],
+          LengthNotUnique = length(ListToCheck),
+          LengthUnique = length(lists:usort(ListToCheck)),
+          case LengthNotUnique of
+            LengthUnique ->
+              User;
+            _ ->
+              Message = <<"Duplicated combination of nickname and badge is not allowed">>,
+              {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
+          end;
+        _ ->
+          Message = <<"Not found">>,
+          {stop, {error, xmpp:err_item_not_found(Message, Lang)}}
+      end;
+    _ ->
+      Message = <<"Not found">>,
+      {stop, {error, xmpp:err_item_not_found(Message, Lang)}}
+  end;
+validate_unique(LServer,Chat,User,Nick,Badge,Lang) ->
+  case check_if_unique(LServer,Chat,User,str:strip(Nick),str:str(Badge)) of
+    [] ->
       User;
     _ ->
-      {stop, {error, xmpp:err_not_allowed()}}
+      Message = <<"Duplicated combination of nickname and badge is not allowed">>,
+      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end.
 
 update_user(User, LServer,Chat, _Admin,_ID,Nickname,Badge,_Lang) ->
@@ -1449,12 +1599,7 @@ get_user_from_chat(LServer,Chat,User) ->
                       end,
                Role = calculate_role(LServer,Username,Chat),
                AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
-               BadgeF = case Badge of
-                          null ->
-                            <<>>;
-                          Another ->
-                            Another
-                        end,
+               BadgeF = validate_badge_and_nick(LServer,Chat,User,Nick,Badge),
                S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
                L = length(S),
                Present = case L of
@@ -1601,12 +1746,7 @@ make_query(LServer,RawData,RequesterUser,Chat) ->
       [Username,Id,Badge,LastSeen,Subscription,Nick] = UserInfo,
       Role = calculate_role(LServer,Username,Chat),
       AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
-      BadgeF = case Badge of
-                 null ->
-                   <<>>;
-                 Another ->
-                   Another
-               end,
+      BadgeF = validate_badge_and_nick(LServer,Chat,Username,Nick,Badge),
       S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
       L = length(S),
       Present = case L of

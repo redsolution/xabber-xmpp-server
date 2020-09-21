@@ -686,7 +686,6 @@ check_unique_and_update(Server, User, Chat, Nick) ->
       RandomAdjectivePosition = rand:uniform(LengthAdjectives),
       RandomAdjective = list_to_binary(lists:nth(RandomAdjectivePosition,Adjectives)),
       UpdatedNick = <<RandomAdjective/binary," ", Nick/binary>>,
-      ?INFO_MSG("Duplicated nick ~p - add random adjective ~p",[Nick,RandomAdjective]),
       UpdatedNick
   end.
 
@@ -722,10 +721,8 @@ old_random_nick() ->
 
 generate_nick_and_avatar(Server, User, Chat) ->
   PreImages = gen_mod:get_module_opt(Server,?MODULE,pre_generated_images),
-  ?INFO_MSG("Preimage path ~p",[PreImages]),
   case file:list_dir(PreImages) of
     {ok,[]} ->
-      ?INFO_MSG("Start generate all",[]),
       generate_files(Server,[]);
     {ok,Files} ->
       FilesLength = length(Files),
@@ -733,7 +730,6 @@ generate_nick_and_avatar(Server, User, Chat) ->
       Result = list_to_binary(lists:nth(RandomPicturePosition,Files)),
       FullPath = <<PreImages/binary, "/">>,
       File = <<FullPath/binary, Result/binary>>,
-      ?INFO_MSG("Choose ~p",[File]),
       case file:read_file(File) of
         {ok,F} ->
           Proc = gen_mod:get_module_proc(Server, ?MODULE),
@@ -755,7 +751,6 @@ pre_generation(Host) ->
     {ok,Files} ->
       generate_files(Host,Files);
     {error,_Err} ->
-      ?INFO_MSG("Try to create folder ~p",[ImagePath]),
       case file:make_dir(ImagePath) of
         ok ->
           case file:list_dir(ImagePath) of
@@ -790,7 +785,6 @@ generate_image(Host) ->
   CMD = binary_to_list(<<"python3 generateavatar.py ", FullPath/binary>>),
   Result = list_to_binary(os:cmd(CMD)),
   File = <<FullPath/binary, Result/binary>>,
-  ?INFO_MSG("Creating file ~p",[File]),
   case file:read_file(File) of
     {ok,_F} ->
       ok;

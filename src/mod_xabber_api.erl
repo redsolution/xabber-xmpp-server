@@ -48,7 +48,11 @@
   % Count user
   xabber_num_online_users/1,
   xabber_test_api/0,  xabber_get_vcard/2,
-  xabber_registered_vhosts/0, xabber_registered_users/1, xabber_get_one_message/3
+  xabber_registered_vhosts/0, xabber_registered_users/1, xabber_get_one_message/3,
+  % Other API
+  xabber_get_table_size/1,
+  xabber_get_db_size/1,
+  xabber_sent_images_count/1
 ]).
 
 
@@ -343,7 +347,36 @@ get_commands_spec() ->
         result_desc = "List of available vhosts",
         result_example = [<<"example.com">>, <<"anon.example.com">>],
         args = [],
-        result = {vhosts, {list, {vhost, string}}}}
+        result = {vhosts, {list, {vhost, string}}}},
+      #ejabberd_commands{name = xabber_sent_images_count, tags = [xabber],
+        desc = "Get number of sended images",
+        longdesc = "",
+        module = ?MODULE, function = xabber_sent_images_count,
+        args_desc = ["Name of HOST to check"],
+        args_example = [<<"capulet.lit">>],
+        args = [{host, binary}],
+        result = {images, integer},
+        result_example = 123,
+        result_desc = "Number of sended images"},
+      #ejabberd_commands{name = xabber_get_db_size, tags = [xabber],
+        desc = "Get db size of host",
+        longdesc = "",
+        module = ?MODULE, function = xabber_get_db_size,
+        args_desc = ["Name of HOST to check"],
+        args_example = [<<"capulet.lit">>],
+        args = [{host, binary}],
+        result = {size, string},
+        result_example = <<"356 MB">>,
+        result_desc = "Size of database"},
+      #ejabberd_commands{name = xabber_get_table_size, tags = [accounts],
+        desc = "Get size of tables of host database",
+        module = ?MODULE, function = xabber_get_table_size,
+        args_desc = ["Local vhost"],
+        args_example = [<<"example.com">>],
+        result_desc = "List of tables and their size",
+        result_example = [<<"users">>, <<"124 MB">>],
+        args = [{host, binary}],
+        result = {tables, {list, {table, {tuple, [{name, string}, {size, string}]}}}}}
     ].
 
 xabber_registered_vhosts() ->
@@ -356,7 +389,7 @@ xabber_registered_users(Host) ->
   UserAndBackends.
 
 xabber_get_vcard(User, Server) ->
-  VcardInfo = convert_vcard(mod_vcard:get_vcard(User,Server)).
+  convert_vcard(mod_vcard:get_vcard(User,Server)).
 
 xabber_get_one_message(User, Server, StanzaID) ->
   ?INFO_MSG("Try to get message from user ~p @ ~p~n Stanza ID ~p",[User,Server,StanzaID]),
@@ -401,22 +434,61 @@ set_vcard(User, Host, Name, SomeContent) ->
 set_vcard(User, Host, Name, Subname, SomeContent) ->
   mod_admin_extra:set_vcard(User, Host, Name, Subname, SomeContent).
 
-xabber_all_registered_users(Host) ->
-  Users = ejabberd_auth:get_users(Host),
-  SUsers = lists:sort(Users),
-  Usernames = lists:map(fun({U, _S}) -> U end, SUsers),
-  Usernames -- xabber_chats(Host).
+xabber_get_table_size(Host) ->
+  case ejabberd_sql:sql_query(
+    Host,
+    [
+      <<"SELECT nspname || '.' || relname AS relation,
+    pg_size_pretty(pg_total_relation_size(C.oid)) AS total_size
+  FROM pg_class C
+  LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
+  WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+    AND C.relkind <> 'i'
+    AND nspname !~ '^pg_toast'
+  ORDER BY pg_total_relation_size(C.oid) DESC">>
+    ]) of
+    {selected,_Columns,Info} ->
+      lists:map(fun(Tab) -> [TableName,TableSize] = Tab, {TableName,TableSize} end, Info);
+    _ ->
+      []
+  end.
 
-xabber_chats(Host) ->
-  Chats = mod_groupchat_chats:get_all(Host),
-  SChats = lists:sort(Chats),
-  lists:map(fun({U}) -> U end, SChats).
+xabber_get_db_size(Host) ->
+  SQLDATABASE = ejabberd_config:get_option(sql_database, undefined),
+  case SQLDATABASE of
+    _  when is_binary(SQLDATABASE) == true ->
+      case ejabberd_sql:sql_query(
+        Host,
+        [
+          <<"select pg_size_pretty(pg_database_size('">>,SQLDATABASE,<<"'));">>
+        ]) of
+        {selected,_Col,[[Value]]} ->
+          Value;
+        _ ->
+          <<"No data">>
+      end;
+    _ ->
+      <<"No data">>
+  end.
+
+
+xabber_sent_images_count(Host) ->
+  DocRoot1 = gen_mod:get_module_opt(Host, mod_http_upload, docroot),
+  DocRoot2 = mod_http_upload:expand_home(str:strip(DocRoot1, right, $/)),
+  DocRoot3 = mod_http_upload:expand_host(DocRoot2, Host),
+  {ok,Files} = file:list_dir(DocRoot3),
+  FullPathFiles = lists:map(fun(File) -> FileB = list_to_binary(File), <<DocRoot3/binary,"/", FileB/binary>> end, Files),
+  Directories = lists:filter(fun(E) -> filelib:is_dir(E) end, FullPathFiles),
+  SearchPatern = lists:map(fun(Dir) -> binary_to_list(<<Dir/binary, "/*/*.{png,jpg,jpeg,JPEG,gif,webp}">>) end, Directories),
+  sum(0,lists:map(fun(Patern) -> length(filelib:wildcard(Patern)) end, SearchPatern)).
+
+sum(Acc,[]) ->
+  Acc;
+sum(Acc,[F|R]) ->
+  sum(Acc + F, R).
 
 xabber_registered_chats(Host,Limit,Page) ->
   mod_groupchat_chats:get_all_info(Host,Limit,Page).
-
-xabber_registered_users(Host,Limit,Page) ->
-  mod_groupchat_users:get_users_page(Host,Limit,Page).
 
 xabber_registered_chats_count(Host) ->
   mod_groupchat_chats:get_count_chats(Host).

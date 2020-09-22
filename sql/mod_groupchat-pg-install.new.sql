@@ -471,7 +471,7 @@ CREATE TABLE groupchat_users (
     nickname text default '',
     parse_vcard timestamp NOT NULL default now(),
     parse_avatar text NOT NULL default 'yes',
-    badge text,
+    badge text NOT NULL default '',
     chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
     subscription text NOT NULL,
     p2p_state text DEFAULT 'true',
@@ -583,11 +583,20 @@ CREATE TABLE conversation_metadata(
     displayed_until text NOT NULL DEFAULT '0',
     updated_at bigint NOT NULL DEFAULT 0,
     metadata_updated_at bigint NOT NULL DEFAULT 0,
-    CONSTRAINT uc_conversation_metadata UNIQUE (username,server_host,conversation,conversation_thread)
+    status text NOT NULL DEFAULT 'active'::text,
+    pinned boolean NOT NULL DEFAULT false,
+    pinned_at bigint NOT NULL DEFAULT 0,
+    archived boolean NOT NULL DEFAULT false,
+    archived_at bigint NOT NULL DEFAULT 0,
+    encrypted boolean NOT NULL DEFAULT false,
+    incognito boolean NOT NULL DEFAULT false,
+    p2p boolean NOT NULL DEFAULT false,
+    CONSTRAINT uc_conversation_metadata UNIQUE (username,server_host,conversation,conversation_thread,type)
     );
 
 CREATE TABLE special_messages(
     username text NOT NULL,
+    server_host text NOT NULL,
     conversation text NOT NULL,
     timestamp BIGINT NOT NULL,
     origin_id text,

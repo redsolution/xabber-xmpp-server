@@ -120,7 +120,50 @@ chat_created(LServer,User,Chat,_Lang) ->
   send_info_to_index(LServer,ChatJID),
   From = jid:replace_resource(ChatJID,<<"Groupchat">>),
   To = jid:from_string(User),
-  Presence = #presence{from = From, to = To, type = subscribe, id = randoms:get_string()},
+  {selected,[{Name,Anonymous,_Search,_Model,_Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
+    mod_groupchat_chats:get_all_information_chat(Chat,LServer),
+  {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(LServer,Chat),
+  Members = list_to_binary(MembersC),
+  {CollectState,P2PState} = mod_groupchat_inspector:get_collect_state(Chat,User),
+  Hash = mod_groupchat_inspector:get_chat_avatar_id(Chat),
+  VcardX = #vcard_xupdate{hash = Hash},
+  SubEls = case ParentChat of
+             <<"0">> ->
+               [
+                 #xabbergroupchat_x{
+                   xmlns = ?NS_GROUPCHAT,
+                   members = Members,
+                   sub_els = [
+                     #xabbergroupchat_name{cdata = Name},
+                     #xabbergroupchat_privacy{cdata = Anonymous},
+                     #collect{cdata = CollectState},
+                     #xabbergroup_peer{cdata = P2PState}
+                   ]
+                 },
+                 VcardX
+               ];
+             _ ->
+               [
+                 #xabbergroupchat_x{
+                   xmlns = ?NS_GROUPCHAT,
+                   members = Members,
+                   parent = jid:from_string(ParentChat),
+                   sub_els = [
+                     #xabbergroupchat_name{cdata = Name},
+                     #xabbergroupchat_privacy{cdata = Anonymous}
+                   ]
+                 },
+                 VcardX
+               ]
+           end,
+  Show = define_show(Status),
+  HumanStatus = case ParentChat of
+                  <<"0">> ->
+                    define_human_status(Status);
+                  _ ->
+                    [#text{data = <<"Private chat">>}]
+                end,
+  Presence = #presence{from = From, to = To, type = subscribe, id = randoms:get_string(), sub_els = SubEls, status = HumanStatus, show = Show},
   ejabberd_router:route(Presence).
 
 process_presence(#presence{to=To} = Packet) ->
@@ -282,7 +325,6 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
     not_ok ->
       ejabberd_router:route(FromChat,From,form_unsubscribed_presence());
     _ ->
-%%      ejabberd_router:route(FromChat,jid:remove_resource(From),mod_groupchat_vcard:get_vcard()),
       ejabberd_router:route(FromChat,From,form_subscribed_presence()),
       ejabberd_router:route(FromChat,From,#presence{type = subscribe, id = randoms:get_string()}),
       ejabberd_router:route(FromChat,From,mod_groupchat_vcard:get_pubsub_meta())
@@ -308,7 +350,6 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   UserCard = mod_groupchat_users:form_user_card(User,Chat),
   ChatJIDRes = jid:replace_resource(ChatJID,<<"Groupchat">>),
   Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
-  ?INFO_MSG("Unsubscribe hook ~p~n",[Result]),
   case Result of
     ok ->
       mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),

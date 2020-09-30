@@ -97,20 +97,43 @@ process_iq({selected,[_Name]},Iq) ->
 
 process_groupchat(#iq{type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE, sub_els = []}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
-process_groupchat(#iq{type = set, lang = Lang, to = To, from = From, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE, sub_els = SubEls}]} = IQ) ->
+process_groupchat(#iq{type = set, lang = Lang, to = To, from = From, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE, sub_els = SubEls} = Create]} = IQ) ->
   Creator = From#jid.luser,
   Server = To#jid.lserver,
   Host = From#jid.lserver,
-  Result = ejabberd_hooks:run_fold(create_groupchat, Server, [], [Server,Creator,Host,SubEls]),
-  case Result of
-    {ok,Query,Chat,User} ->
-      Proc = gen_mod:get_module_proc(Server, ?MODULE),
-      gen_server:cast(Proc, {groupchat_created,Server,User,Chat,Lang}),
-      xmpp:make_iq_result(IQ,Query);
-    exist ->
-      xmpp:make_error(IQ, xmpp:err_conflict());
+  DecodedCreate = xmpp:decode_els(Create),
+  PeerToPeer = xmpp:get_subtag(DecodedCreate, #xabbergroup_peer{}),
+  case PeerToPeer of
+    false ->
+      Result = ejabberd_hooks:run_fold(create_groupchat, Server, [], [Server,Creator,Host,SubEls]),
+      case Result of
+        {ok,Query,Chat,User} ->
+          Proc = gen_mod:get_module_proc(Server, ?MODULE),
+          gen_server:cast(Proc, {groupchat_created,Server,User,Chat,Lang}),
+          xmpp:make_iq_result(IQ,Query);
+        exist ->
+          xmpp:make_error(IQ, xmpp:err_conflict());
+        _ ->
+          xmpp:make_error(IQ, xmpp:err_bad_request())
+      end;
+    #xabbergroup_peer{} ->
+      Result = ejabberd_hooks:run_fold(groupchat_peer_to_peer,
+        Server, [], [Server,jid:to_string(jid:remove_resource(From)),PeerToPeer]),
+      case Result of
+        {ok,Created} ->
+          xmpp:make_iq_result(IQ, Created);
+        {exist,ExistedChat} ->
+          ExistedChatJID = jid:from_string(ExistedChat),
+          NewSub = [#xabbergroupchat_x{jid = ExistedChatJID}],
+          NewIq = xmpp:set_els(IQ,NewSub),
+          xmpp:make_error(NewIq, xmpp:err_conflict());
+        stop ->
+          ok;
+        _ ->
+          xmpp:make_error(IQ, xmpp:serr_internal_server_error(<<"Internal server error">>,<<"en">>))
+      end;
     _ ->
-      xmpp:make_error(IQ, xmpp:err_bad_request())
+      xmpp:make_error(IQ, xmpp:serr_internal_server_error(<<"Internal server error">>,<<"en">>))
   end;
 process_groupchat(#iq{type = set, to = To, from = From,
   sub_els = [#xabbergroupchat_create{name = undefined, anonymous= undefined, localpart= undefined,
@@ -373,12 +396,12 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>, attrs = [{<<"x
   process_mam_iq(Iq);
 make_action(#iq{from = From, to = To, type = set,
   sub_els =
-  [#xmlel{name = <<"activate">>, attrs = [{<<"xmlns">>,?NS_XABBER_REWRITE}]}] = SubEls } = IQ) ->
+  [#xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_XABBER_REWRITE}]}] = SubEls } = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   SubDecoded = lists:map(fun(N) -> xmpp:decode(N) end, SubEls ),
-  X = lists:keyfind(xabber_retract_activate,1,SubDecoded),
-  #xabber_retract_activate{version = Version, 'less-than' = Less} = X,
+  X = lists:keyfind(xabber_retract_query,1,SubDecoded),
+  #xabber_retract_query{version = Version, 'less-than' = Less} = X,
   Result = ejabberd_hooks:run_fold(retract_query, Server, [], [{Server,From,Chat,Version,Less}]),
   case Result of
     ok ->
@@ -388,12 +411,12 @@ make_action(#iq{from = From, to = To, type = set,
   end;
 make_action(#iq{from = From, to = To, type = set,
   sub_els =
-  [#xmlel{name = <<"activate">>, attrs = [{<<"xmlns">>,?NS_XABBER_REWRITE},{<<"version">>,_V}]}] = SubEls } = IQ) ->
+  [#xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_XABBER_REWRITE},{<<"version">>,_V}]}] = SubEls } = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   SubDecoded = lists:map(fun(N) -> xmpp:decode(N) end, SubEls ),
-  X = lists:keyfind(xabber_retract_activate,1,SubDecoded),
-  #xabber_retract_activate{version = Version, 'less-than' = Less} = X,
+  X = lists:keyfind(xabber_retract_query,1,SubDecoded),
+  #xabber_retract_query{version = Version, 'less-than' = Less} = X,
   Result = ejabberd_hooks:run_fold(retract_query, Server, [], [{Server,From,Chat,Version,Less}]),
   case Result of
     ok ->
@@ -403,13 +426,13 @@ make_action(#iq{from = From, to = To, type = set,
   end;
 make_action(#iq{from = From, to = To, type = set,
   sub_els =
-  [#xmlel{name = <<"activate">>, attrs = [{<<"xmlns">>,?NS_XABBER_REWRITE},{<<"version">>,_V},{<<"less_than">>,_L}]}] = SubEls } = IQ) ->
+  [#xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_XABBER_REWRITE},{<<"version">>,_V},{<<"less_than">>,_L}]}] = SubEls } = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   FromChat = jid:replace_resource(To,<<"Groupchat">>),
   Server = To#jid.lserver,
   SubDecoded = lists:map(fun(N) -> xmpp:decode(N) end, SubEls ),
-  X = lists:keyfind(xabber_retract_activate,1,SubDecoded),
-  #xabber_retract_activate{version = Version, 'less-than' = Less} = X,
+  X = lists:keyfind(xabber_retract_query,1,SubDecoded),
+  #xabber_retract_query{version = Version, 'less-than' = Less} = X,
   Result = ejabberd_hooks:run_fold(retract_query, Server, [], [{Server,From,Chat,Version,Less}]),
   case Result of
     ok ->

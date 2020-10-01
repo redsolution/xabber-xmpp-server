@@ -98,6 +98,9 @@ groupchat_avatar_changed(LServer, Chat, User) ->
   M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M).
 
+groupchat_changed(_LServer, Chat, _User, [{name_changed,false},{desc_changed,false},{status_changed,false},
+  {pinned_changed,false},{properties_changed,false}], _Status) ->
+  ?DEBUG("Nothing is changed in chat ~p~n",[Chat]);
 groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
   ChatJID = jid:from_string(Chat),
   Version = mod_groupchat_users:current_chat_version(LServer,Chat),

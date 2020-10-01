@@ -454,7 +454,7 @@ add_user(Server,Member,Role,Groupchat,Subscription) ->
 
 
 created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList) ->
-  #xmlel{name = <<"created">>, attrs = [{<<"xmlns">>,?NS_GROUPCHAT}],
+  #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_GROUPCHAT_CREATE}],
   children = chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)
   }.
 
@@ -462,6 +462,7 @@ created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)
 chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,M,ContactList,DomainList) ->
   J = jid:from_string(ChatJid),
   Server = J#jid.lserver,
+  Localpart = J#jid.luser,
   {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(Server,ChatJid),
   Members = list_to_binary(MembersC),
   ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',ChatJid),
@@ -480,6 +481,7 @@ chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,M,ContactList,DomainLi
             end,
   [
     #xmlel{name = <<"jid">>, children = [{xmlcdata,ChatJid}]},
+    #xmlel{name = <<"localpart">>, children = [{xmlcdata,Localpart}]},
     #xmlel{name = <<"name">>, children = [{xmlcdata,Name}]},
     #xmlel{name = <<"privacy">>, children = [{xmlcdata,Anonymous}]},
     #xmlel{name = <<"index">>, children = [{xmlcdata,Search}]},

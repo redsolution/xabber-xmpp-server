@@ -35,7 +35,7 @@
 ]).
 %% API
 -export([
-  get_chat_sessions/0,set_session/1,delete_session/1, select_sessions/2, delete_session/3, delete_all_user_sessions/2
+  get_chat_sessions/0,set_session/3,delete_session/1, select_sessions/2, delete_session/3, delete_all_user_sessions/2
 ]).
 -record(state, {}).
 -include("mod_groupchat_present.hrl").
@@ -77,9 +77,20 @@ start_link() ->
 get_chat_sessions() ->
   select_sessions('_','_').
 
--spec set_session(#chat_session{}) -> ok.
-set_session(Session) ->
-  mnesia:dirty_write(Session).
+-spec set_session(binary(),binary(),binary()) -> ok.
+set_session(Resource, User, ChatJid) ->
+  case select_session(Resource,User,ChatJid) of
+    [] ->
+      Session = #chat_session{
+        id = randoms:get_string(),
+        resource =  Resource,
+        user = User,
+        chat = ChatJid
+      },
+      mnesia:dirty_write(Session);
+    _ ->
+      ok
+  end.
 
 delete_session(Resource,Username,Chat) ->
   S = select_session(Resource,Username,Chat),

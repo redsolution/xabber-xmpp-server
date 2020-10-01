@@ -274,12 +274,8 @@ answer_presence(#presence{to = To, from = From, type = available,
           ejabberd_router:route(FromChat,From,form_presence(ChatJid,User));
         _  when Present =/= false andalso NotPresent == false andalso Status == exist ->
           mod_groupchat_sql:update_last_seen(Server,User,ChatJid),
-          mod_groupchat_present_mnesia:set_session(#chat_session{
-            id = randoms:get_string(),
-            resource =  Resource,
-            user = User,
-            chat = ChatJid}),
-          send_notification(To,PresentNum);
+          mod_groupchat_present_mnesia:set_session(Resource, User, ChatJid),
+          send_notification(From, To, PresentNum);
         _  when Present == false andalso NotPresent =/= false andalso Status == exist->
           change_present_state(To,From);
         _ ->
@@ -403,15 +399,16 @@ change_present_state(To,From) ->
   PresentNum = get_present(Chat),
   mod_groupchat_present_mnesia:delete_session(Resource,Username,Chat),
   mod_groupchat_sql:update_last_seen(Server,Username,Chat),
-  send_notification(To,PresentNum).
+  send_notification(From, To, PresentNum).
 
-send_notification(To,PresentNum) ->
+send_notification(From, To, PresentNum) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   FromChat = jid:replace_resource(To,<<"Groupchat">>),
   ActualPresentNum = get_present(Chat),
   case ActualPresentNum of
     PresentNum ->
-      ok;
+      User = [{jid:to_string(From)}],
+      mod_groupchat_messages:send_message(form_presence(Chat),User,FromChat);
     _ ->
       Users = get_users_with_session(Chat),
       mod_groupchat_messages:send_message(form_presence(Chat),Users,FromChat)
@@ -573,6 +570,8 @@ define_human_status(<<"away">>) ->
   [#text{data = <<"Regulated">>}];
 define_human_status(<<"active">>) ->
   [#text{data = <<"Discussion">>}];
+define_human_status(<<"inactive">>) ->
+  [#text{data = <<"Inactive">>}];
 define_human_status(_Status) ->
   [].
 

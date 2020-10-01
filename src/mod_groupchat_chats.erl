@@ -666,7 +666,7 @@ get_all_information_chat(Chat,Server) ->
     from groupchats where jid=%(Chat)s and %(Server)H")).
 
 created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList) ->
-  #xmlel{name = <<"created">>, attrs = [{<<"xmlns">>,?NS_GROUPCHAT}],
+  #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_GROUPCHAT_CREATE}],
     children = mod_groupchat_inspector:chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)
   }.
 
@@ -676,7 +676,7 @@ form_fixed_chat_information(Chat,LServer) ->
   #xdata{type = form, title = <<"Groupchat change">>, instructions = [<<"Fill out this form to change the group chat">>], fields = Fields}.
 
 get_fixed_chat_fields(Chat,LServer) ->
-  {selected,[{Name,Anonymous,Search,Model,Desc,Message,ContactList,DomainList,_ParentChat,Status}]} =
+  {selected,[{Name,Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,Status}]} =
     get_all_information_chat(Chat,LServer),
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
@@ -685,7 +685,7 @@ get_fixed_chat_fields(Chat,LServer) ->
     #xdata_field{var = <<"index">>, type = fixed, values = [Search], label = <<"Index">>},
     #xdata_field{var = <<"membership">>, type = fixed, values = [Model], label = <<"Membership">>},
     #xdata_field{var = <<"description">>, type = 'fixed', values = [Desc], label = <<"Description">>},
-    #xdata_field{var = <<"pinned-message">>, type = 'fixed', values = [integer_to_binary(Message)], label = <<"Pinned message">>},
+%%    #xdata_field{var = <<"pinned-message">>, type = 'fixed', values = [integer_to_binary(Message)], label = <<"Pinned message">>},
     #xdata_field{var = <<"contacts">>, type = 'fixed', values = [ContactList], label = <<"Contacts">>},
     #xdata_field{var = <<"domains">>, type = 'fixed', values = [DomainList], label = <<"Domains">>},
     #xdata_field{var = <<"status">>, type = 'fixed', values = [Status], label = <<"Status">>}
@@ -696,11 +696,11 @@ form_chat_information(Chat,LServer,Type) ->
   #xdata{type = Type, title = <<"Groupchat change">>, instructions = [<<"Fill out this form to change the group chat">>], fields = Fields}.
 
 get_chat_fields(Chat,LServer) ->
-  {selected,[{Name,_Anonymous,Search,Model,Desc,Message,ContactList,DomainList,_ParentChat,Status}]} =
+  {selected,[{Name,_Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,Status}]} =
     get_all_information_chat(Chat,LServer),
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
-    #xdata_field{var = <<"pinned-message">>, type = 'text-single', values = [integer_to_binary(Message)], label = <<"Change pinned message">>},
+    #xdata_field{var = <<"pinned-message">>, type = hidden, values = [<<"true">>], label = <<"Change pinned message">>},
     #xdata_field{var = <<"change-avatar">>, type = hidden, values = [<<"true">>], label = <<"Change avatar">>},
     #xdata_field{var = <<"name">>, type = 'text-single', values = [Name], label = <<"Name">>},
     #xdata_field{var = <<"index">>, type = 'list-single', values = [Search], label = <<"Index">>, options = index_options()},

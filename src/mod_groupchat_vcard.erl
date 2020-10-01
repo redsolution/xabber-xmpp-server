@@ -562,7 +562,11 @@ notification_message(User, Server, Chat) ->
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
-  #message{from = ChatJID, to = ChatJID, type = headline, id = randoms:get_string(), body = [], sub_els = [X,By], meta = #{}}.
+  SubEls = [X,By],
+  ID = randoms:get_string(),
+  OriginID = #origin_id{id = ID},
+  NewEls = [OriginID | SubEls],
+  #message{from = ChatJID, to = ChatJID, type = chat, id = ID, body = [], sub_els = NewEls, meta = #{}}.
 
 notification_message_about_nick(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
@@ -570,7 +574,11 @@ notification_message_about_nick(User, Server, Chat) ->
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
-  #message{from = ChatJID, to = ChatJID, type = headline, id = randoms:get_string(), body = [], sub_els = [X,By], meta = #{}}.
+  SubEls = [X,By],
+  ID = randoms:get_string(),
+  OriginID = #origin_id{id = ID},
+  NewEls = [OriginID | SubEls],
+  #message{from = ChatJID, to = ChatJID, type = headline, id = ID, body = [], sub_els = NewEls, meta = #{}}.
 
 get_chat_meta_nodeid(Server,Chat)->
   Node = <<"urn:xmpp:avatar:metadata">>,
@@ -1081,10 +1089,17 @@ delete_file(Server, Hash, AvatarType) ->
 get_vcard(Chat,Server) ->
   {selected,[{Name,Privacy,Index,Membership,Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
     mod_groupchat_chats:get_all_information_chat(Chat,Server),
-  HumanStatus = define_human_status(Status),
   Parent = define_parent_chat(ParentChat),
+  {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(Server,Chat),
+  Members = list_to_binary(MembersC),
+  HumanStatus = case ParentChat of
+                  <<"0">> ->
+                    define_human_status(Status);
+                  _ ->
+                    <<"Private chat">>
+                end,
   Avatar = get_avatar_from_pubsub(Chat,Server),
-  #vcard_temp{jabberid = Chat, nickname = Name, desc = Desc, index = Index, privacy = Privacy, membership = Membership, parent = Parent, status = HumanStatus, photo = Avatar}.
+  #vcard_temp{jabberid = Chat, nickname = Name, desc = Desc, index = Index, privacy = Privacy, membership = Membership, parent = Parent, status = HumanStatus, photo = Avatar, members = Members}.
 
 define_human_status(<<"dnd">>) ->
   <<"Restricted">>;

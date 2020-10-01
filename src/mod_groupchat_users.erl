@@ -45,8 +45,6 @@
   form_kicked/2,
   is_lonely_owner/2,
   delete_user/2,
-  get_updated_users_rights/3,
-  get_updated_user_rights/4,
   is_in_chat/3, is_duplicated_nick/4,
   check_if_exist/3,
   check_if_exist_by_id/3,
@@ -586,10 +584,10 @@ Server,
   groupchat_rights.type, groupchat_users.subscription,
   groupchat_users_vcard.givenfamily,groupchat_users_vcard.fn,
   groupchat_users_vcard.nickname,groupchat_users.nickname,
-  COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD HH24:MI:SS')),
-  COALESCE(to_char(groupchat_policy.issued_at, 'YYYY-MM-DD HH24:MI:SS')),
+  COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD hh24:mi:ss')),
+  COALESCE(to_char(groupchat_policy.issued_at, 'YYYY-MM-DD hh24:mi:ss')),
   groupchat_policy.issued_by,groupchat_users_vcard.image,groupchat_users.avatar_id,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST'))
+  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZhh24:mi:ssT'))
   from ((((groupchat_users LEFT JOIN  groupchat_policy on
   groupchat_policy.username = groupchat_users.username and
   groupchat_policy.chatgroup = groupchat_users.chatgroup)
@@ -605,67 +603,7 @@ Server,
       ">>
 ])
 .
-get_updated_users_rights(Server,Chat,Date) ->
-  ejabberd_sql:sql_query(
-    Server,
-    [
-      <<"select groupchat_users.username,groupchat_users.badge,groupchat_users.id,
-  groupchat_users.chatgroup,groupchat_policy.right_name,groupchat_rights.description,
-  groupchat_rights.type, groupchat_users.subscription,
-  groupchat_users_vcard.givenfamily,groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,groupchat_users.nickname,
-  COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD HH24:MI:SS')),
-  COALESCE(to_char(groupchat_policy.issued_at, 'YYYY-MM-DD HH24:MI:SS')),
-  groupchat_policy.issued_by,groupchat_users_vcard.image,groupchat_users.avatar_id,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST'))
-  from ((((groupchat_users LEFT JOIN  groupchat_policy on
-  groupchat_policy.username = groupchat_users.username and
-  groupchat_policy.chatgroup = groupchat_users.chatgroup)
-  LEFT JOIN groupchat_rights on
-  groupchat_rights.name = groupchat_policy.right_name and groupchat_policy.valid_until > CURRENT_TIMESTAMP
-  )
-  LEFT JOIN groupchat_users_vcard ON groupchat_users_vcard.jid = groupchat_users.username)
-  LEFT JOIN groupchat_users_info ON groupchat_users_info.username = groupchat_users.username and
-   groupchat_users_info.chatgroup = groupchat_users.chatgroup)
-  where (groupchat_users.subscription = 'both'
-  or groupchat_users.subscription = 'none') and groupchat_users.chatgroup = ">>,
-      <<"'">>,Chat,<<"' and (groupchat_users.user_updated_at > ">>,
-      <<"'">>, Date, <<"' or groupchat_users.last_seen > ">>,
-      <<"'">>, Date, <<"')">>,
-      <<" ORDER BY groupchat_users.username
-      ">>
-    ]).
 
-get_updated_user_rights(Server,User,Chat,Date) ->
-  ejabberd_sql:sql_query(
-    Server,
-    [
-      <<"select groupchat_users.username,groupchat_users.badge,groupchat_users.id,
-  groupchat_users.chatgroup,groupchat_policy.right_name,groupchat_rights.description,
-  groupchat_rights.type, groupchat_users.subscription,
-  groupchat_users_vcard.givenfamily,groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,groupchat_users.nickname,
-  COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD HH24:MI:SS')),
-  COALESCE(to_char(groupchat_policy.issued_at, 'YYYY-MM-DD HH24:MI:SS')),
-  groupchat_policy.issued_by,groupchat_users_vcard.image,groupchat_users.avatar_id,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST'))
-  from ((((groupchat_users LEFT JOIN  groupchat_policy on
-  groupchat_policy.username = groupchat_users.username and
-  groupchat_policy.chatgroup = groupchat_users.chatgroup)
-  LEFT JOIN groupchat_rights on
-  groupchat_rights.name = groupchat_policy.right_name and groupchat_policy.valid_until > CURRENT_TIMESTAMP
-  and groupchat_policy.issued_at > ">>,ejabberd_sql:escape(Date),<<"
-  )
-  LEFT JOIN groupchat_users_vcard ON groupchat_users_vcard.jid = groupchat_users.username)
-  LEFT JOIN groupchat_users_info ON groupchat_users_info.username = groupchat_users.username and
-   groupchat_users_info.chatgroup = groupchat_users.chatgroup)
-  where groupchat_users.chatgroup = ">>,
-      <<"'">>,ejabberd_sql:escape(Chat),<<"' and groupchat_users.username =">>,
-      <<"'">>, ejabberd_sql:escape(User), <<"' and groupchat_users.user_updated_at =">>,
-      <<"'">>, ejabberd_sql:escape(Date), <<"'">>,
-      <<"ORDER BY groupchat_users.username
-      ">>
-    ]).
 
 get_chat_version(Server,Chat) ->
   case ejabberd_sql:sql_query(
@@ -1255,7 +1193,7 @@ user_rights_and_time(LServer,Chat,User) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(groupchat_policy.right_name)s,@(groupchat_rights.type)s,
-    @(COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD HH24:MI:SS')))s
+    @(COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD hh24:mi:ss')))s
     from groupchat_policy left join groupchat_rights on groupchat_rights.name = groupchat_policy.right_name where username=%(User)s
     and chatgroup=%(Chat)s and valid_until > (now() at time zone 'utc')")) of
     {selected,Rights} ->
@@ -1578,7 +1516,7 @@ get_user_from_chat(LServer,Chat,User) ->
   @(groupchat_users_vcard.givenfamily)s,
   @(groupchat_users_vcard.fn)s,
   @(groupchat_users_vcard.nickname)s,
-  @(COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZHH24:MI:SST')))s
+  @(COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDThh24:mi:ssZ')))s
   from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username where groupchat_users.chatgroup = %(Chat)s and groupchat_users.username = %(User)s
    and subscription = 'both'")),
   SubEls = case Request of
@@ -1670,7 +1608,7 @@ make_sql_query(SChat,RSM,Version) ->
   END AS effective_nickname
   from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username
   left join groupchats on groupchats.jid = '">>,Chat,<<"') select username,id,badge,
-  COALESCE(to_char(last_seen,'YYYY-MM-DDZHH24:MI:SST')),subscription,effective_nickname from group_members
+  COALESCE(to_char(last_seen,'YYYY-MM-DDThh24:mi:ssZ')),subscription,effective_nickname from group_members
    where chatgroup = '">>,Chat,<<"'
    and ">>,SubscriptionClause,<<" ">>],
   PageClause = case Item of
@@ -1707,7 +1645,7 @@ make_sql_query(SChat,RSM,Version) ->
   username,
   id,
   badge,
-  COALESCE(to_char(last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
+  COALESCE(to_char(last_seen, 'YYYY-MM-DDThh24:mi:ssZ')),
   subscription,
   effective_nickname
   ORDER BY effective_nickname DESC ">>,
@@ -1715,7 +1653,7 @@ make_sql_query(SChat,RSM,Version) ->
       _ ->
         [Query, <<" GROUP BY
   username, id, badge,
-  COALESCE(to_char(last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
+  COALESCE(to_char(last_seen, 'YYYY-MM-DDThh24:mi:ssZ')),
   subscription, effective_nickname
         ORDER BY effective_nickname ASC ">>,
           LimitClause, <<";">>]
@@ -1723,7 +1661,7 @@ make_sql_query(SChat,RSM,Version) ->
 
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Users,
         <<" GROUP BY username, id, badge,
-        COALESCE(to_char(last_seen, 'YYYY-MM-DDZHH24:MI:SST')),
+        COALESCE(to_char(last_seen, 'YYYY-MM-DDThh24:mi:ssZ')),
         subscription, effective_nickname) as subquery;">>]}.
 
 get_max_direction_item(RSM) ->

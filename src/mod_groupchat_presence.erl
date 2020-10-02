@@ -116,6 +116,10 @@ groupchat_changed(LServer,Chat,Status,_User) ->
   end.
 
 chat_created(LServer,User,Chat,_Lang) ->
+  Presence = form_subscribe_presence(LServer, User, Chat),
+  ejabberd_router:route(Presence).
+
+form_subscribe_presence(LServer, User, Chat) ->
   ChatJID = jid:from_string(Chat),
   send_info_to_index(LServer,ChatJID),
   From = jid:replace_resource(ChatJID,<<"Groupchat">>),
@@ -163,8 +167,7 @@ chat_created(LServer,User,Chat,_Lang) ->
                   _ ->
                     [#text{data = <<"Private chat">>}]
                 end,
-  Presence = #presence{from = From, to = To, type = subscribe, id = randoms:get_string(), sub_els = SubEls, status = HumanStatus, show = Show},
-  ejabberd_router:route(Presence).
+  #presence{from = From, to = To, type = subscribe, id = randoms:get_string(), sub_els = SubEls, status = HumanStatus, show = Show}.
 
 process_presence(#presence{to=To} = Packet) ->
   Server = To#jid.lserver,
@@ -322,7 +325,7 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
       ejabberd_router:route(FromChat,From,form_unsubscribed_presence());
     _ ->
       ejabberd_router:route(FromChat,From,form_subscribed_presence()),
-      ejabberd_router:route(FromChat,From,#presence{type = subscribe, id = randoms:get_string()}),
+      ejabberd_router:route(FromChat,From,form_subscribe_presence(Server, User, ChatJid)),
       ejabberd_router:route(FromChat,From,mod_groupchat_vcard:get_pubsub_meta())
   end;
 answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) ->

@@ -260,9 +260,7 @@ handle_cast({user_send,#message{id = ID, type = chat, from = #jid{luser =  LUser
     _ ->
       ejabberd_hooks:run(xabber_push_notification, LServer, [<<"outgoing">>, LUser, LServer,
         #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"invite">>),
-      update_metainfo(message, LServer,LUser,Conversation,TS),
-      update_metainfo(read, LServer,LUser,Conversation,TS)
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"invite">>)
   end,
   {noreply, State};
 handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver = LServer}, to = #jid{luser =  PUser,lserver = PServer}} = Pkt}, State) ->
@@ -306,8 +304,14 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
       update_metainfo(<<"chat">>, LServer,LUser,Conversation,<<>>)
   end,
   {noreply, State};
-handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LServer, luser = LUser}}},State) ->
-  ejabberd_hooks:run(xabber_push_notification, LServer, [<<"subscribe">>, LUser, LServer, #presence{type = subscribe, from = From}]),
+handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
+  X = xmpp:get_subtag(Presence, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+  case X of
+    false ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"subscribe">>, LUser, LServer, #presence{type = subscribe, from = From}]);
+    _ ->
+      ok
+  end,
   Conversation = jid:to_string(jid:remove_resource(From)),
   create_conversation(LServer,LUser,Conversation,<<"">>,false),
   {noreply, State};
@@ -789,7 +793,7 @@ parse_query(#xabber_synchronization_query{xdata = #xdata{}} = Query, Lang) ->
     Txt = sync_query:format_error(Why),
     {error, xmpp:err_bad_request(Txt, Lang)}
   end;
-parse_query(#mam_query{}, _Lang) ->
+parse_query(#xabber_synchronization_query{}, _Lang) ->
   {ok, []}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -818,7 +822,7 @@ make_result(LServer, LUser, Stamp, RSM, Form) ->
              _ ->
                undefined
            end,
-  #xabber_synchronization{conversation = ReplacedConv, stamp = LastStamp, rsm = ResRSM}.
+  #xabber_synchronization_query{sub_els = ReplacedConv, stamp = LastStamp, rsm = ResRSM}.
 
 convert_result(Result) ->
   lists:map(fun(El) ->
@@ -2128,10 +2132,16 @@ get_max_direction_chat(RSM) ->
 delete_conversations(UserJID,Conversations) ->
   LUser = UserJID#jid.luser,
   LServer = UserJID#jid.lserver,
-  ConvList = parse_conv(Conversations),
-  lists:foreach(fun(Conversation) ->
-    delete_conversation(LServer,LUser,Conversation)
-                end, ConvList).
+  lists:foreach(fun(XabberConversation) ->
+    #xabber_conversation{type = Type, jid = JID} = XabberConversation,
+    Conversation = jid:to_string(jid:remove_resource(JID)),
+    case Type of
+      _ when Type == <<>> orelse Type == undefined ->
+        delete_conversation(LServer,LUser,Conversation);
+      _ when is_binary(Type) == true ->
+        delete_conversation(LServer,LUser,Conversation,Type)
+    end
+                end, Conversations).
 
 pin_conversation(#jid{lserver = LServer, luser = LUser}, #xabber_conversation{type = Type, jid = ConversationJID, thread = Thread}, Lang) ->
   TS = time_now(),
@@ -2246,11 +2256,16 @@ delete_conversation(LServer,LUser,Conversation) ->
       ok
   end.
 
-parse_conv(Convs) ->
-  lists:map(fun(Con) ->
-    #xabber_conversation{jid = JID} = Con,
-    jid:to_string(jid:remove_resource(JID))
-            end, Convs).
+delete_conversation(LServer,LUser,Conversation,Type) ->
+  TS = time_now(),
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set status = 'deleted', updated_at=%(TS)d, metadata_updated_at=%(TS)d where username = %(LUser)s and conversation = %(Conversation)s and type = %(Type)s")) of
+    {updated,N} when N > 0 ->
+      make_ccc_push(LServer,LUser,Conversation,TS,Type,<<>>,deleted);
+    _ ->
+      ok
+  end.
 
 %% invite logic
 
@@ -2328,7 +2343,9 @@ make_ccc_push(LServer,LUser,Conversation, TS, Type, Thread, PushType) ->
               unarchived ->
                 #xabber_unarchived_conversation{};
               unpinned ->
-                #xabber_unpinned_conversation{}
+                #xabber_unpinned_conversation{};
+              deleted ->
+                #xabber_deleted_conversation{}
             end,
   UserResources = ejabberd_sm:user_resources(LUser,LServer),
   Conv = #xabber_conversation{jid = jid:from_string(Conversation), type = Type, thread = Thread, sub_els = [Element]},

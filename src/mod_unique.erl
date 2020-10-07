@@ -259,7 +259,7 @@ remove_request(Pkt,_Request) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
       if
-        (Name == <<"retry">> andalso NS == <<"http://xabber.com/protocol/delivery">>) ->
+        (Name == <<"retry">> andalso NS == <<"https://xabber.com/protocol/delivery">>) ->
           try xmpp:decode(El) of
             #delivery_retry{} ->
               false

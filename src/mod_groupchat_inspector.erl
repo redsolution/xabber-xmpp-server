@@ -739,11 +739,11 @@ parser(Right,Lang) ->
 
 
 query_user(Items) ->
-  {xmlel,<<"query">>,[{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#rights">>}],
+  {xmlel,<<"query">>,[{<<"xmlns">>,<<"https://xabber.com/protocol/groups#rights">>}],
     Items}.
 
 query_chat(Items) ->
-      {xmlel,<<"query">>,[{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#members">>}],
+      {xmlel,<<"query">>,[{<<"xmlns">>,<<"https://xabber.com/protocol/groups#members">>}],
         Items}.
 
 get_permissions(Server) ->

@@ -184,8 +184,7 @@ process_presence(<<"inactive">>, _Packet) ->
 process_presence(_,Packet) ->
   answer_presence(Packet).
 
-is_chat(SubEls) ->
-  Sub = lists:map(fun(N) -> xmpp:decode(N) end, SubEls),
+is_chat(Sub) ->
   case lists:keyfind(xabbergroupchat_x,1,Sub) of
      false ->
        false;
@@ -202,9 +201,10 @@ search_for_hash(Hash) ->
      Hash#vcard_xupdate.hash
  end.
 
-answer_presence(#presence{to = To, from = From, type = available,
-  sub_els = SubEls}) ->
-  case is_chat(SubEls) of
+answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
+  DecodedPresence = xmpp:decode_els(Presence),
+  Decoded = DecodedPresence#presence.sub_els,
+  case is_chat(Decoded) of
     true ->
       Server = To#jid.lserver,
       Chat = To#jid.luser,
@@ -216,7 +216,6 @@ answer_presence(#presence{to = To, from = From, type = available,
       User = jid:to_string(jid:remove_resource(From)),
       Server = To#jid.lserver,
       Status = mod_groupchat_inspector_sql:check_user(User,Server,ChatJid),
-      Decoded = lists:map(fun(N)-> xmpp:decode(N) end, SubEls),
       Key = lists:keyfind(vcard_xupdate,1,Decoded),
       Collect = lists:keyfind(collect,1,Decoded),
       case Collect of

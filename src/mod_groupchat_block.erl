@@ -179,7 +179,7 @@ query(To) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   {selected,Elements} = show_elements(Server,Chat),
-  {xmlel,<<"query">>,[{<<"xmlns">>,<<"http://xabber.com/protocol/groupchat#block">>}],
+  {xmlel,<<"query">>,[{<<"xmlns">>,<<"https://xabber.com/protocol/groups#block">>}],
     elements(Elements,[])}.
 
 

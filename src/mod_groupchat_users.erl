@@ -1579,7 +1579,7 @@ get_user_from_chat(LServer,Chat,User,ID) ->
                         empty when IsAnon == no->
                           Username;
                         empty when IsAnon == yes ->
-                          insert_incognito_nickname(LServer,User,Chat);
+                          insert_incognito_nickname(LServer,Username,Chat);
                         {ok,Value} ->
                           Value;
                         _ ->
@@ -1587,7 +1587,7 @@ get_user_from_chat(LServer,Chat,User,ID) ->
                       end,
                Role = calculate_role(LServer,Username,Chat),
                AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
-               BadgeF = validate_badge_and_nick(LServer,Chat,User,Nick,Badge),
+               BadgeF = validate_badge_and_nick(LServer,Chat,Username,Nick,Badge),
                S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
                L = length(S),
                Present = case L of

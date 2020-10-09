@@ -566,7 +566,7 @@ notification_message(User, Server, Chat) ->
   ID = randoms:get_string(),
   OriginID = #origin_id{id = ID},
   NewEls = [OriginID | SubEls],
-  #message{from = ChatJID, to = ChatJID, type = chat, id = ID, body = [], sub_els = NewEls, meta = #{}}.
+  #message{from = ChatJID, to = ChatJID, type = headline, id = ID, body = [], sub_els = NewEls, meta = #{}}.
 
 notification_message_about_nick(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),

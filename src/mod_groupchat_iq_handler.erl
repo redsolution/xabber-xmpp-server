@@ -762,7 +762,7 @@ disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
 %% Internal Functions
 x_element_chat(Desc,Anon,Model) ->
   DescField = xdata_field(<<"description">>,<<"Description">>,Desc),
-  AnonField = xdata_field(<<"anonymous">>,<<"Anonymous">>,Anon),
+  AnonField = xdata_field(<<"privacy">>,<<"Privacy">>,Anon),
   ModelField = xdata_field(<<"model">>,<<"Access model">>,Model),
   HiddenField = hidden_field(),
   Fields = [HiddenField,DescField,AnonField,ModelField],

@@ -48,7 +48,8 @@
   store_event/6, store_replace_event/6,
   notificate/6, notificate_replace/6,
   save_id_in_conversation/4,
-  get_version/2,get_count_events/3
+  get_version/3,
+  message_type/2
 ]).
 
 %% gen_iq_handler callback.
@@ -315,15 +316,10 @@ unregister_iq_handlers(Host) ->
 process_iq(#iq{type = set, lang = Lang, sub_els = [#xabber_retract_query{}]} = IQ) ->
   Txt = <<"Value 'set' of 'type' attribute is not allowed">>,
   xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
-process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = undefined, 'less-than' = undefined}]} = IQ) ->
+process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = undefined, 'less-than' = undefined, type = Type}]} = IQ) ->
   {LUser, LServer, LResource} = jid:tolower(From),
   set_rewrite_notification(LServer,LUser,LResource),
-  ?DEBUG("Activate notifications for ~p ~p ~p",[LUser, LServer, LResource]),
-  xmpp:make_iq_result(IQ);
-process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = undefined}]} = IQ) ->
-  {LUser, LServer, LResource} = jid:tolower(From),
-  set_rewrite_notification(LServer,LUser,LResource),
-  RetractNotifications = get_query(LServer,LUser,Version),
+  RetractNotifications = get_query(LServer,LUser,0,Type),
   MsgHead = lists:map(fun(El) ->
     {Element} = El,
     EventNotDecoded= fxml_stream:parse_element(Element),
@@ -333,18 +329,31 @@ process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version
   ),
   lists:foreach(fun(M) -> ejabberd_router:route(M) end, MsgHead),
   xmpp:make_iq_result(IQ);
-process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = Less}]} = IQ) ->
+process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = undefined, type = Type}]} = IQ) ->
+  {LUser, LServer, LResource} = jid:tolower(From),
+  set_rewrite_notification(LServer,LUser,LResource),
+  RetractNotifications = get_query(LServer,LUser,Version,Type),
+  MsgHead = lists:map(fun(El) ->
+    {Element} = El,
+    EventNotDecoded= fxml_stream:parse_element(Element),
+    Event = xmpp:decode(EventNotDecoded),
+    #message{from = jid:remove_resource(From), to = From,
+      type = headline, id= randoms:get_string(), sub_els = [Event]} end, RetractNotifications
+  ),
+  lists:foreach(fun(M) -> ejabberd_router:route(M) end, MsgHead),
+  xmpp:make_iq_result(IQ);
+process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = Less, type = Type}]} = IQ) ->
   case Less of
     _ when Less =/= undefined andalso Version =/= undefined ->
       {LUser, LServer, LResource} = jid:tolower(From),
       set_rewrite_notification(LServer,LUser,LResource),
-      Count = get_count_events(LServer,LUser,Version),
+      Count = get_count_events(LServer,LUser,Version,Type),
       case Count of
         _ when Count >= Less ->
-          LastVersion = get_version(LServer,LUser),
+          LastVersion = get_version(LServer,LUser,Type),
           xmpp:make_iq_result(IQ, #xabber_retract_invalidate{version = LastVersion});
         _ ->
-          RetractNotifications = get_query(LServer,LUser,Version),
+          RetractNotifications = get_query(LServer,LUser,Version,Type),
           MsgHead = lists:map(fun(El) ->
             {Element} = El,
             EventNotDecoded= fxml_stream:parse_element(Element),
@@ -369,8 +378,9 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_mess
           xmpp:make_error(IQ, xmpp:err_item_not_found());
         _ ->
           PeerJID = jid:from_string(PeerString),
-          Version = get_version(LServer,LUser) + 1,
-          Retract = #xabber_retract_message{by = To, id = StanzaID, conversation = PeerJID, symmetric = false, version = Version},
+          Type = message_type(LServer,StanzaID),
+          Version = get_version(LServer,LUser,Type) + 1,
+          Retract = #xabber_retract_message{by = To, id = StanzaID, conversation = PeerJID, symmetric = false, version = Version, type = Type},
           start_retract_message(LUser, LServer, StanzaID, IQ, Retract, Version)
       end;
     _ ->
@@ -389,14 +399,16 @@ process_iq(#iq{from = From,
           ?DEBUG("Not found ~p ~p~n iq~p",[BarePeer,StanzaID,IQ]),
           xmpp:make_error(IQ, xmpp:err_item_not_found());
         {OurUser,OurStanzaID} when is_integer(OurStanzaID) == true ->
+          Type = message_type(LServer,OurStanzaID),
           OurUserJID = jid:from_string(OurUser),
           LUser = OurUserJID#jid.luser,
-          Version = get_version(LServer,LUser) + 1,
+          Version = get_version(LServer,LUser,Type) + 1,
           OurRetractAsk = #xabber_retract_message{
             by = OurUserJID,
             conversation = RetractUserJID,
             id = OurStanzaID,
             version = Version,
+            type = Type,
             xmlns = ?NS_XABBER_REWRITE_NOTIFY},
           ?DEBUG("Delete message ~p in chat ~p by ~p~n Retract ~p",[StanzaID,jid:to_string(To),BarePeer,OurRetractAsk]),
           start_retract_message(LUser, LServer, OurStanzaID, IQ, OurRetractAsk, Version);
@@ -415,7 +427,8 @@ process_iq(#iq{from = From,
           PeerJID = jid:from_string(PeerString),
           case PeerJID#jid.lserver of
             LServer ->
-              start_local_retract(LUser,PeerJID#jid.luser,LServer,StanzaID,IQ);
+              Type = message_type(LServer,StanzaID),
+              start_local_retract(LUser,PeerJID#jid.luser,LServer,StanzaID,IQ, Type);
             _ ->
               IQS = xmpp:set_from_to(IQ,jid:remove_resource(From),PeerJID),
               Proc = gen_mod:get_module_proc(LServer, ?MODULE),
@@ -435,7 +448,7 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_all{
   LUser = From#jid.luser,
   case A of
     true ->
-      Version = get_version(LServer,LUser) + 1,
+      Version = get_version(LServer,LUser,Type) + 1,
       NewRetractAsk = #xabber_retract_all{type = Type, conversation = RetractUserJID, version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
       start_retract_all_message(LUser, LServer, IQ, NewRetractAsk, Version);
     _ ->
@@ -450,7 +463,7 @@ process_iq(#iq{
   case From#jid.lresource of
     <<>> when LServer =/= From#jid.lserver->
       LUser = To#jid.luser,
-      Version = get_version(LServer,LUser) + 1,
+      Version = get_version(LServer,LUser,Type) + 1,
       RetractAsk = #xabber_retract_all{type = Type, conversation = From, version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
       start_retract_all_incoming_message(LUser, LServer, IQ, RetractAsk, Version);
     _ when A == true ->
@@ -479,12 +492,13 @@ process_iq(#iq{
           ?DEBUG("Not found ~p ~p~n iq~p",[BarePeer,StanzaID,IQ]),
           xmpp:make_error(IQ, xmpp:err_item_not_found());
         {OurUser,OurStanzaID} when is_integer(OurStanzaID) == true ->
+          Type = message_type(LServer,OurStanzaID),
           OurUserJID = jid:from_string(OurUser),
           LUser = OurUserJID#jid.luser,
-          Version = get_version(LServer,LUser) + 1,
+          Version = get_version(LServer,LUser,Type) + 1,
           Replaced = #replaced{stamp = erlang:timestamp()},
           NewMessage = Message#xabber_replace_message{replaced = Replaced},
-          OurReplaceAsk = #xabber_replace{by = OurUserJID, conversation = From, id = OurStanzaID, xabber_replace_message = NewMessage, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
+          OurReplaceAsk = #xabber_replace{by = OurUserJID, conversation = From, id = OurStanzaID, xabber_replace_message = NewMessage, type = Type, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
           start_rewrite_message(LUser, LServer, OurStanzaID, IQ, OurReplaceAsk, Version);
         _ ->
           ?DEBUG("Unknow error during retract ~p",[IQ]),
@@ -496,7 +510,8 @@ process_iq(#iq{
       PeerJID = jid:from_string(PeerString),
       case PeerJID#jid.lserver of
         LServer ->
-          start_local_replace(LUser,PeerJID#jid.luser,LServer,StanzaID,Message,IQ);
+          Type = message_type(LServer,StanzaID),
+          start_local_replace(LUser,PeerJID#jid.luser,LServer,StanzaID,Message,IQ, Type);
         _ ->
           IQS = xmpp:set_from_to(IQ,To,PeerJID),
           Proc = gen_mod:get_module_proc(LServer, ?MODULE),
@@ -510,12 +525,12 @@ process_iq(IQ) ->
 start_local_retract_all(User1,User2,LServer,IQ, Type) ->
   User1JID = jid:make(User1,LServer),
   User2JID = jid:make(User2,LServer),
-  Version2 = get_version(LServer,User2) + 1,
+  Version2 = get_version(LServer,User2,Type) + 1,
   RetractAsk2 = #xabber_retract_all{type = Type, conversation = User1JID, version = Version2, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
   Res = ejabberd_hooks:run_fold(retract_all_in_messages, LServer, [], [RetractAsk2, User2, LServer, <<>>, Version2]),
   case Res of
     ok ->
-      Version1 = get_version(LServer,User1) + 1,
+      Version1 = get_version(LServer,User1,Type) + 1,
       RetractAsk1 = #xabber_retract_all{type = Type, conversation = User2JID, version = Version1, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
       start_retract_all_message(User1, LServer, IQ, RetractAsk1, Version1);
     _ ->
@@ -523,7 +538,7 @@ start_local_retract_all(User1,User2,LServer,IQ, Type) ->
       xmpp:make_error(IQ, xmpp:err_not_allowed())
   end.
 
-start_local_replace(User1,User2,LServer,StanzaID,Message,IQ) ->
+start_local_replace(User1,User2,LServer,StanzaID,Message,IQ,Type) ->
   User1JID = jid:make(User1,LServer),
   User2JID = jid:make(User2,LServer),
   User1String = jid:to_string(User1JID),
@@ -532,17 +547,19 @@ start_local_replace(User1,User2,LServer,StanzaID,Message,IQ) ->
     {User2String,OurStanzaID} when is_integer(OurStanzaID) == true ->
       Replaced = #replaced{stamp = erlang:timestamp()},
       NewMessage = Message#xabber_replace_message{replaced = Replaced},
-      User1Version = get_version(LServer,User1) + 1,
+      User1Version = get_version(LServer,User1,Type) + 1,
       RetractAskUser1 = #xabber_replace{
         xabber_replace_message = NewMessage,
+        type = Type,
         by = User1JID,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User2JID,
         version = User1Version,
         id = StanzaID},
-      User2Version = get_version(LServer,User2) + 1,
+      User2Version = get_version(LServer,User2,Type) + 1,
       RetractAskUser2 = #xabber_replace{
         xabber_replace_message = NewMessage,
+        type = Type,
         by = User2JID,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User1JID,
@@ -560,23 +577,25 @@ start_local_replace(User1,User2,LServer,StanzaID,Message,IQ) ->
       xmpp:make_error(IQ, xmpp:err_item_not_found())
   end.
 
-start_local_retract(User1,User2,LServer,StanzaID,IQ) ->
+start_local_retract(User1,User2,LServer,StanzaID,IQ, Type) ->
   User1JID = jid:make(User1,LServer),
   User2JID = jid:make(User2,LServer),
   BarePeer = jid:to_string(User1JID),
   User2String = jid:to_string(User2JID),
   case get_our_stanza_id(LServer,BarePeer,StanzaID) of
     {User2String,OurStanzaID} when is_integer(OurStanzaID) == true ->
-      User1Version = get_version(LServer,User1) + 1,
+      User1Version = get_version(LServer,User1,Type) + 1,
       RetractAskUser1 = #xabber_retract_message{
         by = User1JID,
+        type = Type,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User2JID,
         version = User1Version,
         id = StanzaID},
-      User2Version = get_version(LServer,User2) + 1,
+      User2Version = get_version(LServer,User2,Type) + 1,
       RetractAskUser2 = #xabber_retract_message{
         by = User2JID,
+        type = Type,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User1JID,
         version = User2Version,
@@ -644,8 +663,9 @@ start_rewrite_job(rewrite, LUser, LServer, LResource, StanzaID, IQID, {From,Mess
   ?DEBUG("Start rewrite message ~p for ~p",[StanzaID,LUser]),
   BareJID = jid:make(LUser,LServer),
   JID = jid:make(LUser,LServer,LResource),
-  Version = get_version(LServer,LUser) + 1,
-  RetractAsk = #xabber_replace{xabber_replace_message = Message, id = StanzaID, by = BareJID, conversation = From, version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
+  Type = message_type(LServer,StanzaID),
+  Version = get_version(LServer,LUser,Type) + 1,
+  RetractAsk = #xabber_replace{xabber_replace_message = Message, id = StanzaID, by = BareJID, conversation = From, version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY, type = Type},
   IQ = #iq{id = IQID, type = set, to = BareJID, from = JID},
   NewIQ = case ejabberd_hooks:run_fold(rewrite_local_message, LServer, [], [RetractAsk, LUser, LServer, StanzaID, Version]) of
             ok ->
@@ -662,8 +682,9 @@ start_rewrite_job(retract, LUser, LServer, LResource, StanzaID, IQID, _From) ->
   BareJID = jid:make(LUser,LServer),
   JID = jid:make(LUser,LServer,LResource),
   BarePeer = get_bare_peer(LServer,LUser,StanzaID),
-  Version = get_version(LServer,LUser) + 1,
-  RetractAsk = #xabber_retract_message{by = BareJID, id = StanzaID, conversation = jid:from_string(BarePeer), version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
+  Type = message_type(LServer,StanzaID),
+  Version = get_version(LServer,LUser,Type) + 1,
+  RetractAsk = #xabber_retract_message{by = BareJID, id = StanzaID, conversation = jid:from_string(BarePeer), version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY, type = Type},
   IQ = #iq{id = IQID, type = set, to = BareJID, from = JID},
   NewIQ = case ejabberd_hooks:run_fold(retract_local_message, LServer, [], [RetractAsk, LUser, LServer, StanzaID, Version]) of
          ok ->
@@ -677,7 +698,7 @@ start_rewrite_job(retract, LUser, LServer, LResource, StanzaID, IQID, _From) ->
 start_rewrite_job(retractall, LUser, LServer, LResource, Type, IQID, From) ->
   BareJID = jid:make(LUser,LServer),
   JID = jid:make(LUser,LServer,LResource),
-  Version = get_version(LServer,LUser) + 1,
+  Version = get_version(LServer,LUser,Type) + 1,
   RetractAsk = #xabber_retract_all{conversation = From, type = Type, version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
   IQ = #iq{id = IQID, type = set, to = BareJID, from = JID},
   ?DEBUG("Start delete all message for ~p in chat ~p",[LUser,From]),
@@ -850,7 +871,8 @@ replace_message(XML, RewriteAsk, LUser,LServer,StanzaID, _Version) ->
 store_replace_event(Acc,_RewriteAsk,LUser,LServer,_StanzaID, Version) ->
   RA = xmpp:encode(Acc),
   Txt = fxml:element_to_binary(RA),
-  insert_event(LServer,LUser,Txt,Version),
+  Type = get_type(Acc),
+  insert_event(LServer,LUser,Txt,Version,Type),
   Acc.
 
 notificate_replace(Acc, _RewriteAsk,LUser,LServer,_StanzaID, _Version) ->
@@ -862,9 +884,29 @@ notificate_replace(Acc, _RewriteAsk,LUser,LServer,_StanzaID, _Version) ->
 store_event(_Acc,RewriteAsk,LUser,LServer,_StanzaID, Version) ->
   ?DEBUG("start storing ~p ",[RewriteAsk]),
   RA = xmpp:encode(RewriteAsk),
+  Type = get_type(RewriteAsk),
   Txt = fxml:element_to_binary(RA),
-  insert_event(LServer,LUser,Txt,Version),
+  insert_event(LServer,LUser,Txt,Version,Type),
   ok.
+
+message_type(LServer, ID) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(encrypted)b from archive where timestamp=%(ID)d and %(LServer)H")) of
+    {selected,[{true}]} ->
+      <<"encrypted">>;
+    _ ->
+      <<>>
+  end.
+
+get_type(#xabber_replace{type = Type}) ->
+  Type;
+get_type(#xabber_retract_message{type = Type}) ->
+  Type;
+get_type(#xabber_retract_all{type = Type}) ->
+  Type;
+get_type(_Type) ->
+  <<>>.
 
 notificate(_Acc, RewriteAsk,LUser,LServer,_StanzaID, _Version) ->
   BareJID = jid:make(LUser,LServer),
@@ -893,29 +935,29 @@ get_bare_peer(LServer,LUser,ID) ->
       not_found
   end.
 
-get_count_events(Server,Username,Version) ->
+get_count_events(Server,Username,Version,Type) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(count(*))d from message_retract where username = %(Username)s and version > %(Version)d and %(Server)H")) of
+    ?SQL("select @(count(*))d from message_retract where username = %(Username)s and version > %(Version)d and type=%(Type)s and %(Server)H")) of
     {selected, [{Count}]} ->
      Count
   end.
 
-get_query(Server,Username,Version) ->
+get_query(Server,Username,Version,Type) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(xml)s from message_retract"
-    " where username=%(Username)s and version > %(Version)d and %(Server)H")) of
+    " where username=%(Username)s and type=%(Type)s and version > %(Version)d and %(Server)H")) of
     {selected,[<<>>]} ->
       [];
     {selected,Query} ->
       Query
   end.
 
-get_version(Server,Username) ->
+get_version(Server,Username,Type) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(version)d from message_retract where username = %(Username)s and %(Server)H order by version desc limit 1")) of
+    ?SQL("select @(version)d from message_retract where username = %(Username)s and type=%(Type)s and %(Server)H order by version desc limit 1")) of
     {selected,[<<>>]} ->
       0;
     {selected,[{null}]} ->
@@ -931,7 +973,7 @@ get_version(Server,Username) ->
       Err
   end.
 
-insert_event(LServer,Username,Txt,Version) ->
+insert_event(LServer,Username,Txt,Version,Type) ->
   ejabberd_sql:sql_query(
     LServer,
     ?SQL_INSERT(
@@ -939,6 +981,7 @@ insert_event(LServer,Username,Txt,Version) ->
       [ "username=%(Username)s",
         "server_host=%(LServer)s",
         "xml=%(Txt)s",
+        "type=%(Type)s",
         "version=%(Version)d"
       ])).
 

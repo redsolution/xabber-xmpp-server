@@ -849,7 +849,7 @@ define_type(Type,Encrypted,Incognito,P2P) ->
   case Type of
     <<"groupchat">> when Incognito == false andalso P2P == false ->
       <<"group">>;
-    <<"groupchat">> when Incognito =/= false andalso P2P =/= false ->
+    <<"groupchat">> when P2P =/= false ->
       <<"private">>;
     <<"groupchat">> when Incognito =/= false andalso P2P == false ->
       <<"incognito">>;
@@ -909,7 +909,8 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Di
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = Retract}]},
+      RetractVersion = mod_xep_rrr:get_version(LServer,LUser,<<"encrypted">>),
+      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = RetractVersion}]},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]};
     _ ->
       Count = get_count_messages(LServer,LUser,Conversation,binary_to_integer(Read)),
@@ -919,7 +920,8 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Di
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = Retract}]},
+      RetractVersion = mod_xep_rrr:get_version(LServer,LUser,<<>>),
+      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = RetractVersion}]},
         #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]}
   end.

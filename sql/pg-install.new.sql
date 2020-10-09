@@ -608,9 +608,10 @@ CREATE TABLE previous_id (
 CREATE TABLE message_retract(
     username text,
     server_host text NOT NULL,
+    type text NOT NULL DEFAULT '',
     xml text,
     version bigint,
-    CONSTRAINT uc_retract_message_versions UNIQUE (username,server_host,xml,version)
+    CONSTRAINT uc_retract_message_versions UNIQUE (username,server_host,type,version)
     );
 
 CREATE TABLE foreign_message_stanza_id(

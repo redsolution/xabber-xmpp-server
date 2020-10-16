@@ -672,6 +672,41 @@ process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els 
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;
+process_groupchat_iq(#iq{type = get, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS}]} = IQ) ->
+  Chat = jid:to_string(jid:remove_resource(To)),
+  Server = To#jid.lserver,
+  User = jid:to_string(jid:remove_resource(From)),
+  Result = ejabberd_hooks:run_fold(group_status_info, Server, [], [User,Chat,Server]),
+  case Result of
+    {ok, Form} ->
+      ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT, sub_els = [Form]}));
+    {error, Err} ->
+      ejabberd_router:route(xmpp:make_error(IQ, Err));
+    _ ->
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()))
+  end;
+process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS, sub_els = [#xdata{type = submit, fields = FSRaw}]}]} = IQ) ->
+  Chat = jid:to_string(jid:remove_resource(To)),
+  Server = To#jid.lserver,
+  User = jid:to_string(jid:remove_resource(From)),
+  DecodedFS = mod_groupchat_chats:parse_status_query(FSRaw,Lang),
+  case DecodedFS of
+    {ok,FS} ->
+      Result = ejabberd_hooks:run_fold(group_status_change, Server, [], [User,Chat,Server,FS]),
+      case Result of
+        {ok, Form, Status} ->
+          ejabberd_hooks:run(groupchat_changed,Server,[Server,Chat,Status,User]),
+          ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS, sub_els = [Form]}));
+        {error, Err} ->
+          ejabberd_router:route(xmpp:make_error(IQ, Err));
+        _ ->
+          ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()))
+      end;
+    {error, Err} ->
+      ejabberd_router:route(xmpp:make_error(IQ, Err));
+    _ ->
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()))
+  end;
 process_groupchat_iq(#iq{type = get, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT}]} = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,

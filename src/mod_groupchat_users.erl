@@ -1313,8 +1313,8 @@ make_fields_owner(LServer,RightsAndTime,Lang) ->
     }
                                 end, Restrictions
   ),
-  PermissionSection = [#xdata_field{var= <<"permission">>, type = 'fixed', values = [<<"Permissions:">>]}],
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  PermissionSection = [#xdata_field{var= <<"permission">>, type = 'fixed', values = [<<"Permissions">>]}],
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
   PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
 
 make_fields_owner_no_options(LServer,RightsAndTime,Lang,Type) ->
@@ -1338,8 +1338,8 @@ make_fields_owner_no_options(LServer,RightsAndTime,Lang,Type) ->
     }
                                  end, Restrictions
   ),
-  PermissionSection = [#xdata_field{var= <<"permission">>, type = 'fixed', values = [<<"Permissions:">>]}],
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  PermissionSection = [#xdata_field{var= <<"permission">>, type = 'fixed', values = [<<"Permissions">>]}],
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
   PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
 
 make_fields_admin(LServer,RightsAndTime,Lang) ->
@@ -1355,7 +1355,7 @@ make_fields_admin(LServer,RightsAndTime,Lang) ->
     }
                                  end, Restrictions
   ),
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
   RestrictionSection ++ RestrictionsFields.
 
 make_fields_admin_no_options(LServer,RightsAndTime,Lang) ->
@@ -1370,7 +1370,7 @@ make_fields_admin_no_options(LServer,RightsAndTime,Lang) ->
     }
                                  end, Restrictions
   ),
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
   RestrictionSection ++ RestrictionsFields.
 
 get_time(Right,RightsList) ->

@@ -47,6 +47,9 @@
   get_status_label_name/3, is_value_changed/2
   ]).
 
+-export([parse_status_query/2]).
+% Status hooks
+-export([check_user_rights_to_change_status/4, check_user_rights_to_change_status/5, check_status/5]).
 % Delete chat hook
 -export([delete_chat_hook/4]).
 
@@ -57,6 +60,9 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_params, 25),
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, create_chat, 35),
   ejabberd_hooks:add(groupchat_info, Host, ?MODULE, check_user_rights, 10),
+  ejabberd_hooks:add(group_status_info, Host, ?MODULE, check_user_rights_to_change_status, 10),
+  ejabberd_hooks:add(group_status_change, Host, ?MODULE, check_user_rights_to_change_status, 10),
+  ejabberd_hooks:add(group_status_change, Host, ?MODULE, check_status, 20),
   ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, check_user_permission, 10),
   ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, validate_fs, 15),
   ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, change_chat, 20),
@@ -70,6 +76,9 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_chat, 35).
 
 stop(Host) ->
+  ejabberd_hooks:delete(group_status_info, Host, ?MODULE, check_user_rights_to_change_status, 10),
+  ejabberd_hooks:delete(group_status_change, Host, ?MODULE, check_user_rights_to_change_status, 10),
+  ejabberd_hooks:delete(group_status_change, Host, ?MODULE, check_status, 20),
   ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, delete_chat_hook, 30),
   ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_localpart, 10),
   ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_unsupported_stanzas, 15),
@@ -685,7 +694,6 @@ get_fixed_chat_fields(Chat,LServer) ->
     #xdata_field{var = <<"index">>, type = fixed, values = [Search], label = <<"Index">>},
     #xdata_field{var = <<"membership">>, type = fixed, values = [Model], label = <<"Membership">>},
     #xdata_field{var = <<"description">>, type = 'fixed', values = [Desc], label = <<"Description">>},
-%%    #xdata_field{var = <<"pinned-message">>, type = 'fixed', values = [integer_to_binary(Message)], label = <<"Pinned message">>},
     #xdata_field{var = <<"contacts">>, type = 'fixed', values = [ContactList], label = <<"Contacts">>},
     #xdata_field{var = <<"domains">>, type = 'fixed', values = [DomainList], label = <<"Domains">>},
     #xdata_field{var = <<"status">>, type = 'fixed', values = [Status], label = <<"Status">>}
@@ -693,7 +701,7 @@ get_fixed_chat_fields(Chat,LServer) ->
 
 form_chat_information(Chat,LServer,Type) ->
   Fields = get_chat_fields(Chat,LServer),
-  #xdata{type = Type, title = <<"Groupchat change">>, instructions = [<<"Fill out this form to change the group chat">>], fields = Fields}.
+  #xdata{type = Type, title = <<"Group change">>, instructions = [<<"Fill out this form to change the group properties">>], fields = Fields}.
 
 get_chat_fields(Chat,LServer) ->
   {selected,[{Name,_Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,Status}]} =
@@ -985,4 +993,102 @@ get_status_label_name(LServer,Chat,Status) ->
       LowerLabel;
     _ ->
       <<"unknown">>
+  end.
+
+check_user_rights_to_change_status(_Acc,User,Chat,Server) ->
+  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
+    yes ->
+      {stop, {ok, status_form(Chat,Server,'list-single')}};
+    _ ->
+      {stop, {ok, status_form(Chat,Server,'fixed')}}
+  end.
+
+status_form(Chat,LServer,Type) ->
+  Status = get_chat_active(LServer,Chat),
+  make_form(LServer, Chat, Status, Type).
+
+make_form(LServer, Chat, Status, Type) ->
+  Fields = fill_fields(LServer, Chat, Status, Type),
+  #xdata{type = form, title = <<"Group status change">>, instructions = [<<"Fill out this form to change the group status">>], fields = Fields}.
+
+fill_fields(LServer, Chat, Status, Type) ->
+  [
+    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_STATUS]},
+    #xdata_field{type = 'fixed', values = [<<"Section 1 : Statuses">>]},
+    #xdata_field{var = <<"status">>, desc = <<"Change status to change behaviour of group">>, type = Type, values = [Status], label = <<"Status">>, options = status_options(LServer, Chat)},
+    #xdata_field{type = 'fixed', values = [<<"Section 2 : Description of statuses">>]}
+  ] ++ get_status_description(LServer,Chat).
+
+get_status_description(LServer, Chat) ->
+  Statuses = statuses_and_values(LServer, Chat),
+  lists:map(fun(StatusAndValue) ->
+    {Status, Value, Desc} = StatusAndValue,
+    #xdata_field{
+      var = Status,
+      type = 'fixed',
+      desc = Desc,
+      values = [Value]} end, Statuses
+  ).
+
+statuses_and_values(LServer, Chat) ->
+  Predefined =
+    [
+      {<<"fiesta">>,<<"chat">>, <<"Everything is allowed, no restrictions. Stickers, pictures, voice messages are allowed.">>},
+      {<<"discussion">>,<<"active">>, <<"Regular chat. There is no limit on the number of messages. Limited voice messages">>},
+      {<<"regulated">>,<<"away">>, <<"Regulated chat. Only text messages and images. Limit on the number of messages per minute.">>},
+      {<<"limited">>, <<"xa">>, <<"Limited discussion. Text messages only. Limit on the number of messages per minute.">>},
+      {<<"restricted">>,<<"dnd">>, <<"Chat is allowed only for administrators">>},
+      {<<"inactive">>, <<"inactive">>, <<"Chat is off">>}
+    ],
+  Result = ejabberd_hooks:run_fold(chat_status_description, LServer, Predefined, [Chat]),
+  Result.
+
+
+parse_status_query(FS, Lang) ->
+  try	groups_status:decode(FS) of
+    Form -> {ok, Form}
+  catch _:{groups_status, Why} ->
+    Txt = groups_status:format_error(Why),
+    {error, xmpp:err_bad_request(Txt, Lang)}
+  end.
+
+%% Change status hook
+check_user_rights_to_change_status(_Acc,User,Chat,_Server,_FS) ->
+  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
+    yes ->
+      ok;
+    _ ->
+      {stop, {error, xmpp:err_not_allowed()}}
+  end.
+
+check_status(_Acc, User,Chat,Server,FS) ->
+  NewStatus = proplists:get_value(status,FS),
+  case NewStatus of
+    undefined ->
+      {stop, {error, xmpp:err_bad_request()}};
+    _ ->
+      check_status_value(Server, Chat, User, NewStatus)
+  end.
+
+check_status_value(Server, Chat, User, Status) ->
+  case lists:keyfind(Status,1,statuses_and_values(Server,Chat)) of
+    false ->
+      {stop, {error, xmpp:err_bad_request()}};
+    {Status,Value,_Desc} ->
+      update_status(Server,Status,Chat, User, Value)
+  end.
+
+update_status(Server,HumanStatus,Chat, User, Status) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchats set status = %(Status)s where jid=%(Chat)s and status != %(Status)s and %(Server)H")) of
+    {updated,1} ->
+      mod_groupchat_service_message:group_status_changed(Server, Chat, User, HumanStatus),
+      Form = make_form(Server, Chat, Status, 'list-single'),
+      {stop, {ok, Form, Status}};
+    {updated,0} ->
+      Form = make_form(Server, Chat, Status, 'list-single'),
+      {stop, {ok, Form, Status}};
+    _ ->
+      {stop, {error,xmpp:err_internal_server_error()}}
   end.

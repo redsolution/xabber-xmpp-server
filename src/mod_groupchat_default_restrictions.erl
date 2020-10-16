@@ -221,7 +221,7 @@ default_rights_no_options(LServer, Chat, Lang) ->
     }
                                  end, Restrictions
   ),
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
   RestrictionSection ++ RestrictionsFields.
 
 default_rights(LServer, Chat, Lang) ->
@@ -237,7 +237,7 @@ default_rights(LServer, Chat, Lang) ->
     }
                                  end, Restrictions
   ),
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions:">>]}],
+  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
   RestrictionSection ++ RestrictionsFields.
 
 get_default_rights(LServer,Chat) ->

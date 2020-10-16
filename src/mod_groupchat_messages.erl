@@ -492,7 +492,7 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
             false ->
               send_message(Pkt2,Users,To);
             _ when OriginID /= false ->
-              #message{meta = #{stanza_id := StanzaID}} = Pkt2,
+              #message{meta = #{stanza_id := _StanzaID}} = Pkt2,
               send_received(Pkt2,From,OriginID,To),
               send_message(Pkt2,Users,To)
           end
@@ -505,7 +505,7 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
       ejabberd_hooks:run(groupchat_send_message,Server,[From,To,Pkt2]),
       case Retry of
         _ when OriginID =/= false ->
-          #message{meta = #{stanza_id := StanzaID}} = Pkt2,
+          #message{meta = #{stanza_id := _StanzaID}} = Pkt2,
           send_received(Pkt2,From,OriginID,To),
           send_message(Pkt2,Users,To);
         _ ->
@@ -637,28 +637,6 @@ strip_reference_elements(Pkt) ->
     end, Els),
   xmpp:set_els(Pkt, NewEls).
 
--spec clean_reference(stanza()) -> stanza().
-clean_reference(Pkt) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = lists:filter(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = <<"mutable">>} ->
-            true;
-          #xmppreference{type = _Any} ->
-            false
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els),
-  xmpp:set_els(Pkt, NewEls).
-
 -spec strip_x_elements(stanza()) -> stanza().
 strip_x_elements(Pkt) ->
   Els = xmpp:get_els(Pkt),
@@ -727,20 +705,6 @@ set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
   Msg = #displayed_msg{chat = {LName,LServer}, stanza_id = integer_to_binary(StanzaID), origin_id = OriginID, bare_peer = {PUser,PServer,<<>>}},
   mnesia:dirty_write(Msg).
 
-store_origin_id(LServer, StanzaID, OriginID) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL_INSERT(
-      "origin_id",
-      ["id=%(OriginID)s",
-        "server_host=%(LServer)s",
-        "stanza_id=%(StanzaID)d"])) of
-    {updated, _} ->
-      ok;
-    Err ->
-      Err
-  end.
-
 %% Actual information about user
 
 get_actual_user_info(_Server, []) ->
@@ -748,7 +712,8 @@ get_actual_user_info(_Server, []) ->
 get_actual_user_info(Server, Msgs) ->
   UsersIDs = lists:map(fun(Pkt) ->
     {_ID, _IDInt, El} = Pkt,
-    #forwarded{sub_els = [Msg]} = El,
+    #forwarded{sub_els = [MsgE]} = El,
+    Msg = xmpp:decode(MsgE),
     X = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
     case X of
       false ->
@@ -796,15 +761,21 @@ get_actual_user_info(Server, Msgs) ->
 change_all_messages(ChatandUsers, Msgs) ->
   lists:map(fun(Pkt) ->
     {_ID, _IDInt, El} = Pkt,
-    #forwarded{sub_els = [Msg]} = El,
-%%    Msg2 = clean_reference(Msg),
+    #forwarded{sub_els = [Msg0]} = El,
+    Msg = xmpp:decode(Msg0),
     X = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
     case X of
       false ->
         Pkt;
       _ ->
-        Card = xmpp:get_subtag(X, #xabbergroupchat_user_card{}),
-        change_message(Card,ChatandUsers,Pkt)
+        Ref = xmpp:get_subtag(X, #xmppreference{}),
+        case Ref of
+          false ->
+            Pkt;
+          _ ->
+            Card = xmpp:get_subtag(Ref, #xabbergroupchat_user_card{}),
+            change_message(Card,ChatandUsers,Pkt)
+        end
     end
             end
     , Msgs
@@ -814,29 +785,36 @@ change_message(false,_ChatandUsers,Pkt) ->
   Pkt;
 change_message(OldCard,ChatandUsers,Pkt) ->
   {ID, IDInt, El} = Pkt,
-  #forwarded{sub_els = [Msg]} = El,
+  #forwarded{sub_els = [Msg0]} = El,
+  Msg = xmpp:decode(Msg0),
   Xtag = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   CurrentUserID = OldCard#xabbergroupchat_user_card.id,
   Chat = jid:to_string(jid:remove_resource(Msg#message.from)),
-  {Chat,UserCards} = lists:keyfind(Chat,1,ChatandUsers),
-  IDNewCard = lists:keyfind(CurrentUserID,1,UserCards),
-  case IDNewCard of
-      false ->
-        Pkt;
-      _ ->
-        {CurrentUserID, NewCard} = IDNewCard,
-        Pkt2 = strip_reference_elements(Msg),
-        Sub2 = xmpp:get_els(Pkt2),
-        Reference = xmpp:get_subtag(Xtag, #xmppreference{}),
-        UserChoose = mod_groupchat_users:choose_name(NewCard),
-        Username = <<UserChoose/binary, ":", "\n">>,
-        Length = binary_length(Username),
-        X = Reference#xmppreference{sub_els = [NewCard], 'begin' = 0, 'end' = Length},
-        NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [X]},
-        XEl = xmpp:encode(NewX),
-        Sub3 = [XEl|Sub2],
-        {ID,IDInt,El#forwarded{sub_els = [Msg#message{sub_els = Sub3}]}}
-    end.
+  Cards = lists:keyfind(Chat,1,ChatandUsers),
+  case Cards of
+    false ->
+      Pkt;
+    _ ->
+      {Chat,UserCards} = Cards,
+      IDNewCard = lists:keyfind(CurrentUserID,1,UserCards),
+      case IDNewCard of
+        false ->
+          Pkt;
+        _ ->
+          {CurrentUserID, NewCard} = IDNewCard,
+          Pkt2 = strip_x_elements(Msg),
+          Sub2 = xmpp:get_els(Pkt2),
+          Reference = xmpp:get_subtag(Xtag, #xmppreference{}),
+          UserChoose = mod_groupchat_users:choose_name(NewCard),
+          Username = <<UserChoose/binary, ":", "\n">>,
+          Length = binary_length(Username),
+          X = Reference#xmppreference{type = <<"mutable">>, sub_els = [NewCard], 'begin' = 0, 'end' = Length},
+          NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [X]},
+          XEl = xmpp:encode(NewX),
+          Sub3 = [XEl|Sub2],
+          {ID,IDInt,El#forwarded{sub_els = [Msg0#message{sub_els = Sub3}]}}
+      end
+  end.
 
 
 shift_references(Pkt, Length) ->

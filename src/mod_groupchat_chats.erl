@@ -166,7 +166,7 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
         "domains=%(Domains)s",
         "owner=%(Creator)s"])) of
     {updated,_N} ->
-      mod_groupchat_inspector:add_user(Server,Creator,<<"owner">>,Chat,<<"wait">>),
+      mod_groupchat_inspector:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>),
       Expires = <<"1000 years">>,
       IssuedBy = <<"server">>,
       Permissions = get_permissions(Server),

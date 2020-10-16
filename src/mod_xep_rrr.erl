@@ -498,7 +498,7 @@ process_iq(#iq{
           Version = get_version(LServer,LUser,Type) + 1,
           Replaced = #replaced{stamp = erlang:timestamp()},
           NewMessage = Message#xabber_replace_message{replaced = Replaced},
-          OurReplaceAsk = #xabber_replace{by = OurUserJID, conversation = From, id = OurStanzaID, xabber_replace_message = NewMessage, type = Type, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
+          OurReplaceAsk = #xabber_replace{by = OurUserJID, conversation = From, id = OurStanzaID, version = Version, xabber_replace_message = NewMessage, type = Type, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
           start_rewrite_message(LUser, LServer, OurStanzaID, IQ, OurReplaceAsk, Version);
         _ ->
           ?DEBUG("Unknow error during retract ~p",[IQ]),

@@ -331,6 +331,7 @@ handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, 
     #jingle_propose{} ->
       ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Propose]),
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
+      update_metainfo(call, LServer,LUser,Conversation,TS,false),
       store_last_call(Pkt, From, LUser, LServer, TS);
     _ ->
       ok
@@ -338,6 +339,7 @@ handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, 
   case Accept of
     #jingle_accept{} ->
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
+      update_metainfo(call, LServer,LUser,Conversation,TS,false),
       delete_last_call(From, LUser, LServer);
     _ ->
       ok
@@ -345,6 +347,7 @@ handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, 
   case Reject of
     #jingle_reject{} ->
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
+      update_metainfo(call, LServer,LUser,Conversation,TS,false),
       delete_last_call(From, LUser, LServer);
     _ ->
       ok
@@ -424,6 +427,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
         #jingle_propose{} ->
           ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Propose]),
           store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
+          update_metainfo(call, LServer,LUser,Conversation,TS,false),
           store_last_call(Pkt, Peer, LUser, LServer, TS);
         _ ->
           ok
@@ -431,6 +435,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
       case Accept of
         #jingle_accept{} ->
           store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
+          update_metainfo(call, LServer,LUser,Conversation,TS,false),
           delete_last_call(Peer, LUser, LServer);
         _ ->
           ok
@@ -439,6 +444,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
         #jingle_reject{} ->
           Conversation = jid:to_string(jid:remove_resource(Peer)),
           store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
+          update_metainfo(call, LServer,LUser,Conversation,TS,false),
           delete_last_call(Peer, LUser, LServer);
         _ ->
           IsEncrypted = body_is_encrypted(Pkt),
@@ -1469,6 +1475,19 @@ update_metainfo(displayed, LServer,LUser,Conversation,StanzaID) ->
 update_metainfo(_Any, _LServer,_LUser,_Conversation, empty,_Type) ->
   ?DEBUG("No id in displayed",[]),
   ok;
+update_metainfo(call, LServer,LUser,Conversation,_StanzaID,Encrypted) ->
+  ?DEBUG("save new message ~p ~p ",[LUser,Conversation]),
+  TS = time_now(),
+  Status = <<"active">>,
+  ?SQL_UPSERT(
+    LServer,
+    "conversation_metadata",
+    ["!username=%(LUser)s",
+      "!conversation=%(Conversation)s",
+      "!encrypted=%(Encrypted)b",
+      "metadata_updated_at=%(TS)d",
+      "status=%(Status)s",
+      "server_host=%(LServer)s"]);
 update_metainfo(message, LServer,LUser,Conversation,_StanzaID,Encrypted) ->
   ?DEBUG("save new message ~p ~p ",[LUser,Conversation]),
   TS = time_now(),
@@ -1534,6 +1553,35 @@ update_retract(LServer,LUser,Conversation,NewVersion,Stanza)  ->
       ok;
     _Other ->
       not_ok
+  end.
+
+update_retract(LServer,LUser,Conversation,NewVersion,Stanza,Type)  ->
+  TS = time_now(),
+  case Type of
+    <<"encrypted">> ->
+      case ejabberd_sql:sql_query(
+        LServer,
+        ?SQL("update conversation_metadata set
+    retract = %(NewVersion)d, metadata_updated_at = %(TS)d
+     where username=%(LUser)s and conversation=%(Conversation)s and encrypted='true' and retract < %(NewVersion)d and %(LServer)H")) of
+        {updated,1} ->
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, xmpp:decode(Stanza)]),
+          ok;
+        _Other ->
+          not_ok
+      end;
+    _ ->
+      case ejabberd_sql:sql_query(
+        LServer,
+        ?SQL("update conversation_metadata set
+    retract = %(NewVersion)d, metadata_updated_at = %(TS)d
+     where username=%(LUser)s and conversation=%(Conversation)s and encrypted='false' and retract < %(NewVersion)d and %(LServer)H")) of
+        {updated,1} ->
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"update">>, LUser, LServer, xmpp:decode(Stanza)]),
+          ok;
+        _Other ->
+          not_ok
+      end
   end.
 
 get_last_stamp(LServer, LUser) ->
@@ -1818,12 +1866,12 @@ handle_sub_els(headline, [#xabber_retract_message{version = _Version, conversati
   ok;
 handle_sub_els(headline, [#xabber_retract_message{version =  undefined, conversation = _Conv, id = _ID}], _From, _To) ->
   ok;
-handle_sub_els(headline, [#xabber_retract_message{version = Version, conversation = ConversationJID, id = StanzaID} = Retract], _From, To) ->
+handle_sub_els(headline, [#xabber_retract_message{type = Type, version = Version, conversation = ConversationJID, id = StanzaID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   delete_one_msg(LUser, LServer, PUser, PServer, integer_to_binary(StanzaID)),
   Conversation = jid:to_string(ConversationJID),
-  update_retract(LServer,LUser,Conversation,Version,Retract),
+  update_retract(LServer,LUser,Conversation,Version,Retract,Type),
   ok;
 handle_sub_els(headline, [#xabber_retract_user{version = Version, id = UserID, conversation = ConversationJID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
@@ -1835,11 +1883,11 @@ handle_sub_els(headline, [#xabber_retract_user{version = Version, id = UserID, c
     _ ->
       ok
   end;
-handle_sub_els(headline, [#xabber_retract_all{version = Version, conversation = ConversationJID} = Retract], _From, To) ->
+handle_sub_els(headline, [#xabber_retract_all{type = Type, version = Version, conversation = ConversationJID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   Conversation = jid:to_string(ConversationJID),
-  case update_retract(LServer,LUser,Conversation,Version,Retract) of
+  case update_retract(LServer,LUser,Conversation,Version,Retract,Type) of
     ok ->
       delete_all_msgs(LUser, LServer, PUser, PServer);
     _ ->
@@ -1847,10 +1895,10 @@ handle_sub_els(headline, [#xabber_retract_all{version = Version, conversation = 
   end;
 handle_sub_els(headline, [#xabber_replace{version = undefined, conversation = _ConversationJID} = _Retract], _From, _To) ->
   ok;
-handle_sub_els(headline, [#xabber_replace{version = Version, conversation = ConversationJID} = Retract], _From, To) ->
+handle_sub_els(headline, [#xabber_replace{type = Type, version = Version, conversation = ConversationJID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   Conversation = jid:to_string(ConversationJID),
-  update_retract(LServer,LUser,Conversation,Version,Retract),
+  update_retract(LServer,LUser,Conversation,Version,Retract,Type),
   ok;
 %%handle_sub_els(headline, [#xabbergroupchat_replace{version = Version} = Retract], _From, To) ->
 %%  #jid{luser = LUser, lserver = LServer} = To,

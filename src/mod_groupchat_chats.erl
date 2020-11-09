@@ -685,7 +685,7 @@ form_fixed_chat_information(Chat,LServer) ->
   #xdata{type = form, title = <<"Groupchat change">>, instructions = [<<"Fill out this form to change the group chat">>], fields = Fields}.
 
 get_fixed_chat_fields(Chat,LServer) ->
-  {selected,[{Name,Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,Status}]} =
+  {selected,[{Name,Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,_Status}]} =
     get_all_information_chat(Chat,LServer),
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
@@ -695,8 +695,7 @@ get_fixed_chat_fields(Chat,LServer) ->
     #xdata_field{var = <<"membership">>, type = fixed, values = [Model], label = <<"Membership">>},
     #xdata_field{var = <<"description">>, type = 'fixed', values = [Desc], label = <<"Description">>},
     #xdata_field{var = <<"contacts">>, type = 'fixed', values = [ContactList], label = <<"Contacts">>},
-    #xdata_field{var = <<"domains">>, type = 'fixed', values = [DomainList], label = <<"Domains">>},
-    #xdata_field{var = <<"status">>, type = 'fixed', values = [Status], label = <<"Status">>}
+    #xdata_field{var = <<"domains">>, type = 'fixed', values = [DomainList], label = <<"Domains">>}
   ].
 
 form_chat_information(Chat,LServer,Type) ->
@@ -704,7 +703,7 @@ form_chat_information(Chat,LServer,Type) ->
   #xdata{type = Type, title = <<"Group change">>, instructions = [<<"Fill out this form to change the group properties">>], fields = Fields}.
 
 get_chat_fields(Chat,LServer) ->
-  {selected,[{Name,_Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,Status}]} =
+  {selected,[{Name,_Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,_Status}]} =
     get_all_information_chat(Chat,LServer),
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
@@ -715,8 +714,7 @@ get_chat_fields(Chat,LServer) ->
     #xdata_field{var = <<"membership">>, type = 'list-single', values = [Model], label = <<"Membership">>, options = membership_options()},
     #xdata_field{var = <<"description">>, type = 'text-multi', values = [Desc], label = <<"Description">>},
     #xdata_field{var = <<"contacts">>, type = 'jid-multi', values = [form_list(ContactList)], label = <<"Contacts">>},
-    #xdata_field{var = <<"domains">>, type = 'jid-multi', values = [form_list(DomainList)], label = <<"Domains">>},
-    #xdata_field{var = <<"status">>, type = 'list-single', values = [Status], label = <<"Status">>, options = status_options(LServer, Chat)}
+    #xdata_field{var = <<"domains">>, type = 'jid-multi', values = [form_list(DomainList)], label = <<"Domains">>}
     ].
 
 -spec decode(binary(),binary(),list()) -> list().

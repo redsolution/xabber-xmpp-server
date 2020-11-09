@@ -689,7 +689,8 @@ process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els 
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
-  DecodedFS = mod_groupchat_chats:parse_status_query(FSRaw,Lang),
+  FS1 = mod_groupchat_chats:filter_fixed_fields(FSRaw),
+  DecodedFS = mod_groupchat_chats:parse_status_query(FS1,Lang),
   case DecodedFS of
     {ok,FS} ->
       Result = ejabberd_hooks:run_fold(group_status_change, Server, [], [User,Chat,Server,FS]),

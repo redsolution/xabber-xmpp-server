@@ -47,7 +47,7 @@
   get_status_label_name/3, is_value_changed/2
   ]).
 
--export([parse_status_query/2]).
+-export([parse_status_query/2, filter_fixed_fields/1]).
 % Status hooks
 -export([check_user_rights_to_change_status/4, check_user_rights_to_change_status/5, check_status/5]).
 % Delete chat hook
@@ -998,7 +998,7 @@ get_status_label_name(LServer,Chat,Status) ->
 check_user_rights_to_change_status(_Acc,User,Chat,Server) ->
   case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
     yes ->
-      {stop, {ok, status_form(Chat,Server,'list-single')}};
+      {stop, {ok, status_form(Chat,Server,'text-single')}};
     _ ->
       {stop, {ok, status_form(Chat,Server,'fixed')}}
   end.
@@ -1014,9 +1014,9 @@ make_form(LServer, Chat, Status, Type) ->
 fill_fields(LServer, Chat, Status, Type) ->
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_STATUS]},
-    #xdata_field{type = 'fixed', values = [<<"Section 1 : Statuses">>]},
-    #xdata_field{var = <<"status">>, desc = <<"Change status to change behaviour of group">>, type = Type, values = [Status], label = <<"Status">>, options = status_options(LServer, Chat)},
-    #xdata_field{type = 'fixed', values = [<<"Section 2 : Description of statuses">>]}
+    #xdata_field{type = 'fixed', var = <<"header1">>, values = [<<"Section 1 : Statuses">>]},
+    #xdata_field{var = <<"status">>, desc = <<"Change status to change behaviour of group">>, type = Type, values = [Status], label = <<"Status">>, options = fill_status_options(LServer, Chat)},
+    #xdata_field{type = 'fixed', var = <<"header2">>, values = [<<"Section 2 : Description of statuses">>]}
   ] ++ get_status_description(LServer,Chat).
 
 get_status_description(LServer, Chat) ->
@@ -1028,6 +1028,15 @@ get_status_description(LServer, Chat) ->
       type = 'fixed',
       desc = Desc,
       values = [Value]} end, Statuses
+  ).
+
+fill_status_options(LServer, Chat) ->
+  Statuses = statuses_and_values(LServer, Chat),
+  lists:map(fun(StatusAndValue) ->
+    {Status, Value, _Desc} = StatusAndValue,
+    #xdata_option{
+      label = Status,
+      value = [Value]} end, Statuses
   ).
 
 statuses_and_values(LServer, Chat) ->
@@ -1065,17 +1074,19 @@ check_status(_Acc, User,Chat,Server,FS) ->
   NewStatus = proplists:get_value(status,FS),
   case NewStatus of
     undefined ->
-      {stop, {error, xmpp:err_bad_request()}};
+      {stop, {error, xmpp:err_bad_request(<<"Status undefined - please choose status from available values">>, <<"en">>)}};
     _ ->
       check_status_value(Server, Chat, User, NewStatus)
   end.
 
 check_status_value(Server, Chat, User, Status) ->
-  case lists:keyfind(Status,1,statuses_and_values(Server,Chat)) of
-    false ->
-      {stop, {error, xmpp:err_bad_request()}};
-    {Status,Value,_Desc} ->
-      update_status(Server,Status,Chat, User, Value)
+  Statuses = statuses_and_values(Server,Chat),
+  Search = [{S,V}|| {S,V,_D} <- Statuses, V == Status],
+  case Search of
+    [{HumanStatus,StatusValue}] ->
+      update_status(Server,HumanStatus,Chat, User, StatusValue);
+    _ ->
+      {stop, {error, xmpp:err_bad_request(<<"Value ", Status/binary, " is not allowed by server policy. Please, choose status from available values">>, <<"en">>)}}
   end.
 
 update_status(Server,HumanStatus,Chat, User, Status) ->
@@ -1084,10 +1095,10 @@ update_status(Server,HumanStatus,Chat, User, Status) ->
     ?SQL("update groupchats set status = %(Status)s where jid=%(Chat)s and status != %(Status)s and %(Server)H")) of
     {updated,1} ->
       mod_groupchat_service_message:group_status_changed(Server, Chat, User, HumanStatus),
-      Form = make_form(Server, Chat, Status, 'list-single'),
+      Form = make_form(Server, Chat, Status, 'text-single'),
       {stop, {ok, Form, Status}};
     {updated,0} ->
-      Form = make_form(Server, Chat, Status, 'list-single'),
+      Form = make_form(Server, Chat, Status, 'text-single'),
       {stop, {ok, Form, Status}};
     _ ->
       {stop, {error,xmpp:err_internal_server_error()}}

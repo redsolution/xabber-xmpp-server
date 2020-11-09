@@ -456,7 +456,33 @@ send_info_to_index(Server,ChatJID) ->
       GlobalIndexs =   get_global_index(Server),
       Chat = jid:to_string(jid:remove_resource(ChatJID)),
       lists:foreach(fun(Index) ->
-        {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
+        {selected,[{Name,Anonymous,_Search,Model,Desc,Message,_ContactList,_DomainList,ParentChat,Status}]} =
+          mod_groupchat_chats:get_all_information_chat(ChatJID,Server),
+        Show = define_show(Status),
+        HumanStatus =  case ParentChat of
+                         <<"0">> ->
+                           define_human_status(Status);
+                         _ ->
+                           [#text{data = <<"Private chat">>}]
+                       end,
+        Parent = case ParentChat of
+                   <<"0">> ->
+                     undefined;
+                   _ ->
+                     jid:from_string(ParentChat)
+                 end,
+        Groupchat_x = #xabbergroupchat_x{
+          xmlns = ?NS_GROUPCHAT,
+          members = integer_to_binary(mod_groupchat_chats:count_users(Server,ChatJID)),
+          parent = Parent,
+          sub_els =
+          [
+            #xabbergroupchat_name{cdata = Name},
+            #xabbergroupchat_privacy{cdata = Anonymous},
+            #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)},
+            #xabbergroupchat_membership{cdata = Model},
+            #xabbergroupchat_description{cdata = Desc}
+          ]},
         To = jid:from_string(Index),
         Presence = #presence{id = randoms:get_string(), type = available,
           from = ChatJID, to = To, sub_els = [Groupchat_x], status = HumanStatus, show = Show},

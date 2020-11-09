@@ -1195,7 +1195,7 @@ user_rights_and_time(LServer,Chat,User) ->
     ?SQL("select @(groupchat_policy.right_name)s,@(groupchat_rights.type)s,
     @(COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD hh24:mi:ss')))s
     from groupchat_policy left join groupchat_rights on groupchat_rights.name = groupchat_policy.right_name where username=%(User)s
-    and chatgroup=%(Chat)s and valid_until > (now() at time zone 'utc')")) of
+    and chatgroup=%(Chat)s and valid_until > now() ")) of
     {selected,Rights} ->
       Rights;
     _ ->

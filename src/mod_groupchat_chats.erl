@@ -690,10 +690,10 @@ get_fixed_chat_fields(Chat,LServer) ->
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
     #xdata_field{var = <<"name">>, type = 'fixed', values = [Name], label = <<"Name">>},
+    #xdata_field{var = <<"description">>, type = 'fixed', values = [Desc], label = <<"Description">>},
     #xdata_field{var = <<"privacy">>, type = fixed, values = [Anonymous], label = <<"Privacy">>},
     #xdata_field{var = <<"index">>, type = fixed, values = [Search], label = <<"Index">>},
     #xdata_field{var = <<"membership">>, type = fixed, values = [Model], label = <<"Membership">>},
-    #xdata_field{var = <<"description">>, type = 'fixed', values = [Desc], label = <<"Description">>},
     #xdata_field{var = <<"contacts">>, type = 'fixed', values = [ContactList], label = <<"Contacts">>},
     #xdata_field{var = <<"domains">>, type = 'fixed', values = [DomainList], label = <<"Domains">>}
   ].
@@ -710,9 +710,9 @@ get_chat_fields(Chat,LServer) ->
     #xdata_field{var = <<"pinned-message">>, type = hidden, values = [<<"true">>], label = <<"Change pinned message">>},
     #xdata_field{var = <<"change-avatar">>, type = hidden, values = [<<"true">>], label = <<"Change avatar">>},
     #xdata_field{var = <<"name">>, type = 'text-single', values = [Name], label = <<"Name">>},
+    #xdata_field{var = <<"description">>, type = 'text-multi', values = [Desc], label = <<"Description">>},
     #xdata_field{var = <<"index">>, type = 'list-single', values = [Search], label = <<"Index">>, options = index_options()},
     #xdata_field{var = <<"membership">>, type = 'list-single', values = [Model], label = <<"Membership">>, options = membership_options()},
-    #xdata_field{var = <<"description">>, type = 'text-multi', values = [Desc], label = <<"Description">>},
     #xdata_field{var = <<"contacts">>, type = 'jid-multi', values = [form_list(ContactList)], label = <<"Contacts">>},
     #xdata_field{var = <<"domains">>, type = 'jid-multi', values = [form_list(DomainList)], label = <<"Domains">>}
     ].

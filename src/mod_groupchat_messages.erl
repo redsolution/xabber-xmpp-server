@@ -691,7 +691,7 @@ send_received(
   #message{meta = #{stanza_id := StanzaID}} = Pkt,
   Pkt2 = xmpp:set_from_to(Pkt,JID,ChatJID),
   set_displayed(ChatJID,JID,StanzaID,OriginID),
-  UniqueReceived = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, type = <<"echo">>, sub_els = [Pkt2]},
+  UniqueReceived = #delivery_x{sub_els = [Pkt2]},
   Confirmation = #message{
     from = ChatJID,
     to = JIDBare,

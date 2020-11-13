@@ -1903,7 +1903,7 @@ handle_sub_els(headline, [#xabber_replace{type = Type, version = Version, conver
 %%handle_sub_els(headline, [#xabbergroupchat_replace{version = Version} = Retract], _From, To) ->
 %%  #jid{luser = LUser, lserver = LServer} = To,
 %%  ok;
-handle_sub_els(headline, [#xabbergroupchat_x{type = <<"echo">>, sub_els = [Message]}], From, To) ->
+handle_sub_els(headline, [#delivery_x{ sub_els = [Message]}], From, To) ->
   MessageD = xmpp:decode(Message),
   {PUser, PServer, _} = jid:tolower(From),
   PeerJID = jid:make(PUser, PServer),

@@ -254,7 +254,7 @@ try_register(User, Server, Password) ->
 		true ->
 		    {error, exists};
 		false ->
-			case mod_groupchat_chats:groupchat_exist(LUser,LServer) of
+			case mod_xabber_entity:is_exist(LUser,LServer) of
 				true ->
 					{error, exists};
 				false ->

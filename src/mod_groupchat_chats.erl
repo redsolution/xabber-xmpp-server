@@ -115,7 +115,7 @@ check_localpart(_Acc,Server,_CreatorLUser,_CreatorLServer,SubEls) ->
     undefined ->
       ok;
     _ ->
-      case groupchat_exist(LocalPart,Server) of
+      case mod_xabber_entity:is_exist_anywhere(LocalPart,Server) of
         false ->
           ok;
         true ->

@@ -480,7 +480,7 @@ notify(LUser, LServer, Clients, Pkt) ->
 -spec notify(binary(), ljid(), binary(), xdata(),
 	     xmpp_element(), binary(), binary() | xmlel() | none,
 	     fun((iq() | timeout) -> any())) -> ok.
-notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, <<>>, <<>>) ->
+notify(LServer, PushLJID, Node, XData, _Pkt, HandleResponse, <<>>, <<>>) ->
 	From = jid:make(LServer),
 	Item = #ps_item{sub_els = [#xabber_push_notification{sub_els = []}]},
 	PubSub = #pubsub{publish = #ps_publish{node = Node, items = [Item]},
@@ -544,7 +544,7 @@ store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey) -
 	Mod = gen_mod:db_mod(LServer, ?MODULE),
 	Cache = use_cache(Mod, LServer),
 	delete_session(LUser, LServer, PushJID, Node),
-	case use_cache(Mod, LServer) of
+	case Cache of
 		true ->
 			ets_cache:delete(?PUSH_CACHE, {LUser, LServer},
 				cache_nodes(Mod, LServer)),
@@ -766,6 +766,24 @@ decrypt(Key,Encrypted) ->
 make_string(Values) ->
 	list_to_binary(lists:map(fun(X) -> fxml:element_to_binary(xmpp:encode(X)) end, Values)).
 
+xabber_push_notification(<<"call">>, LUser, LServer, NotificationElement) ->
+	case lookup_sessions(LUser, LServer) of
+		{ok, [_|_] = Clients} ->
+			lists:foreach(
+				fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
+					HandleResponse = fun(#iq{type = result}) ->
+						ok;
+						(#iq{type = error}) ->
+							spawn(?MODULE, delete_session,
+								[LUser, LServer, TS]);
+						(timeout) ->
+							ok
+													 end,
+					make_notification(LServer, PushLJID, Node, XData, NotificationElement, HandleResponse, Cipher, Key, <<"call">>)
+				end, Clients);
+		_ ->
+			ok
+	end;
 xabber_push_notification(Type, LUser, LServer, NotificationElement) ->
 	case lookup_sessions(LUser, LServer) of
 		{ok, [_|_] = Clients} ->
@@ -782,7 +800,7 @@ xabber_push_notification(Type, LUser, LServer, NotificationElement) ->
 									ok % Hmm.
 															 end,
 							make_notification(LServer, PushLJID, Node, XData, NotificationElement, HandleResponse, Cipher, Key, Type)
-						end, Clients);
+						end, Clients1);
 				[] ->
 					ok
 			end;

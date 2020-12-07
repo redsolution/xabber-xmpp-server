@@ -36,7 +36,6 @@
 
   avatar/2,
   add_user/5,
-  get_users_from_chat/1,
   set_value/2,
   add_to_log/4,
   badge/2,
@@ -96,33 +95,26 @@ depends(_Host, _Opts) -> [].
 mod_options(_Opts) -> [].
 
 update_chat(Server,To,Chat,User,Xa) ->
-  {selected,[{Name,_Anonymous,Search,Model,Desc,ChatMessage,ContactList,DomainList,Status}]} =
+  {selected,[{_Name,_Anonymous,_Search,_Model,_Desc,ChatMessage,_ContactList,_DomainList_,Status}]} =
     mod_groupchat_chats:get_information_of_chat(Chat,Server),
   case Status of
     <<"inactive">> ->
       {error, xmpp:err_not_allowed(<<"You need to active group">>,<<"en">>)};
     _ ->
-      NewName = set_value(Name,Xa#xabbergroupchat_update.name),
-      NewSearch = set_value(Search,Xa#xabbergroupchat_update.searchable),
-      NewDesc = set_value(Desc,Xa#xabbergroupchat_update.description),
-      NewModel = set_value(Model,Xa#xabbergroupchat_update.model),
-      NewMessage = set_message(ChatMessage,Xa#xabbergroupchat_update.pinned),
-      NewContactList = set_contacts(ContactList,Xa#xabbergroupchat_update.contacts),
-      NewDomainList = set_domains(DomainList,Xa#xabbergroupchat_update.domains),
-      mod_groupchat_sql:update_groupchat(Server,Chat,NewName,NewSearch,NewDesc,NewModel,NewMessage,NewDomainList,NewContactList),
+      Pinned = case Xa#xabbergroupchat_update.pinned of
+                 #xabbergroupchat_pinned_message{cdata = Cdata} ->
+                   Cdata;
+                 _ ->
+                   undefined
+               end,
+      NewMessage = set_message(ChatMessage,Pinned),
+      mod_groupchat_chats:update_pinned(Server,Chat,NewMessage),
       UpdatePresence = mod_groupchat_presence:form_presence(Chat),
-      IsNameChanged = {name_changed, mod_groupchat_chats:is_value_changed(Name,NewName)},
-      IsDescChanged = {desc_changed, mod_groupchat_chats:is_value_changed(Desc,NewDesc)},
       IsPinnedChanged = {pinned_changed, mod_groupchat_chats:is_value_changed(ChatMessage,NewMessage)},
-      IsOtherChanged = {properties_changed,
-        lists:member(true,[mod_groupchat_chats:is_value_changed(Search,NewSearch),
-          mod_groupchat_chats:is_value_changed(Model,NewModel),
-          mod_groupchat_chats:is_value_changed(DomainList,NewDomainList),
-          mod_groupchat_chats:is_value_changed(ContactList,NewContactList)])},
-      Properties = [IsNameChanged,IsDescChanged,IsPinnedChanged,IsOtherChanged],
+      Properties = [IsPinnedChanged],
       ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
       {selected, AllUsers} = mod_groupchat_sql:user_list_of_channel(Server,Chat),
-      FromChat = jid:replace_resource(To,<<"Groupchat">>),
+      FromChat = jid:replace_resource(To,<<"Group">>),
       mod_groupchat_messages:send_message(UpdatePresence,AllUsers,FromChat)
   end.
 
@@ -230,9 +222,9 @@ select(Server,Chat) ->
 invite_right(_Acc, {Admin,Chat,_Server,
   #xabbergroupchat_invite{jid = _Jid, reason = _Reason, send = _Send}}) ->
   case mod_groupchat_restrictions:is_restricted(<<"send-invitations">>,Admin,Chat) of
-    yes ->
+    true ->
       {stop,forbidden};
-    no ->
+    _ ->
       ok
   end.
 
@@ -328,7 +320,7 @@ create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,ModelR
         Anonymous,Search,Model,Desc,Message,ContactList,DomainList),
       add_user(Server,CreatorJid,<<"owner">>,ChatJid,<<"wait">>),
       mod_admin_extra:set_nickname(Localpart,Host,Name),
-      Expires = <<"1000 years">>,
+      Expires = <<"0">>,
       IssuedBy = <<"server">>,
       Permissions = get_permissions(Server),
       lists:foreach(fun(N)->
@@ -380,13 +372,6 @@ set_message(Default,Value) ->
       Value
   end.
 
-get_users_from_chat(Iq) ->
-  #iq{to = To,from = From, lang = Lang} = Iq,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  User = jid:to_string(jid:remove_resource(From)),
-  {selected,_Tables,Items} = mod_groupchat_restrictions:user_from_chat_with_rights(Chat,To#jid.lserver),
-  A = query_chat(parse_items(Items,[],User,Lang)),
-  ejabberd_router:route(xmpp:make_iq_result(Iq,A)).
 
 add_to_log(Server,Username,Chatgroup,LogEvent) ->
   ejabberd_sql:sql_query(
@@ -418,7 +403,7 @@ remove_invite(Server,User,Chat) ->
 
 kick_user(Server,User,Chat) ->
   From = jid:from_string(Chat),
-  FromChat = jid:replace_resource(From,<<"Groupchat">>),
+  FromChat = jid:replace_resource(From,<<"Group">>),
 case ejabberd_sql:sql_query(
   Server,
   ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc')  where

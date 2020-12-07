@@ -77,6 +77,7 @@
 % Decline hook
 -export([decline_hook_check_if_exist/4, decline_hook_delete_invite/4]).
 
+-export([calculate_role/3]).
 start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_decline_invite, Host, ?MODULE, decline_hook_check_if_exist, 10),
   ejabberd_hooks:add(groupchat_decline_invite, Host, ?MODULE, decline_hook_delete_invite, 20),
@@ -164,8 +165,8 @@ decline_hook_delete_invite(_Acc, User, Chat, Server) ->
 
 % kick hook
 check_if_user_can(_Acc,_LServer,Chat,Admin,_Kick,_Lang) ->
-  case mod_groupchat_restrictions:is_permitted(<<"block-participants">>,Admin,Chat) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
+    true ->
       ok;
     _ ->
       {stop, {error, xmpp:err_not_allowed()}}
@@ -261,7 +262,7 @@ send_user_rights(_Acc, LServer, User, Chat, Lang) ->
     xmlns = ?NS_GROUPCHAT_RIGHTS,
     sub_els = [
       #xdata{type = form,
-        title = <<"Groupchat user's rights">>,
+        title = <<"Group user's rights">>,
         instructions = [],
         fields = Fields}
     ]}}}.
@@ -350,12 +351,12 @@ get_vcard(_Acc,{Server,To,Chat,_Lang}) ->
       add_user_pre_approval(Server,User,<<"member">>,Chat,<<"wait">>),
       add_wait_for_vcard(Server,User),
       ejabberd_router:route(To,jid:remove_resource(From),mod_groupchat_vcard:get_vcard()),
-      ejabberd_router:route(jid:replace_resource(To,<<"Groupchat">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta()),
+      ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta()),
       {stop,ok};
     no ->
       mod_groupchat_sql:set_update_status(Server,User,<<"true">>),
       ejabberd_router:route(To,jid:remove_resource(From),mod_groupchat_vcard:get_vcard()),
-      ejabberd_router:route(jid:replace_resource(To,<<"Groupchat">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta()),
+      ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta()),
       ok;
     yes when Nick == <<>> ->
       mod_groupchat_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),
@@ -377,7 +378,7 @@ add_user_vcard(_Acc, {_Admin,Chat,Server,
       From = jid:from_string(Chat),
       To = jid:from_string(User),
       ejabberd_router:route(From,To,mod_groupchat_vcard:get_vcard()),
-      ejabberd_router:route(jid:replace_resource(From,<<"Groupchat">>),jid:remove_resource(To),mod_groupchat_vcard:get_pubsub_meta()),
+      ejabberd_router:route(jid:replace_resource(From,<<"Group">>),jid:remove_resource(To),mod_groupchat_vcard:get_pubsub_meta()),
       ok;
     _ ->
       ok
@@ -511,13 +512,13 @@ add_user_pre_approval(Server,Member,Role,Groupchat,Subscription) ->
       {stop,not_ok}
   end.
 
-add_user_to_db(Server,User,Role,Chatgroup,Subscription) ->
+add_user_to_db(LServer,User,Role,Chatgroup,Subscription) ->
   R = randoms:get_alphanum_string(16),
   R_s = binary_to_list(R),
   R_sl = string:to_lower(R_s),
   Id = list_to_binary(R_sl),
-  ejabberd_sql:sql_query(
-    Server,
+  case ejabberd_sql:sql_query(
+    LServer,
     ?SQL_INSERT(
       "groupchat_users",
       ["username=%(User)s",
@@ -525,7 +526,24 @@ add_user_to_db(Server,User,Role,Chatgroup,Subscription) ->
         "chatgroup=%(Chatgroup)s",
         "id=%(Id)s",
         "subscription=%(Subscription)s"
-      ])).
+      ])) of
+    {updated, N} when N > 0 ->
+      ChatJID = jid:from_string(Chatgroup),
+      UserJID = jid:from_string(User),
+      LUser = ChatJID#jid.luser,
+      PUser = UserJID#jid.luser,
+      PServer = UserJID#jid.lserver,
+      RosterSubscription = case Subscription of
+                             <<"both">> ->
+                               <<"both">>;
+                             _ ->
+                               <<"from">>
+                           end,
+      mod_admin_extra:add_rosteritem(LUser,
+        LServer,PUser,PServer,PUser,<<"Users">>,RosterSubscription);
+    _ ->
+      ok
+  end.
 
 user_list_to_send(Server, Groupchat) ->
  case ejabberd_sql:sql_query(
@@ -576,6 +594,7 @@ change_subscription(Server,Chat,Username,State) ->
   end.
 
 get_user_rules(Server,User,Chat) ->
+  TS = now_to_timestamp(now()),
 ejabberd_sql:sql_query(
 Server,
 [
@@ -584,7 +603,7 @@ Server,
   groupchat_rights.type, groupchat_users.subscription,
   groupchat_users_vcard.givenfamily,groupchat_users_vcard.fn,
   groupchat_users_vcard.nickname,groupchat_users.nickname,
-  COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD hh24:mi:ss')),
+  groupchat_policy.valid_until,
   COALESCE(to_char(groupchat_policy.issued_at, 'YYYY-MM-DD hh24:mi:ss')),
   groupchat_policy.issued_by,groupchat_users_vcard.image,groupchat_users.avatar_id,
   COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZhh24:mi:ssT'))
@@ -592,7 +611,7 @@ Server,
   groupchat_policy.username = groupchat_users.username and
   groupchat_policy.chatgroup = groupchat_users.chatgroup)
   LEFT JOIN groupchat_rights on
-  groupchat_rights.name = groupchat_policy.right_name and groupchat_policy.valid_until > CURRENT_TIMESTAMP)
+  groupchat_rights.name = groupchat_policy.right_name and (groupchat_policy.valid_until = 0 or groupchat_policy.valid_until > ">>,integer_to_binary(TS) ,<<" ) )
   LEFT JOIN groupchat_users_vcard ON groupchat_users_vcard.jid = groupchat_users.username)
   LEFT JOIN groupchat_users_info ON groupchat_users_info.username = groupchat_users.username and
    groupchat_users_info.chatgroup = groupchat_users.chatgroup)
@@ -942,28 +961,27 @@ check_user(User) when is_binary(User) ->
 validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
   validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickname =/= undefined ->
-  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-nicknames">>,Admin,Chat),
+  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
   case SetNick of
-    yes ->
+    true ->
       validate_unique(LServer,Chat,User,Nickname,undefined,Lang);
     _ ->
       Message = <<"You have no rights to change a nickname">>,
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/= undefined ->
-  SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-badges">>,Admin,Chat),
+  SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
   case SetBadge of
-    yes ->
+    true ->
       validate_unique(LServer,Chat,User,undefined,Badge,Lang);
     _ ->
       Message = <<"You have no rights to change a badge">>,
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) when Badge =/= undefined andalso Nickname =/= undefined ->
-  SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-badges">>,Admin,Chat),
-  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-nicknames">>,Admin,Chat),
+  SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
   case SetBadge of
-    yes when SetNick == yes ->
+    true ->
       validate_unique(LServer,Chat,User,Nickname,Badge,Lang);
     _ ->
       Message = <<"You have no rights to change a nickname and a badge">>,
@@ -1063,7 +1081,7 @@ validate_unique(LServer,Chat,User,undefined,BadgeRaw,Lang) ->
       {stop, {error, xmpp:err_item_not_found(Message, Lang)}}
   end;
 validate_unique(LServer,Chat,User,Nick,Badge,Lang) ->
-  case check_if_unique(LServer,Chat,User,str:strip(Nick),str:str(Badge)) of
+  case check_if_unique(LServer,Chat,User,str:strip(Nick),str:strip(Badge)) of
     [] ->
       User;
     _ ->
@@ -1078,10 +1096,11 @@ update_user(User, LServer,Chat, _Admin,_ID,Nickname,Badge,_Lang) ->
   {User,UserCard}.
 
 user_no_read(Server,Chat) ->
+  TS = now_to_timestamp(now()),
   ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(username)s from groupchat_policy where chatgroup=%(Chat)s and right_name='read-messages'
-    and valid_until > CURRENT_TIMESTAMP")).
+    and (valid_until = 0 or valid_until > %(TS)d )")).
 
 get_nick_in_chat(Server,User,Chat) ->
   case ejabberd_sql:sql_query(
@@ -1179,10 +1198,11 @@ change_peer_to_peer_invitation_state(LServer,User,Chat,State) ->
 
 %% user rights change functions
 user_rights(LServer,Chat,User) ->
+  TS = now_to_timestamp(now()),
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(right_name)s from groupchat_policy where username=%(User)s
-    and chatgroup=%(Chat)s and valid_until > (now() at time zone 'utc')")) of
+    and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d )")) of
     {selected,Rights} ->
       Rights;
     _ ->
@@ -1190,12 +1210,13 @@ user_rights(LServer,Chat,User) ->
   end.
 
 user_rights_and_time(LServer,Chat,User) ->
+  TS = now_to_timestamp(now()),
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(groupchat_policy.right_name)s,@(groupchat_rights.type)s,
-    @(COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD hh24:mi:ss')))s
+    @(groupchat_policy.valid_until)d
     from groupchat_policy left join groupchat_rights on groupchat_rights.name = groupchat_policy.right_name where username=%(User)s
-    and chatgroup=%(Chat)s and valid_until > now() ")) of
+    and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d ) ")) of
     {selected,Rights} ->
       Rights;
     _ ->
@@ -1206,6 +1227,7 @@ create_right_form(LServer,User,Chat,RequestUser,ID, Lang) ->
   UserRights = user_rights(LServer,Chat,User),
   IsOwner = lists:member({<<"owner">>},UserRights),
   CanRestrictUsers = lists:member({<<"restrict-participants">>},UserRights),
+  ?INFO_MSG("User ~p~nIs owner ~p~nCan restrict ~p~n",[User,IsOwner,CanRestrictUsers]),
   case IsOwner of
     true ->
       RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
@@ -1361,6 +1383,7 @@ make_fields_admin(LServer,RightsAndTime,Lang) ->
 make_fields_admin_no_options(LServer,RightsAndTime,Lang) ->
   AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
   ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
+  ?INFO_MSG("Rights ~p~n",[ExistingRights]),
   Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
   RestrictionsFields = lists:map(fun(Right) ->
     {Name,Desc} = Right,
@@ -1376,7 +1399,7 @@ make_fields_admin_no_options(LServer,RightsAndTime,Lang) ->
 get_time(Right,RightsList) ->
   case lists:keyfind(Right,1,RightsList) of
     {Right,Time} ->
-      [convert_time(Time)];
+      [integer_to_binary(Time)];
     _ ->
       []
   end.
@@ -1389,13 +1412,13 @@ get_options([Value]) ->
 
 form_options() ->
   [
-    #xdata_option{label = <<"5 minutes">>, value = [<<"5 minutes">>]},
-    #xdata_option{label = <<"10 minutes">>, value = [<<"10 minutes">>]},
-    #xdata_option{label = <<"15 minutes">>, value = [<<"15 minutes">>]},
-    #xdata_option{label = <<"30 minutes">>, value = [<<"30 minutes">>]},
-    #xdata_option{label = <<"1 hour">>, value = [<<"1 hour">>]},
-    #xdata_option{label = <<"1 week">>, value = [<<"1 week">>]},
-    #xdata_option{label = <<"1 month">>, value = [<<"1 month">>]},
+    #xdata_option{label = <<"5 minutes">>, value = [<<"300">>]},
+    #xdata_option{label = <<"10 minutes">>, value = [<<"600">>]},
+    #xdata_option{label = <<"15 minutes">>, value = [<<"900">>]},
+    #xdata_option{label = <<"30 minutes">>, value = [<<"1800">>]},
+    #xdata_option{label = <<"1 hour">>, value = [<<"3600">>]},
+    #xdata_option{label = <<"1 week">>, value = [<<"604800">>]},
+    #xdata_option{label = <<"1 month">>, value = [<<"2592000">>]},
     #xdata_option{label = <<"Forever">>, value = [<<"0">>]}
   ].
 
@@ -1458,7 +1481,7 @@ is_valid_value(_Other,_ValidValues) ->
   false.
 
 valid_values() ->
-  [<<"0">>,<<"5 minutes">>,<<"10 minutes">>,<<"15 minutes">>,<<"30 minutes">>,<<"1 hour">>,<<"1 week">>,<<"1 month">>].
+  [<<"0">>,<<"300">>,<<"600">>,<<"900">>,<<"1800">>,<<"3600">>,<<"604800">>,<<"2592000">>].
 
 validate([]) ->
   {stop,bad_request};
@@ -1484,11 +1507,14 @@ change_rights(LServer,Chat,Admin,RequestUser,Rights) ->
                 end, Rights).
 
 set_expires([]) ->
-  <<"0 years">>;
+  <<>>;
 set_expires([<<"0">>]) ->
-  <<"1000 years">>;
+  <<"0">>;
 set_expires(ExpireOption) ->
-  list_to_binary(ExpireOption).
+  ExpireInteger = binary_to_integer(list_to_binary(ExpireOption)),
+  TS = now_to_timestamp(now()),
+  Sum = TS + ExpireInteger,
+  integer_to_binary(Sum).
 
 current_values(LServer,User,Chat) ->
   AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
@@ -1497,7 +1523,7 @@ current_values(LServer,User,Chat) ->
     {Name,Type,_Desc} = El,
     case lists:keyfind(Name,1,RightsAndTime) of
       {Name,Type,ExTime} ->
-        {Name,Type,[integer_to_binary(convert_from_datetime_to_unix_time(ExTime))]};
+        {Name,Type,[integer_to_binary(ExTime)]};
       _ ->
         {Name,Type,[]}
     end
@@ -1764,10 +1790,11 @@ make_query(LServer,RawData,RequesterUser,Chat) ->
   ).
 
 calculate_role(LServer,Username,Chat) ->
+  TS = now_to_timestamp(now()),
   Rights =  case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(right_name)s,@(type)s from groupchat_policy left join groupchat_rights on groupchat_rights.name = right_name where username=%(Username)s
-     and chatgroup=%(Chat)s and valid_until > CURRENT_TIMESTAMP")) of
+     and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d )")) of
               {selected, Res} ->
                 Res;
               _ ->
@@ -1796,3 +1823,6 @@ get_all_user(LServer,Chat) ->
     _ ->
       []
   end.
+
+now_to_timestamp({MSec, Sec, _USec}) ->
+  (MSec * 1000000 + Sec).

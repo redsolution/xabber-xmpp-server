@@ -73,8 +73,8 @@ check_if_exist(Acc, User, Chat, LServer, _Lang) ->
   end.
 
 check_if_has_rights(_Acc, User, Chat, LServer, Lang) ->
-  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+    true ->
       {stop, {ok,create_default_right_form(Chat, LServer, Lang)}};
     _ ->
       {stop, not_ok}
@@ -82,8 +82,8 @@ check_if_has_rights(_Acc, User, Chat, LServer, Lang) ->
 
 check_values(Acc, User, Chat, LServer, _Lang) ->
   FS = decode(LServer,Acc),
-  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
-    yes when FS =/= not_ok ->
+  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+    true when FS =/= not_ok ->
       {ok,Values} = FS,
       NewValues = Values -- get_default_current_rights(LServer,Chat),
       validate(NewValues);
@@ -151,7 +151,6 @@ valid_values() ->
 validate([]) ->
   {stop,bad_request};
 validate(FS) ->
-  ?INFO_MSG("FS ~p~n~n",[FS]),
   ValidValues = valid_values(),
   Validation = lists:map(fun(El) ->
     {_Rightname,Values} = El,
@@ -266,13 +265,13 @@ get_time(Right,RightsList) ->
 
 form_options() ->
   [
-    #xdata_option{label = <<"5 minutes">>, value = [<<"5 minutes">>]},
-    #xdata_option{label = <<"10 minutes">>, value = [<<"10 minutes">>]},
-    #xdata_option{label = <<"15 minutes">>, value = [<<"15 minutes">>]},
-    #xdata_option{label = <<"30 minutes">>, value = [<<"30 minutes">>]},
-    #xdata_option{label = <<"1 hour">>, value = [<<"1 hour">>]},
-    #xdata_option{label = <<"1 week">>, value = [<<"1 week">>]},
-    #xdata_option{label = <<"1 month">>, value = [<<"1 month">>]},
+    #xdata_option{label = <<"5 minutes">>, value = [<<"300">>]},
+    #xdata_option{label = <<"10 minutes">>, value = [<<"600">>]},
+    #xdata_option{label = <<"15 minutes">>, value = [<<"900">>]},
+    #xdata_option{label = <<"30 minutes">>, value = [<<"1800">>]},
+    #xdata_option{label = <<"1 hour">>, value = [<<"3600">>]},
+    #xdata_option{label = <<"1 week">>, value = [<<"604800">>]},
+    #xdata_option{label = <<"1 month">>, value = [<<"2592000">>]},
     #xdata_option{label = <<"Forever">>, value = [<<"0">>]}
   ].
 
@@ -321,10 +320,14 @@ set_default_restrictions(LServer, Chat, Right, [Time]) ->
 
 %% Internal functions
 set_time(<<"never">>) ->
-  <<"1000 years">>;
+  <<"0">>;
 set_time(<<"0">>) ->
-  <<"1000 years">>;
-set_time(<<"now">>) ->
-  <<"0 years">>;
+  <<"0">>;
 set_time(Time) ->
-  Time.
+  ExpireInteger = binary_to_integer(Time),
+  TS = now_to_timestamp(now()),
+  Sum = TS + ExpireInteger,
+  integer_to_binary(Sum).
+
+now_to_timestamp({MSec, Sec, _USec}) ->
+  (MSec * 1000000 + Sec).

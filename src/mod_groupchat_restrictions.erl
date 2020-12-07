@@ -43,68 +43,34 @@
   show_permissions/2,
   is_owner/3,
   validate_users/4,
-  change_permission/5,
-  user_from_chat_with_rights/2,
   delete_rule/4,
-  change_restriction/5,
   translated/1,
   get_all_restrictions/1,
   get_all_rights/1,
-  set_rule/6
+  set_rule/6,
+  get_rights/3
 ]).
-
-change_permission(_Server,[],_User,_Chat,_Admin) ->
-  ok;
-change_permission(Server,Rules,User,Chat,Admin) ->
-  [R|Rest] = Rules,
-  Rule = R#xabbergroupchat_permission.name,
-  Expires = set_time(R#xabbergroupchat_permission.expires),
-  set_rule(Server,Rule,Expires,User,Chat,Admin),
-  change_permission(Server,Rest,User,Chat,Admin).
-
-change_restriction(_Server,[],_User,_Chat,_Admin) ->
-  ok;
-change_restriction(Server,Rules,User,Chat,Admin) ->
-  [R|Rest] = Rules,
-  Rule = R#xabbergroupchat_restriction.name,
-  Expires = set_time(R#xabbergroupchat_restriction.expires),
-  set_rule(Server,Rule,Expires,User,Chat,Admin),
-  change_restriction(Server,Rest,User,Chat,Admin).
-
 
 is_restricted(Action,User,Chat)->
   ChatJid = jid:from_string(Chat),
   case get_rules(ChatJid#jid.lserver,User,Chat,Action) of
-    {selected,[]} ->
-      no;
-    {selected,_Restrictions}->
-      yes
+    {selected,Restrictions} when length(Restrictions) > 0 ->
+      true;
+    _ ->
+      false
   end.
 
 is_permitted(Action,User,Chat)->
   ChatJid = jid:from_string(Chat),
-  case check_if_permitted(ChatJid#jid.lserver,User,Chat,Action) of
-    {selected,[]} ->
-      no;
-    {selected,_Permissions}->
-      yes
-  end.
-
-%% Internal functions
-set_time(<<"never">>) ->
-  <<"1000 years">>;
-set_time(<<"now">>) ->
-  <<"0 years">>;
-set_time(Time) ->
-  Time.
+  check_if_permitted(ChatJid#jid.lserver,User,Chat,Action).
 
 % Uncomment it to block ability create new owners
 %set_rule(_Server,<<"owner">>,_Expires,_User,_Chat,_Admin) ->
 set_rule(_Server,_Rule,_Expires,Admin,_Chat,Admin) ->
   not_ok;
 set_rule(Server,Rule,Expires,User,Chat,Admin) ->
-  case is_permitted(<<"restrict-participants">>,Admin,Chat) of
-    yes ->
+  case is_permitted(<<"set-restrictions">>,Admin,Chat) of
+    true ->
       case validate_users(Server,Chat,Admin,User) of
         ok ->
           mod_groupchat_users:update_user_status(Server,User,Chat),
@@ -113,7 +79,7 @@ set_rule(Server,Rule,Expires,User,Chat,Admin) ->
         _ ->
           not_ok
       end;
-    no ->
+    false ->
       not_ok;
     _ ->
       not_ok
@@ -134,11 +100,11 @@ validate_users(Server,Chat,User1,User2) ->
 
 indetify_user(UserPermissions) ->
   IsOwner = lists:member(<<"owner">>,UserPermissions),
-  Restrict = lists:member(<<"restrict-participants">>,UserPermissions),
-  Block = lists:member(<<"block-participants">>,UserPermissions),
-  Admin = lists:member(<<"administrator">>,UserPermissions),
-  Badge = lists:member(<<"change-badges">>,UserPermissions),
-  Nick = lists:member(<<"change-nicknames">>,UserPermissions),
+  Restrict = lists:member(<<"set-restrictions">>,UserPermissions),
+  Block = lists:member(<<"set-restrictions">>,UserPermissions),
+  Admin = lists:member(<<"change-group">>,UserPermissions),
+  Badge = lists:member(<<"change-users">>,UserPermissions),
+  Nick = lists:member(<<"change-users">>,UserPermissions),
   Delete = lists:member(<<"delete-messages">>,UserPermissions),
   case length(UserPermissions) of
     0 ->
@@ -154,16 +120,18 @@ indetify_user(UserPermissions) ->
 
 %% SQL Functions
 users_permissions(Server,Chat,User1,User2) ->
+  TS = now_to_timestamp(now()),
   ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(username)s,@(right_name)s from groupchat_policy where username=%(User1)s
-    or username=%(User2)s and chatgroup=%(Chat)s and valid_until > CURRENT_TIMESTAMP order by username")).
+    or username=%(User2)s and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d) order by username")).
 
 is_owner(Server,Chat,Username) ->
+  TS = now_to_timestamp(now()),
  case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(username)s from groupchat_policy where right_name='owner'
-    and username=%(Username)s and chatgroup=%(Chat)s and valid_until > CURRENT_TIMESTAMP")) of
+    and username=%(Username)s and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d)")) of
    {selected,[]} ->
      no;
    _ ->
@@ -171,16 +139,62 @@ is_owner(Server,Chat,Username) ->
  end.
 
 get_rules(Server,User,Chat,Action) ->
+  TS = now_to_timestamp(now()),
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(valid_from)s,@(valid_until)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
-    and right_name=%(Action)s and valid_until > CURRENT_TIMESTAMP and valid_from < CURRENT_TIMESTAMP")).
+    ?SQL("select @(valid_until)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
+    and right_name=%(Action)s and (valid_until = 0 or valid_until > %(TS)d)")).
 
 check_if_permitted(Server,User,Chat,Action) ->
+  TS = now_to_timestamp(now()),
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(right_name)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
+    and (valid_until = 0 or valid_until > %(TS)d)")) of
+    {selected, RightsRaw} when length(RightsRaw) > 0 ->
+      Rights = lists:map(fun(R) -> {R0} = R, R0 end, RightsRaw),
+      check_permission_level(Action, Rights);
+    _ ->
+      false
+  end.
+
+check_permission_level(Right, Rights) ->
+  RightsAndLevels = rights_and_levels(),
+  RequiredLevel = proplists:get_value(Right, RightsAndLevels),
+  PermissionLevel = get_permission_level(Rights),
+  case RequiredLevel of
+    _ when is_integer(RequiredLevel) andalso
+      is_integer(PermissionLevel) andalso PermissionLevel >= RequiredLevel ->
+      true;
+    _ ->
+      false
+  end.
+
+get_permission_level(Rights) ->
+  RightsAndLevels = rights_and_levels(),
+  RightsLevels = lists:map(
+    fun(Right) ->
+      proplists:get_value(Right, RightsAndLevels, 0) end, Rights
+  ),
+  Level = hd(lists:reverse(lists:sort(RightsLevels))),
+  Level.
+
+rights_and_levels() ->
+  [
+    {<<"owner">>,6},
+    {<<"change-group">>,5},
+    {<<"set-permissions">>,4},
+    {<<"set-restrictions">>,3},
+    {<<"change-users">>,2},
+    {<<"delete-messages">>,1}
+  ].
+
+get_rights(Server,User,Chat) ->
+  TS = now_to_timestamp(now()),
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(valid_from)s,@(valid_until)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
-    and ( right_name=%(Action)s OR right_name='owner' ) and valid_until > CURRENT_TIMESTAMP and valid_from < CURRENT_TIMESTAMP")).
+    ?SQL("select @(right_name)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
+    and (valid_until = 0 or valid_until > %(TS)d)")).
 
 get_user_rules(Server,User,Chat) ->
   ejabberd_sql:sql_query(
@@ -191,7 +205,7 @@ get_user_rules(Server,User,Chat) ->
   groupchat_rights.type, groupchat_users.subscription,
   groupchat_users_vcard.givenfamily,groupchat_users_vcard.fn,
   groupchat_users_vcard.nickname,groupchat_users.nickname,
-  COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD HH24:MI:SS')),
+  groupchat_policy.valid_until,
   COALESCE(to_char(groupchat_policy.issued_at, 'YYYY-MM-DD HH24:MI:SS')),
   groupchat_policy.issued_by,groupchat_users_vcard.image,groupchat_users.avatar_id,
   COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DD HH24:MI:SS'))
@@ -199,7 +213,8 @@ get_user_rules(Server,User,Chat) ->
   groupchat_policy.username = groupchat_users.username and
   groupchat_policy.chatgroup = groupchat_users.chatgroup)
   LEFT JOIN groupchat_rights on
-  groupchat_rights.name = groupchat_policy.right_name and groupchat_policy.valid_until > CURRENT_TIMESTAMP)
+  groupchat_rights.name = groupchat_policy.right_name and
+  (groupchat_policy.valid_until = 0 or groupchat_policy.valid_until > %(TS)d))
   LEFT JOIN groupchat_users_vcard ON groupchat_users_vcard.jid = groupchat_users.username)
   LEFT JOIN groupchat_users_info ON groupchat_users_info.username = groupchat_users.username and
    groupchat_users_info.chatgroup = groupchat_users.chatgroup)
@@ -233,54 +248,36 @@ show_policy(Server,Chat) ->
     Server,
     ?SQL("select @(username)s,@(right_name)s,@(type)s from groupchat_policy where chatgroup=%(Chat)s")).
 
+upsert_rule(Server,Chat,Username,Rule,Expires,_IssuedBy) when Expires == <<"">> ->
+  delete_rule(Server,Chat,Username,Rule);
 upsert_rule(Server,Chat,Username,Rule,Expires,IssuedBy) ->
-  ejabberd_sql:sql_query(
-    Server,
-    [<<"INSERT INTO groupchat_policy (username,right_name,valid_from,valid_until,issued_by,issued_at,chatgroup) values(">>
-      ,<<"'">>,Username,<<"','">>,Rule,<<"',CURRENT_TIMESTAMP, (CURRENT_TIMESTAMP + INTERVAL ">>,
-      <<"'">>, Expires,<<"'">>, <<"),">>
-      ,<<"'">>,IssuedBy,<<"'">>,
-      <<",CURRENT_TIMESTAMP,">>,<<"'">>, Chat,<<"'">>, <<") ON CONFLICT (username,chatgroup,right_name) DO UPDATE set
-      valid_from = CURRENT_TIMESTAMP, valid_until = (CURRENT_TIMESTAMP + INTERVAL" >>, <<"'">>,
-      Expires, <<"'">>, <<"), issued_by = ">>, <<"'">>, IssuedBy, <<"'">>, <<", issued_at = CURRENT_TIMESTAMP">>
-    ]).
+  case ?SQL_UPSERT(Server, "groupchat_policy",
+    ["!username=%(Username)s",
+      "!chatgroup=%(Chat)s",
+      "right_name=%(Rule)s",
+      "valid_until=%(Expires)d",
+      "issued_by=%(IssuedBy)s",
+      "issued_at = CURRENT_TIMESTAMP"
+      ]) of
+    ok ->
+      ok;
+    Err ->
+      ?ERROR_MSG("Error to save rule ~p",[Err]),
+      {error, db_failure}
+  end.
 
 insert_rule(Server,Chat,Username,Rule,Expires,IssuedBy) ->
   ejabberd_sql:sql_query(
     Server,
-    [<<"INSERT INTO groupchat_policy (username,right_name,valid_from,valid_until,issued_by,issued_at,chatgroup) values(">>
-    ,<<"'">>,Username,<<"','">>,Rule,<<"',CURRENT_TIMESTAMP, (CURRENT_TIMESTAMP + INTERVAL ">>,
-      <<"'">>, Expires,<<"'">>, <<"),">>
-      ,<<"'">>,IssuedBy,<<"'">>,
-      <<",CURRENT_TIMESTAMP,">>,<<"'">>, Chat,<<"'">>, <<")">>
-    ]).
-user_from_chat_with_rights(Chat,Server) ->
-  ejabberd_sql:sql_query(
-    Server,
-    [
-      <<"select groupchat_users.username,groupchat_users.badge,groupchat_users.id,
-  groupchat_users.chatgroup,groupchat_policy.right_name,groupchat_rights.description,
-  groupchat_rights.type, groupchat_users.subscription,
-  groupchat_users_vcard.givenfamily,groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,groupchat_users.nickname,
-  COALESCE(to_char(groupchat_policy.valid_until, 'YYYY-MM-DD HH24:MI:SS')),
-  COALESCE(to_char(groupchat_policy.issued_at, 'YYYY-MM-DD HH24:MI:SS')),
-  groupchat_policy.issued_by,groupchat_users_vcard.image,groupchat_users.avatar_id,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DD HH24:MI:SS'))
-  from ((((groupchat_users LEFT JOIN  groupchat_policy on
-  groupchat_policy.username = groupchat_users.username and
-  groupchat_policy.chatgroup = groupchat_users.chatgroup)
-  LEFT JOIN groupchat_rights on
-  groupchat_rights.name = groupchat_policy.right_name and groupchat_policy.valid_until > CURRENT_TIMESTAMP)
-  LEFT JOIN groupchat_users_vcard ON groupchat_users_vcard.jid = groupchat_users.username)
-  LEFT JOIN groupchat_users_info ON groupchat_users_info.username = groupchat_users.username and
-   groupchat_users_info.chatgroup = groupchat_users.chatgroup)
-  where groupchat_users.subscription = 'both' and groupchat_users.chatgroup = ">>,
-       <<"'">>,Chat,<<"'">>,
-       <<"ORDER BY groupchat_users.username DESC
-      ">>
-    ])
-.
+    ?SQL_INSERT(
+      "groupchat_policy",
+      ["username=%(Username)s",
+        "chatgroup=%(Chat)s",
+        "right_name=%(Rule)s",
+        "valid_until=%(Expires)d",
+        "issued_by=%(IssuedBy)s",
+        "issued_at=now()"
+      ])).
 
 
 delete_rule(Server,Chat,User,Rule) ->
@@ -329,3 +326,6 @@ get_all_restrictions(LServer) ->
     _ ->
       []
   end.
+
+now_to_timestamp({MSec, Sec, _USec}) ->
+  (MSec * 1000000 + Sec).

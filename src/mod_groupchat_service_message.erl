@@ -37,7 +37,6 @@
   users_blocked/2,
   users_kicked/6,
   user_updated/8,
-  created_chat/4,
   user_change_own_avatar/3,
   user_change_avatar/4,
   anon/1,
@@ -197,7 +196,7 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
 
 
 user_change_avatar(User, Server, Chat, OtherUser) ->
-  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
+  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
   UpdatedUser = mod_groupchat_users:form_user_card(OtherUser,Chat),
   UpdatedUserID = case anon(UpdatedUser) of
@@ -227,7 +226,7 @@ user_change_avatar(User, Server, Chat, OtherUser) ->
   {stop,ok}.
 
 user_change_own_avatar(User, Server, Chat) ->
-  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
+  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
   UserID = case anon(ByUserCard) of
              public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
@@ -247,44 +246,6 @@ user_change_own_avatar(User, Server, Chat) ->
   send_to_all(Chat,M),
   {stop,ok}.
 
-created_chat(Created,User,ChatJID,Lang) ->
-  Txt = <<"created chat">>,
-  Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  X = mod_groupchat_users:form_user_card(User,Chat),
-  UserID = case anon(X) of
-             public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
-               X#xabbergroupchat_user_card.nickname;
-             public ->
-               jid:to_string(X#xabbergroupchat_user_card.jid);
-             anonim ->
-               X#xabbergroupchat_user_card.nickname
-           end,
-  MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
-  Body = [#text{lang = <<>>,data = MsgTxt}],
-  #xabbergroupchat_create{
-    name = Name,
-    description = Description,
-    searchable = Search,
-    anonymous = Anon,
-    model = Model,
-    domains = Domains,
-    contacts = Contacts
-  } = Created,
-  Privacy = #xabbergroupchat_privacy{cdata = Anon},
-  Membership = #xabbergroupchat_membership{cdata = Model},
-  Desc = #xabbergroupchat_description{cdata = Description},
-  Index = #xabbergroupchat_index{cdata = Search},
-  NameEl = #xabbergroupchat_name{cdata = Name},
-  XEl = #xabbergroupchat_x{
-    xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,
-  sub_els = [NameEl,Privacy,Membership,Desc,Index],
-    domains = Domains,
-    contacts = Contacts
-  },
-  By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
-  SubEls = [XEl,By],
-  M = form_message(ChatJID,Body,SubEls),
-  send_to_all(Chat,M).
 
 chat_created(LServer,User,Chat,Lang) ->
   Txt = <<"created chat">>,
@@ -604,13 +565,13 @@ new_restriction_text(Restrictions) ->
 send_presences(Server,Chat) ->
   To = jid:from_string(Chat),
   Users = mod_groupchat_users:user_list_to_send(Server,Chat),
-  FromChat = jid:replace_resource(To,<<"Groupchat">>),
+  FromChat = jid:replace_resource(To,<<"Group">>),
   mod_groupchat_messages:send_message(mod_groupchat_presence:form_presence(Chat),Users,FromChat).
 
 -spec send_to_all(binary(), binary()) -> ok.
 send_to_all(Chat,Stanza) ->
   ChatJID = jid:from_string(Chat),
-  FromChat = jid:replace_resource(ChatJID,<<"Groupchat">>),
+  FromChat = jid:replace_resource(ChatJID,<<"Group">>),
   Server = ChatJID#jid.lserver,
   Pkt1 = mod_groupchat_messages:strip_stanza_id(Stanza,Server),
   {Pkt2, _State2} = ejabberd_hooks:run_fold(

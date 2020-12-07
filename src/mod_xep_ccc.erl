@@ -293,13 +293,13 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
 handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
   PktNew = xmpp:decode_els(Presence),
   IsChat = xmpp:get_subtag(PktNew, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-  XEl = xmpp:get_subtag(PktNew, #xabbergroupchat_x{}),
+  IsChannel = xmpp:get_subtag(PktNew, #channel_x{xmlns = ?NS_CHANNELS}),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   case IsChat of
-    #xabbergroupchat_x{} ->
+    _ when IsChat =/= false ->
       update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,IsChat);
-    _ when XEl =/= false ->
-      update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,XEl);
+    _ when IsChannel =/= false ->
+      update_metainfo(<<"channel">>, LServer,LUser,Conversation,IsChannel);
     _ ->
       update_metainfo(<<"chat">>, LServer,LUser,Conversation,<<>>)
   end,
@@ -338,6 +338,7 @@ handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, 
   end,
   case Accept of
     #jingle_accept{} ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Accept]),
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
       update_metainfo(call, LServer,LUser,Conversation,TS,false),
       delete_last_call(From, LUser, LServer);
@@ -346,6 +347,7 @@ handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, 
   end,
   case Reject of
     #jingle_reject{} ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Reject]),
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
       update_metainfo(call, LServer,LUser,Conversation,TS,false),
       delete_last_call(From, LUser, LServer);
@@ -407,6 +409,18 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
       ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
         #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
       update_metainfo(message, LServer,LUser,Conversation,TS);
+    <<"channel">> when IsLocal == false ->
+      FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
+      StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
+      TSGroupchat = StanzaID#stanza_id.id,
+      store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
+      update_metainfo(message, LServer,LUser,Conversation,binary_to_integer(TSGroupchat));
+    <<"channel">> ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
+      update_metainfo(message, LServer,LUser,Conversation,TS);
     <<"groupchat">> when IsLocal == false ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
@@ -425,7 +439,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
       Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
       case Propose of
         #jingle_propose{} ->
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Propose]),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Pkt]),
           store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
           update_metainfo(call, LServer,LUser,Conversation,TS,false),
           store_last_call(Pkt, Peer, LUser, LServer, TS);
@@ -435,6 +449,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
       case Accept of
         #jingle_accept{} ->
           store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Accept]),
           update_metainfo(call, LServer,LUser,Conversation,TS,false),
           delete_last_call(Peer, LUser, LServer);
         _ ->
@@ -444,6 +459,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
         #jingle_reject{} ->
           Conversation = jid:to_string(jid:remove_resource(Peer)),
           store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Reject]),
           update_metainfo(call, LServer,LUser,Conversation,TS,false),
           delete_last_call(Peer, LUser, LServer);
         _ ->
@@ -561,7 +577,7 @@ check_user_for_sync(_Acc,LServer,User,Chat,_Stamp) ->
   UserSubscription = mod_groupchat_users:check_user_if_exist(LServer,User,Chat),
   BlockToRead = mod_groupchat_restrictions:is_restricted(<<"read-messages">>,User,Chat),
   case UserSubscription of
-    <<"both">> when BlockToRead == no ->
+    <<"both">> when BlockToRead == false ->
       ok;
     _ ->
       {stop,not_ok}
@@ -877,6 +893,37 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Di
   {PUser, PServer,_} = jid:tolower(jid:from_string(Conversation)),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
   case Type of
+    <<"channel">> when IsLocal == false ->
+      Count = length(get_count(LUser, LServer, PUser, PServer)),
+      UserCard = get_user_card(LUser, LServer, PUser, PServer),
+      LastMessage = get_last_message(LUser, LServer, PUser, PServer),
+      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
+      Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
+      XabberDelivered = #xabber_conversation_delivered{id = Delivered},
+      XabberDisplayed = #xabber_conversation_displayed{id = Display},
+      SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
+      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = Retract}]},
+        #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+        #xabber_metadata{node = ?NS_CHANNELS, sub_els = UserCard},
+        #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
+    <<"channel">> ->
+      LastRead = get_groupchat_last_readed(PServer,PUser,LServer,LUser),
+      User = jid:to_string(jid:make(LUser,LServer)),
+      Chat = jid:to_string(jid:make(PUser,PServer)),
+      Status = mod_channels_users:check_user_if_exist(LServer,User,Chat),
+      Count = get_count_groupchat_messages(PServer,PUser,binary_to_integer(LastRead),Conversation,Status),
+      LastMessage = get_last_groupchat_message(PServer,PUser,Status,LUser),
+      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
+      Unread = #xabber_conversation_unread{count = Count, 'after' = LastRead},
+      XabberDelivered = #xabber_conversation_delivered{id = Delivered},
+      XabberDisplayed = #xabber_conversation_displayed{id = Display},
+      User = jid:to_string(jid:make(LUser,LServer)),
+      UserCard = mod_channels_users:form_user_card(User,Chat),
+      SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
+      {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = Retract}]},
+        #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+        #xabber_metadata{node = ?NS_CHANNELS, sub_els = [UserCard]},
+        #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
     <<"groupchat">> when IsLocal == true ->
       LastRead = get_groupchat_last_readed(PServer,PUser,LServer,LUser),
       User = jid:to_string(jid:make(LUser,LServer)),
@@ -1123,22 +1170,34 @@ store_last_msg(Pkt, Peer, LUser, LServer, TS) ->
 
 
 get_user_id(Pkt) ->
-  get_id_from_x(xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT})).
+  get_id_from_x(Pkt, xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT})).
 
-get_id_from_x(false) ->
-  false;
-get_id_from_x(X) ->
-  get_card_from_refence(xmpp:get_subtag(X,#xmppreference{})).
+get_id_from_x(Pkt, false) ->
+  try_to_get_id(Pkt);
+get_id_from_x(_Pkt, X) ->
+  get_card_from_refence(xmpp:get_subtag(X,#xmppreference{}), group).
 
-get_card_from_refence(false) ->
+get_card_from_refence(false,_Type) ->
   false;
-get_card_from_refence(Reference) ->
+get_card_from_refence(Reference, channel) ->
+  get_id_from_card(xmpp:get_subtag(Reference, #channel_user_card{}));
+get_card_from_refence(Reference, group) ->
   get_id_from_card(xmpp:get_subtag(Reference, #xabbergroupchat_user_card{})).
 
+get_id_from_card(#channel_user_card{id = ID}) ->
+  ID;
 get_id_from_card(#xabbergroupchat_user_card{id = ID}) ->
   ID;
 get_id_from_card(_Card) ->
   false.
+
+try_to_get_id(Pkt) ->
+  get_x(xmpp:get_subtag(Pkt, #channel_x{xmlns = ?NS_CHANNELS})).
+
+get_x(false) ->
+  false;
+get_x(X) ->
+  get_card_from_refence(xmpp:get_subtag(X,#xmppreference{}), channel).
 
 store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID, false) ->
   case {mnesia:table_info(last_msg, disc_only_copies),
@@ -1399,6 +1458,14 @@ get_privacy(_Privacy) ->
 update_metainfo(_Any, _LServer,_LUser,_Conversation, empty) ->
   ?DEBUG("No id in displayed",[]),
   ok;
+update_metainfo(<<"channel">>, LServer,LUser,Conversation,_X) ->
+  Type = <<"channel">>,
+  TS = time_now(),
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d
+    where username=%(LUser)s and conversation=%(Conversation)s and type != %(Type)s and %(LServer)H")
+  );
 update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,X) ->
   Type = <<"groupchat">>,
   Privacy = get_privacy(xmpp:get_subtag(X, #xabbergroupchat_privacy{})),
@@ -1409,20 +1476,21 @@ update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,X) ->
       ejabberd_sql:sql_query(
         LServer,
         ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d,  incognito = 'true'
-    where username=%(LUser)s and conversation=%(Conversation)s and incognito = 'false' and %(LServer)H")
+    where username=%(LUser)s and conversation=%(Conversation)s and %(LServer)H")
       );
     _ when Parent =/= undefined ->
       TS = time_now(),
       ejabberd_sql:sql_query(
         LServer,
         ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d,  p2p = 'true'
-    where username=%(LUser)s and conversation=%(Conversation)s and p2p = 'false' and %(LServer)H")
+    where username=%(LUser)s and conversation=%(Conversation)s and %(LServer)H")
       );
     _ ->
       TS = time_now(),
       ejabberd_sql:sql_query(
         LServer,
-        ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d
+        ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d,
+        p2p = 'false', incognito = 'false'
     where username=%(LUser)s and conversation=%(Conversation)s and type != %(Type)s and %(LServer)H")
       )
   end;
@@ -2424,14 +2492,37 @@ create_conversation(LServer,LUser,Conversation,Thread,Encrypted) ->
 
 get_and_store_user_card(LServer,LUser,PeerJID,Message) ->
   X = xmpp:get_subtag(Message,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+  Ch_X = xmpp:get_subtag(Message,#channel_x{xmlns = ?NS_CHANNELS}),
+  maybe_store_card(LServer,LUser,PeerJID,group,X),
+  maybe_store_card(LServer,LUser,PeerJID,channel,Ch_X).
+
+maybe_store_card(_LServer,_LUser,_PeerJID, _Type, false) ->
+  ok;
+maybe_store_card(LServer,LUser,PeerJID, channel, X) ->
   Ref = xmpp:get_subtag(X,#xmppreference{}),
-  Card = xmpp:get_subtag(Ref,#xabbergroupchat_user_card{}),
-  case Card of
-    false ->
-      ok;
+  case Ref of
+    false -> ok;
     _ ->
-      store_card(LServer,LUser,PeerJID,Card)
+      Card = xmpp:get_subtag(Ref,#channel_user_card{}),
+      case Card of
+        false -> ok;
+        _ ->
+          store_card(LServer,LUser,PeerJID,Card)
+      end
+  end;
+maybe_store_card(LServer,LUser,PeerJID, group, X) ->
+  Ref = xmpp:get_subtag(X,#xmppreference{}),
+  case Ref of
+    false -> ok;
+    _ ->
+      Card = xmpp:get_subtag(Ref,#xabbergroupchat_user_card{}),
+      case Card of
+        false -> ok;
+        _ ->
+          store_card(LServer,LUser,PeerJID,Card)
+      end
   end.
+
 
 store_card(LServer,LUser,Peer,Pkt) ->
   case {mnesia:table_info(user_card, disc_only_copies),

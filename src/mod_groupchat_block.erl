@@ -121,10 +121,10 @@ block_iq_handler(D, #iq{to = To, from = From}) ->
   OJ = check(jid,OwnerJIDs,D#xabbergroup_block.jid),
   OS = check(domain,OwnerDomains,D#xabbergroup_block.domain),
   OId = check(id,OwnerIDS,D#xabbergroup_block.id),
-  case mod_groupchat_restrictions:is_permitted(<<"block-participants">>,Admin,Chat) of
-    yes when OJ == false andalso OS == false andalso OId == false ->
+  case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
+    true when OJ == false andalso OS == false andalso OId == false ->
       [Elements];
-    no ->
+    false ->
       {stop,not_ok};
     _ ->
       {stop,not_ok}
@@ -137,10 +137,10 @@ unblock_iq_handler(_Acc, #iq{to = To, from = From, sub_els = Sub}) ->
   [El] = Sub,
   D = xmpp:decode(El),
   Elements = D#xabbergroup_unblock.domain ++ D#xabbergroup_unblock.jid ++ D#xabbergroup_unblock.id,
-  case mod_groupchat_restrictions:is_permitted(<<"block-participants">>,Admin,Chat) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
+    true ->
       unblock_elements(Elements,Server,Chat);
-    no ->
+    false ->
       {stop,not_ok}
   end.
 

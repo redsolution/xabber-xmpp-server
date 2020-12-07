@@ -180,7 +180,7 @@ check_permission_write(_Acc, {User,Chat,UserExits,Els}) ->
   Server = ChatJID#jid.lserver,
   Block = mod_groupchat_block:check_block(Server,Chat,User,Domain),
   case mod_groupchat_restrictions:is_restricted(<<"send-messages">>,User,Chat) of
-    no when UserExits == exist ->
+    false when UserExits == exist ->
       {stop,{ok,Els}};
     _  when UserExits == exist->
       {stop,not_ok};
@@ -208,9 +208,9 @@ check_permission_media(_Acc,{User,Chat,_UserExits,Els}) ->
           MediaUriRare = M#media.uri,
           [MediaUri|_Re] = MediaUriRare,
           case check_permissions(MediaUri#media_uri.type,User,Chat) of
-            yes ->
+            true ->
               {stop,not_ok};
-            no ->
+            false ->
               {stop,{ok,Els}}
           end
       end
@@ -224,7 +224,7 @@ check_permissions(Media,User,Chat) ->
               <<"image">> ->
                 mod_groupchat_restrictions:is_restricted(<<"send-images">>,User,Chat);
               _ ->
-                no
+                false
             end,
   Allowed.
 
@@ -243,7 +243,7 @@ send_message(Message,Users,From) ->
 send_service_message(To,Chat,Text) ->
   Jid = jid:to_string(To),
   From = jid:from_string(Chat),
-  FromChat = jid:replace_resource(From,<<"Groupchat">>),
+  FromChat = jid:replace_resource(From,<<"Group">>),
   Id = randoms:get_string(),
   Type = chat,
   Body = [#text{lang = <<>>,data = Text}],
@@ -256,7 +256,7 @@ send_service_message(To,Chat,Text) ->
 %% Internal functions
 do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headline} = Message) ->
   Event = lists:keyfind(ps_event,1,Sub),
-  FromChat = jid:replace_resource(From,<<"Groupchat">>),
+  FromChat = jid:replace_resource(From,<<"Group">>),
   case Event of
     false ->
       ok;
@@ -315,7 +315,7 @@ do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline}
             IdAvatar ->
               ok;
             _ ->
-              ejabberd_router:route(jid:replace_resource(To,<<"Groupchat">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta())
+              ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta())
           end;
         _ ->
           ok

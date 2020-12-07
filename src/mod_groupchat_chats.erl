@@ -47,7 +47,7 @@
   get_status_label_name/3, is_value_changed/2
   ]).
 
--export([parse_status_query/2, filter_fixed_fields/1]).
+-export([parse_status_query/2, filter_fixed_fields/1, define_human_status_and_show/3, update_pinned/3]).
 % Status hooks
 -export([check_user_rights_to_change_status/4, check_user_rights_to_change_status/5, check_status/5]).
 % Delete chat hook
@@ -175,8 +175,9 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
         "domains=%(Domains)s",
         "owner=%(Creator)s"])) of
     {updated,_N} ->
+      xabber_groups_sm:activate(Server,LocalPart),
       mod_groupchat_inspector:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>),
-      Expires = <<"1000 years">>,
+      Expires = <<"0">>,
       IssuedBy = <<"server">>,
       Permissions = get_permissions(Server),
       lists:foreach(fun(N)->
@@ -190,8 +191,8 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
   end.
 
 check_user_rights(_Acc,User,Chat,Server) ->
-  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+    true ->
       {stop, {ok,form_chat_information(Chat,Server,form)}};
     _ ->
       {stop, {ok,form_fixed_chat_information(Chat,Server)}}
@@ -200,8 +201,8 @@ check_user_rights(_Acc,User,Chat,Server) ->
 
 %% groupchat_info_change hook
 check_user_permission(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+    true ->
       ok;
     _ ->
       {stop, {error, xmpp:err_not_allowed()}}
@@ -355,7 +356,7 @@ create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
         <<"incognito">>,<<"none">>,<<"member-only">>,Desc,<<"0">>,<<"">>,<<"">>,OldChat),
       {AvatarID1,AvatarType1} = add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
       {AvatarID2,AvatarType2} = add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
-      Expires = <<"1000 years">>,
+      Expires = <<"0">>,
       IssuedBy = <<"server">>,
       Rule = <<"send-invitations">>,
       mod_groupchat_restrictions:insert_rule(LServer,Chat,User,Rule,Expires,IssuedBy),
@@ -388,7 +389,7 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
   Message = #message{
     type = chat,
     id = randoms:get_string(),
-    from = jid:replace_resource(ChatJID,<<"Groupchat">>),
+    from = jid:replace_resource(ChatJID,<<"Group">>),
     to = jid:from_string(User),
     body = [#text{lang = <<>>,data = Text}],
     sub_els = [Invite,ChatInfo]},
@@ -424,7 +425,7 @@ send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
   Message = #message{
     type = chat,
     id = randoms:get_string(),
-    from = jid:replace_resource(ChatJID,<<"Groupchat">>),
+    from = jid:replace_resource(ChatJID,<<"Group">>),
     to = jid:from_string(User),
     body = [#text{lang = <<>>,data = Text}],
     sub_els = [Invite,ChatInfo]},
@@ -746,8 +747,6 @@ get_and_validate(_LServer,_Chat,<<"name">>,Name) ->
   {name,list_to_binary(Name)};
 get_and_validate(_LServer,_Chat,<<"pinned-message">>,PinnedMessage) ->
   {message,list_to_binary(PinnedMessage)};
-get_and_validate(LServer,Chat,<<"status">>,Status) ->
-  validate_status(LServer,Chat,list_to_binary(Status));
 get_and_validate(_LServer,_Chat,<<"index">>,Index) ->
   validate_index(list_to_binary(Index));
 get_and_validate(_LServer,_Chat,<<"membership">>,Membership) ->
@@ -759,19 +758,6 @@ get_and_validate(_LServer,_Chat,<<"domains">>,Domains) ->
 get_and_validate(_LServer,_Chat,_Var,_Values) ->
   false.
 
-validate_status(LServer,Chat,Status) ->
-  ValidStatus = make_valid_status(LServer,Chat),
-  case lists:member(Status,ValidStatus) of
-    true ->
-      {status,Status}
-  end.
-
-make_valid_status(LServer, Chat) ->
-  AllStatus = status_options(LServer, Chat),
-  lists:map(fun(El) ->
-    #xdata_option{value = [Val]} = El,
-    Val end, AllStatus
-  ).
 
 validate_privacy(<<"public">>) ->
   true;
@@ -867,6 +853,16 @@ get_information_of_chat(Chat,Server) ->
     Server,
     ?SQL("select @(name)s,@(anonymous)s,@(searchable)s,@(model)s,@(description)s,@(message)d,@(contacts)s,@(domains)s,@(status)s
     from groupchats where jid=%(Chat)s and %(Server)H")).
+
+update_pinned(Server,Chat,Message) ->
+  case ?SQL_UPSERT(Server, "groupchats",
+    [ "message=%(Message)d",
+      "!jid=%(Chat)s"]) of
+    ok ->
+      ok;
+    _Err ->
+      {error, db_failure}
+  end.
 
 update_groupchat(Server,Jid,Name,Desc,Message,Status,Membership,Index,Contacts,Domains) ->
   case ?SQL_UPSERT(Server, "groupchats",
@@ -994,8 +990,8 @@ get_status_label_name(LServer,Chat,Status) ->
   end.
 
 check_user_rights_to_change_status(_Acc,User,Chat,Server) ->
-  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+    true ->
       {stop, {ok, status_form(Chat,Server,'text-single')}};
     _ ->
       {stop, {ok, status_form(Chat,Server,'fixed')}}
@@ -1031,10 +1027,10 @@ get_status_description(LServer, Chat) ->
 fill_status_options(LServer, Chat) ->
   Statuses = statuses_and_values(LServer, Chat),
   lists:map(fun(StatusAndValue) ->
-    {Status, Value, _Desc} = StatusAndValue,
+    {Status, _Value, _Desc} = StatusAndValue,
     #xdata_option{
       label = Status,
-      value = [Value]} end, Statuses
+      value = [Status]} end, Statuses
   ).
 
 statuses_and_values(LServer, Chat) ->
@@ -1061,8 +1057,8 @@ parse_status_query(FS, Lang) ->
 
 %% Change status hook
 check_user_rights_to_change_status(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+    true ->
       ok;
     _ ->
       {stop, {error, xmpp:err_not_allowed()}}
@@ -1079,10 +1075,10 @@ check_status(_Acc, User,Chat,Server,FS) ->
 
 check_status_value(Server, Chat, User, Status) ->
   Statuses = statuses_and_values(Server,Chat),
-  Search = [{S,V}|| {S,V,_D} <- Statuses, V == Status],
+  Search = lists:keyfind(Status,1,Statuses),
   case Search of
-    [{HumanStatus,StatusValue}] ->
-      update_status(Server,HumanStatus,Chat, User, StatusValue);
+    {Status,_StatusValue,_Desc} ->
+      update_status(Server,Status,Chat, User, Status);
     _ ->
       {stop, {error, xmpp:err_bad_request(<<"Value ", Status/binary, " is not allowed by server policy. Please, choose status from available values">>, <<"en">>)}}
   end.
@@ -1101,3 +1097,26 @@ update_status(Server,HumanStatus,Chat, User, Status) ->
     _ ->
       {stop, {error,xmpp:err_internal_server_error()}}
   end.
+
+define_human_status_and_show(LServer, Chat, Status) ->
+  Statuses = statuses_and_values(LServer, Chat),
+  Length = string:length(Status),
+  case lists:keyfind(Status,1,Statuses) of
+    {Status,Show,_Desc} ->
+      {[#text{data = Status}], define_show(Show)};
+    _ when Length > 0 ->
+      {[#text{data = Status}], undefined};
+    _ ->
+      {[], undefined}
+  end.
+
+define_show(<<"dnd">>) ->
+  'dnd';
+define_show(<<"chat">>) ->
+  'chat';
+define_show(<<"xa">>) ->
+  'xa';
+define_show(<<"away">>) ->
+  'away';
+define_show(_Status) ->
+  undefined.

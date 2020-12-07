@@ -128,7 +128,7 @@ add_user(Server,User,Role,Chatgroup,Subscription) ->
   R_s = binary_to_list(R),
   R_sl = string:to_lower(R_s),
   Id = list_to_binary(R_sl),
-  ejabberd_sql:sql_query(
+  case ejabberd_sql:sql_query(
     Server,
     ?SQL_INSERT(
        "groupchat_users",
@@ -137,7 +137,25 @@ add_user(Server,User,Role,Chatgroup,Subscription) ->
         "chatgroup=%(Chatgroup)s",
          "id=%(Id)s",
         "subscription=%(Subscription)s"
-       ])).
+       ])) of
+  {updated,N} when N > 0 ->
+    ChatJID = jid:from_string(Chatgroup),
+    UserJID = jid:from_string(User),
+    LUser = ChatJID#jid.luser,
+    PUser = UserJID#jid.luser,
+    PServer = UserJID#jid.lserver,
+    RosterSubscription = case Subscription of
+                           <<"both">> ->
+                             <<"both">>;
+                           _ ->
+                             <<"from">>
+                         end,
+    mod_admin_extra:add_rosteritem(LUser,
+      Server,PUser,PServer,PUser,<<"Users">>,RosterSubscription),
+    ok;
+    _ ->
+      error
+  end.
 
 update_user_role(Server,User,Chat,Role) ->
   case ?SQL_UPSERT(Server, "groupchat_users",

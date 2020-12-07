@@ -150,7 +150,7 @@ check_user_before_all(_Acc, {Server,User,Chat,_ID,_X,_V}) ->
 check_user_permission_to_delete_all(_Acc, {_Server,User,Chat,_ID,_X,_V}) ->
   IsPermitted = mod_groupchat_restrictions:is_permitted(<<"delete-messages">>,User,Chat),
   case IsPermitted of
-    yes ->
+    true ->
       ok;
     _ ->
       {stop,not_ok}
@@ -179,7 +179,7 @@ check_user_permission_to_delete_messages(_Acc, {Server,User,Chat,ID,_X,_V}) ->
   case OwnerOfMessage of
     User ->
       ok;
-    _ when IsPermitted == yes->
+    _ when IsPermitted == true->
       ok;
     _ ->
       {stop,not_ok}
@@ -218,7 +218,7 @@ check_user_permission(_Acc, {Server,User,Chat,ID,_X,_V}) ->
   case OwnerOfMessage of
     User ->
       ok;
-    _ when IsPermitted == yes->
+    _ when IsPermitted == true->
       ok;
     _ ->
       {stop,not_ok}
@@ -327,7 +327,7 @@ send_query(_Acc,{Server,UserJID,Chat,Version,_Less}) ->
 %% Internal functions
 notificate(Server,Chat,Stanza) ->
   From = jid:from_string(Chat),
-  FromChat = jid:replace_resource(From,<<"Groupchat">>),
+  FromChat = jid:replace_resource(From,<<"Group">>),
   UserList = mod_groupchat_users:user_list_to_send(Server,Chat),
   lists:foreach(fun(U) ->
     {Member} = U,

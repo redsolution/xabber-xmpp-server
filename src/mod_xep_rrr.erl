@@ -53,7 +53,7 @@
 ]).
 
 %% gen_iq_handler callback.
--export([process_iq/1, create_replace/0]).
+-export([process_iq/1, create_replace/0, pre_process_iq/1]).
 
 %% gen_server callbacks.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -306,11 +306,20 @@ unregister_hooks(Host) ->
 -spec register_iq_handlers(binary()) -> ok.
 register_iq_handlers(Host) ->
   gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_REWRITE,
-    ?MODULE, process_iq).
+    ?MODULE, pre_process_iq).
 
 -spec unregister_iq_handlers(binary()) -> ok.
 unregister_iq_handlers(Host) ->
   gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_REWRITE).
+
+pre_process_iq(#iq{to = To} = IQ) ->
+  LUser = To#jid.luser,
+  LServer = To#jid.lserver,
+  case mod_xabber_entity:get_entity_type(LUser,LServer) of
+    group -> mod_groupchat_iq_handler:make_action(IQ);
+    channel -> mod_channels_iq_handler:process_iq(IQ);
+    _ -> process_iq(IQ)
+  end.
 
 -spec process_iq(iq()) -> iq().
 process_iq(#iq{type = set, lang = Lang, sub_els = [#xabber_retract_query{}]} = IQ) ->
@@ -439,7 +448,7 @@ process_iq(#iq{from = From,
       ?DEBUG("Start deleting local messages ~p",[IQ]),
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()));
     _ ->
-      ?DEBUG("Bad symmetric retract",[]),
+      ?INFO_MSG("Bad symmetric retract",[]),
       xmpp:make_error(IQ, xmpp:err_bad_request())
   end;
 process_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_all{conversation = RetractUserJID, symmetric = false, type = Type}]} = IQ) ->

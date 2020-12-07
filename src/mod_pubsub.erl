@@ -49,7 +49,7 @@
 -define(STDTREE, <<"tree">>).
 -define(STDNODE, <<"flat">>).
 -define(PEPNODE, <<"pep">>).
-
+-export([send_last_items/1, send_last_pep/2]).
 %% exports for hooks
 -export([presence_probe/3, caps_add/3, caps_update/3,
     in_subscription/2, out_subscription/1,
@@ -1062,20 +1062,27 @@ iq_disco_items(Host, Item, From, RSM) ->
     end.
 
 -spec iq_sm(iq()) -> iq().
-iq_sm(#iq{to = To, sub_els = [SubEl]} = IQ) ->
-    LOwner = jid:tolower(jid:remove_resource(To)),
-    Res = case xmpp:get_ns(SubEl) of
-	      ?NS_PUBSUB ->
-		  iq_pubsub(LOwner, all, IQ);
-	      ?NS_PUBSUB_OWNER ->
-		  iq_pubsub_owner(LOwner, IQ)
-	  end,
-    case Res of
-	{result, IQRes} ->
-	    xmpp:make_iq_result(IQ, IQRes);
-	{error, Error} ->
-	    xmpp:make_error(IQ, Error)
-    end.
+iq_sm(#iq{from = From, to = To, sub_els = [SubEl]} = IQ) ->
+	#jid{lserver = LServer, luser = LUser} = To,
+	IsTheSame = (jid:remove_resource(From) == jid:remove_resource(To)),
+	case mod_xabber_entity:get_entity_type(LUser,LServer) of
+		group when IsTheSame =/= true -> mod_groupchat_vcard:handle_iq(IQ);
+		channel when IsTheSame =/= true -> xmpp:make_error(IQ, xmpp:err_feature_not_implemented());
+		_ ->
+			LOwner = jid:tolower(jid:remove_resource(To)),
+			Res = case xmpp:get_ns(SubEl) of
+							?NS_PUBSUB ->
+								iq_pubsub(LOwner, all, IQ);
+							?NS_PUBSUB_OWNER ->
+								iq_pubsub_owner(LOwner, IQ)
+						end,
+			case Res of
+				{result, IQRes} ->
+					xmpp:make_iq_result(IQ, IQRes);
+				{error, Error} ->
+					xmpp:make_error(IQ, Error)
+			end
+	end.
 
 -spec iq_get_vcard(binary()) -> vcard_temp().
 iq_get_vcard(Lang) ->

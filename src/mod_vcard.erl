@@ -297,6 +297,10 @@ disco_identity(Acc, _From, _To, _Node, _Lang) ->
 
 -spec get_vcard(binary(), binary()) -> [xmlel()] | error.
 get_vcard(LUser, LServer) ->
+	case mod_xabber_entity:get_entity_type(LUser,LServer) of
+		group -> mod_groupchat_vcard:get_vcard(LUser,LServer);
+		channel -> mod_channels:get_vcard(LUser,LServer);
+		_ ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
     Result = case use_cache(Mod, LServer) of
 		 true ->
@@ -309,7 +313,8 @@ get_vcard(LUser, LServer) ->
     case Result of
 	{ok, Els} -> Els;
 	error -> error
-    end.
+    end
+		end.
 
 -spec make_vcard_search(binary(), binary(), binary(), xmlel()) -> #vcard_search{}.
 make_vcard_search(User, LUser, LServer, VCARD) ->

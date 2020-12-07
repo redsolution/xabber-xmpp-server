@@ -41,7 +41,7 @@
 	 delete_old_messages/2, get_commands_spec/0, msg_to_el/4,
 	 get_room_config/4, set_room_option/3, offline_message/1, export/1, parse_query/2,
 	 mod_options/1]).
-
+-export([pre_process_iq_v0_2/1, pre_process_iq_v0_3/1]).
 -include("xmpp.hrl").
 -include("logger.hrl").
 -include("mod_muc_room.hrl").
@@ -220,21 +220,21 @@ depends(_Host, _Opts) ->
 -spec register_iq_handlers(binary()) -> ok.
 register_iq_handlers(Host) ->
     gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_MAM_TMP,
-				  ?MODULE, process_iq_v0_2),
+				  ?MODULE, pre_process_iq_v0_2),
     gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_MAM_TMP,
-				  ?MODULE, process_iq_v0_2),
+				  ?MODULE, pre_process_iq_v0_2),
     gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_MAM_0,
-				  ?MODULE, process_iq_v0_3),
+				  ?MODULE, pre_process_iq_v0_3),
     gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_MAM_0, ?MODULE,
-				  process_iq_v0_3),
+			pre_process_iq_v0_3),
     gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_MAM_1,
-				  ?MODULE, process_iq_v0_3),
+				  ?MODULE, pre_process_iq_v0_3),
     gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_MAM_1,
-				  ?MODULE, process_iq_v0_3),
+				  ?MODULE, pre_process_iq_v0_3),
     gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_MAM_2,
-				  ?MODULE, process_iq_v0_3),
+				  ?MODULE, pre_process_iq_v0_3),
     gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_MAM_2,
-				  ?MODULE, process_iq_v0_3).
+				  ?MODULE, pre_process_iq_v0_3).
 
 -spec unregister_iq_handlers(binary()) -> ok.
 unregister_iq_handlers(Host) ->
@@ -478,6 +478,30 @@ mark_stored_msg(#message{meta = #{stanza_id := ID, unique_time := TimeStamp}} = 
     Pkt1 = set_stanza_id(Pkt, JID, integer_to_binary(ID), misc:usec_to_now(TimeStamp)),
     xmpp:put_meta(Pkt1, mam_archived, true).
 
+pre_process_iq_v0_2(#iq{
+	to = #jid{luser = LUser, lserver = LServer},
+	type = set, sub_els = [#mam_query{}]} = IQ) ->
+	case mod_xabber_entity:get_entity_type(LUser,LServer) of
+		group -> mod_groupchat_iq_handler:make_action(IQ);
+		channel -> mod_channels_iq_handler:process_iq(IQ);
+		_ -> process_iq_v0_2(IQ)
+	end;
+pre_process_iq_v0_2(IQ) ->
+	process_iq_v0_2(IQ).
+
+pre_process_iq_v0_3(#iq{
+	to = #jid{luser = LUser, lserver = LServer},
+	type = set, sub_els = [#mam_query{}]} = IQ) ->
+	case mod_xabber_entity:get_entity_type(LUser,LServer) of
+		group ->
+			?INFO_MSG("Try to send to group ~p~n",[LUser]),
+			mod_groupchat_iq_handler:make_action(IQ);
+		channel -> mod_channels_iq_handler:process_iq(IQ);
+		_ -> process_iq_v0_3(IQ)
+	end;
+pre_process_iq_v0_3(IQ) ->
+	process_iq_v0_3(IQ).
+
 % Query archive v0.2
 process_iq_v0_2(#iq{from = #jid{lserver = LServer},
 		    to = #jid{lserver = LServer},
@@ -641,15 +665,22 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
 		       Prefs#archive_prefs.never,
 		       NS),
     xmpp:make_iq_result(IQ, PrefsEl);
-process_iq(IQ) ->
-	From = xmpp:get_from(IQ),
-	Chat = jid:to_string(jid:remove_resource(From)),
-	LServer = From#jid.lserver,
-	case mod_groupchat_sql:search_for_chat(LServer,Chat) of
-		{selected,[]} ->
-			xmpp:make_error(IQ, xmpp:err_not_allowed());
-		_ ->
-			process_iq(LServer, IQ, chat)
+%%process_iq(IQ) ->
+%%	From = xmpp:get_from(IQ),
+%%	Chat = jid:to_string(jid:remove_resource(From)),
+%%	LServer = From#jid.lserver,
+%%	case mod_groupchat_sql:search_for_chat(LServer,Chat) of
+%%		{selected,[]} ->
+%%			xmpp:make_error(IQ, xmpp:err_not_allowed());
+%%		_ ->
+%%			process_iq(LServer, IQ, chat)
+%%	end.
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}} = IQ) ->
+	IsLocal = lists:member(LServer,ejabberd_config:get_myhosts()),
+	case mod_xabber_entity:get_entity_type(LUser,LServer) of
+		group when IsLocal == true -> process_iq(LServer, IQ, chat);
+		channel when IsLocal == true -> process_iq(LServer, IQ, chat);
+		_ -> xmpp:make_error(IQ, xmpp:err_not_allowed())
 	end.
 
 process_iq(LServer, #iq{from = #jid{luser = LUser}, lang = Lang,

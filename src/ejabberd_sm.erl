@@ -87,7 +87,7 @@
 
 -export([init/1, handle_call/3, handle_cast/2,
 	 handle_info/2, terminate/2, code_change/3, opt_type/1]).
-
+-export([get_sessions/4, online/1, get_sessions/3]).
 -include("ejabberd.hrl").
 -include("logger.hrl").
 
@@ -188,7 +188,7 @@ close_session(SID, User, Server, Resource) ->
 -spec check_in_subscription(boolean(), presence()) -> boolean() | {stop, false}.
 check_in_subscription(Acc, #presence{to = To}) ->
     #jid{user = User, server = Server} = To,
-    case ejabberd_auth:user_exists(User, Server) of
+    case mod_xabber_entity:is_exist_anywhere(User, Server) of
       true -> Acc;
       false -> {stop, false}
     end.
@@ -642,10 +642,6 @@ do_route(#presence{to = To, type = T} = Packet)
   when T == subscribe; T == subscribed; T == unsubscribe; T == unsubscribed ->
     ?DEBUG("processing subscription:~n~s", [xmpp:pp(Packet)]),
     #jid{luser = LUser, lserver = LServer} = To,
-  Server = To#jid.server,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  case mod_groupchat_sql:search_for_chat(Server,Chat) of
-    {selected,[]} ->
       case is_privacy_allow(Packet) andalso
         ejabberd_hooks:run_fold(
           roster_in_subscription,
@@ -666,17 +662,13 @@ do_route(#presence{to = To, type = T} = Packet)
         false ->
           ok
       end;
-    {selected,[_Name]} ->
-      mod_groupchat_presence:process_presence(Packet)
-  end;
 do_route(#presence{to = #jid{lresource = <<"">>} = To} = Packet) ->
     ?DEBUG("processing presence to bare JID:~n~s", [xmpp:pp(Packet)]),
     {LUser, LServer, _} = jid:tolower(To),
     lists:foreach(
       fun({_, R}) ->
 	      do_route(Packet#presence{to = jid:replace_resource(To, R)})
-      end, get_user_present_resources(LUser, LServer)),
-  mod_groupchat_presence:process_presence(Packet);
+      end, get_user_present_resources(LUser, LServer));
 do_route(#message{to = #jid{lresource = <<"">>}, type = T} = Packet) ->
     ?DEBUG("processing message to bare JID:~n~s", [xmpp:pp(Packet)]),
     if T == chat; T == headline; T == normal ->
@@ -689,15 +681,7 @@ do_route(#message{to = #jid{lresource = <<"">>}, type = T} = Packet) ->
     end;
 do_route(#iq{to = #jid{lresource = <<"">>}} = Packet) ->
     ?DEBUG("processing IQ to bare JID:~n~s", [xmpp:pp(Packet)]),
-    #iq{to = To} = Packet,
-		Server = To#jid.server,
-		Chat = jid:to_string(jid:make(To#jid.user,Server,<<>>)),
-    case mod_groupchat_sql:search_for_chat(Server,Chat) of
-      {selected,[]} ->
-        process_iq(Packet);
-      {selected,[_Name]} ->
-        mod_groupchat_iq_handler:make_action(Packet)
-    end;
+    process_iq(Packet);
 do_route(Packet) ->
     ?DEBUG("processing packet to full JID:~n~s", [xmpp:pp(Packet)]),
     To = xmpp:get_to(Packet),
@@ -715,16 +699,10 @@ do_route(Packet) ->
 		    ?DEBUG("dropping presence to unavailable resource:~n~s",
 			   [xmpp:pp(Packet)]);
 		#iq{} ->
-			Chat = jid:to_string(jid:make(LUser,LServer,<<>>)),
-			case mod_groupchat_sql:search_for_chat(LServer,Chat) of
-				{selected,[]} ->
 					Lang = xmpp:get_lang(Packet),
 					ErrTxt = <<"User session not found">>,
 					Err = xmpp:err_service_unavailable(ErrTxt, Lang),
 					ejabberd_router:route_error(Packet, Err);
-				_ ->
-					mod_groupchat_iq_handler:make_action(Packet)
-			end;
 		_ ->
 		    Lang = xmpp:get_lang(Packet),
 		    ErrTxt = <<"User session not found">>,
@@ -783,20 +761,14 @@ route_message(#message{to = To, type = Type} = Packet) ->
 			PrioRes);
       _ ->
 
-	    case ejabberd_auth:user_exists(LUser, LServer) andalso
+	    case mod_xabber_entity:is_exist_anywhere(LUser, LServer) andalso
 		is_privacy_allow(Packet) of
 		true ->
 					ejabberd_hooks:run_fold(offline_message_hook,
 						LServer, {bounce, Packet}, []);
 		false ->
-			Groupchat = mod_groupchat_chats:groupchat_exist(LUser, LServer),
-			case Groupchat of
-				true ->
-					mod_groupchat_messages:process_message(Packet);
-				false ->
 					Err = xmpp:err_service_unavailable(),
 					ejabberd_router:route_error(Packet, Err)
-			end
 	    end
     end.
 

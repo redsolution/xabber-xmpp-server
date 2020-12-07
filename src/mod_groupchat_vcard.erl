@@ -43,7 +43,8 @@
   update_parse_avatar_option/4,
   get_photo_meta/3, get_photo_data/5, get_avatar_type/4, get_all_image_metadata/2, check_old_meta/2,
   make_chat_notification_message/3, get_pubsub_meta/0, get_pubsub_data/0, handle_pubsub/4, handle_pubsub/3, get_image_id/3,
-  get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, get_url/1, create_p2p_avatar/6
+  get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, get_url/1, create_p2p_avatar/6,
+  handle_iq/1
 ]).
 -export([put_avatar_into_pubsub/3]).
 %% gen_mod behavior
@@ -74,10 +75,15 @@ mod_options(_Host) ->
 depends(_, _) ->
   [{mod_http_fileserver, hard}].
 
+handle_iq(#iq{type = get} = IQ) ->
+  handle_request(IQ);
+handle_iq(#iq{type = set} = IQ) ->
+  handle_pubsub(IQ);
+handle_iq(_IQ) ->
+  ok.
+
 handle_request(Iq) ->
-  #iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From,to = To,sub_els = [#xmlel{name = <<"pubsub">>,
-    attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}]} ] = Children} = Iq,
-  Decoded = lists:map(fun(N) -> xmpp:decode(N) end, Children),
+  #iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From,to = To,sub_els = Decoded} = Iq,
   Pubsub = lists:keyfind(pubsub,1,Decoded),
   #pubsub{items = Items} = Pubsub,
   #ps_items{node = Node} = Items,
@@ -89,13 +95,16 @@ handle_request(Iq) ->
   case Node of
     <<"urn:xmpp:avatar:data">> ->
       Result = mod_pubsub:iq_sm(NewIq),
-      ejabberd_router:route(To,From,Result);
+      ejabberd_router:route(To,From,Result),
+      Result;
     <<"urn:xmpp:avatar:metadata">> ->
       Result = mod_pubsub:iq_sm(NewIq),
-      ejabberd_router:route(To,From,Result);
+      ejabberd_router:route(To,From,Result),
+      Result;
     <<"http://jabber.org/protocol/nick">> ->
       Result = mod_pubsub:iq_sm(NewIq),
-      ejabberd_router:route(To,From,Result);
+      ejabberd_router:route(To,From,Result),
+      Result;
     <<"urn:xmpp:avatar:data#">> ->
       UserDataNode = <<"urn:xmpp:avatar:data#",UserId/binary>>,
       #ps_items{node = Node, items = Item} = Items,
@@ -110,7 +119,9 @@ handle_request(Iq) ->
       NewPubsub = #pubsub{items = NewItems},
       NewDecoded = [NewPubsub],
       NewIqUser = #iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = NewDecoded},
-      mod_pubsub:iq_sm(NewIqUser);
+      Result = mod_pubsub:iq_sm(NewIqUser),
+      ejabberd_router:route(To,From,Result),
+      Result;
     _ ->
       node_analyse(Iq,Server,Node,Items,UserJid,Chat)
   end.
@@ -119,7 +130,8 @@ node_analyse(Iq,Server,Node,Items,User,Chat) ->
   N = binary:split(Node,<<"#">>),
   case N of
     [<<"urn:xmpp:avatar:metadata">>,_UserID] ->
-      ok;
+      Result = xmpp:make_error(Iq,xmpp:err_item_not_found()),
+      ejabberd_router:route(Result);
     [<<"urn:xmpp:avatar:data">>,_UserID] ->
       #ps_items{node = Node, items = Item} = Items,
       Item_ps = lists:keyfind(ps_item,1,Item),
@@ -128,33 +140,35 @@ node_analyse(Iq,Server,Node,Items,User,Chat) ->
       send_back(Data,Iq);
     _ ->
       Result = xmpp:make_error(Iq,xmpp:err_item_not_found()),
-      ejabberd_router:route(Result)
+      ejabberd_router:route(Result),
+      Result
   end.
 
 send_back(not_exist,Iq) ->
   Result = xmpp:make_error(Iq,xmpp:err_item_not_found()),
-  ejabberd_router:route(Result);
+  ejabberd_router:route(Result),
+  Result;
 send_back(not_filed,Iq) ->
   Result = xmpp:make_error(Iq,xmpp:err_item_not_found()),
-  ejabberd_router:route(Result);
+  ejabberd_router:route(Result),
+  Result;
 send_back(error,Iq) ->
   Result = xmpp:make_error(Iq,xmpp:err_internal_server_error()),
-  ejabberd_router:route(Result);
+  ejabberd_router:route(Result),
+  Result;
 send_back(Data,Iq) ->
   Result = xmpp:make_iq_result(Iq,Data),
-  ejabberd_router:route(Result).
+  ejabberd_router:route(Result),
+  Result.
 
-handle_pubsub(Iq) ->
-  #iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to = To,sub_els = [#xmlel{name = <<"pubsub">>,
-    attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}]} ] = Children} = Iq,
-  Decoded = lists:map(fun(N) -> xmpp:decode(N) end, Children),
-  FromGroupJID = jid:replace_resource(To,<<"Groupchat">>),
+handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to = To,sub_els = Decoded} = Iq) ->
+  FromGroupJID = jid:replace_resource(To,<<"Group">>),
   NewIq = #iq{from = FromGroupJID,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = Decoded},
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Permission = mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat),
-  CanChangeAva = mod_groupchat_restrictions:is_permitted(<<"change-nicknames">>,User,Chat),
+  Permission = mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat),
+  CanChangeAva = mod_groupchat_restrictions:is_permitted(<<"change-users">>,User,Chat),
   Pubsub = lists:keyfind(pubsub,1,Decoded),
   #pubsub{publish = Publish} = Pubsub,
   #ps_publish{node = Node, items = Items} = Publish,
@@ -167,11 +181,11 @@ handle_pubsub(Iq) ->
   UserMetaDataNode = <<"urn:xmpp:avatar:metadata#">>,
   UserNickNode = <<"http://jabber.org/protocol/nick#">>,
   Result = case Node of
-             <<"urn:xmpp:avatar:data">> when Permission == yes->
+             <<"urn:xmpp:avatar:data">> when Permission == true->
                mod_pubsub:iq_sm(NewIq);
-             <<"urn:xmpp:avatar:metadata">> when Permission == yes->
+             <<"urn:xmpp:avatar:metadata">> when Permission == true->
                mod_pubsub:iq_sm(NewIq);
-             <<"http://jabber.org/protocol/nick">> when Permission == yes->
+             <<"http://jabber.org/protocol/nick">> when Permission == true->
                mod_pubsub:iq_sm(NewIq);
              UserDataNodeId ->
                #ps_item{id = ItemId,sub_els = [Sub]} = Item,
@@ -210,7 +224,7 @@ handle_pubsub(Iq) ->
                    ]},
                    Event = #ps_event{items = ItemsD},
                    M = #message{type = headline,
-                     from = jid:replace_resource(To,<<"Groupchat">>),
+                     from = jid:replace_resource(To,<<"Group">>),
                      to = jid:remove_resource(From),
                      id = randoms:get_string(),
                      sub_els = [Event],
@@ -260,7 +274,7 @@ handle_pubsub(Iq) ->
                NewPubsub = #pubsub{publish = NewPublish},
                NewDecoded = [NewPubsub],
                mod_pubsub:iq_sm(#iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = NewDecoded});
-             <<"urn:xmpp:avatar:data#",SomeUserId/binary>> when CanChangeAva == yes ->
+             <<"urn:xmpp:avatar:data#",SomeUserId/binary>> when CanChangeAva == true ->
                SomeUser = mod_groupchat_inspector:get_user_by_id(Server,Chat,SomeUserId),
                case mod_groupchat_restrictions:validate_users(Server,Chat,User,SomeUser) of
                  ok when SomeUser =/= none ->
@@ -271,7 +285,7 @@ handle_pubsub(Iq) ->
                  _ ->
                    xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,<<"en">>))
                end;
-             <<"urn:xmpp:avatar:metadata#",SomeUserId/binary>> when CanChangeAva == yes ->
+             <<"urn:xmpp:avatar:metadata#",SomeUserId/binary>> when CanChangeAva == true ->
                SomeUser = mod_groupchat_inspector:get_user_by_id(Server,Chat,SomeUserId),
                #ps_item{id = IdItem} = Item,
                case IdItem of
@@ -307,7 +321,7 @@ handle_pubsub(Iq) ->
                        ]},
                        Event = #ps_event{items = ItemsD},
                        M = #message{type = headline,
-                         from = jid:replace_resource(To,<<"Groupchat">>),
+                         from = jid:replace_resource(To,<<"Group">>),
                          to = jid:remove_resource(From),
                          id = randoms:get_string(),
                          sub_els = [Event],
@@ -332,11 +346,12 @@ handle_pubsub(Iq) ->
     _ ->
       ok
   end,
-  ejabberd_router:route(To,From,Result).
+  ejabberd_router:route(To,From,Result),
+  Result.
 
 notificate_all(ChatJID,Message) ->
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  FromChat = jid:replace_resource(ChatJID,<<"Groupchat">>),
+  FromChat = jid:replace_resource(ChatJID,<<"Group">>),
   {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(ChatJID#jid.lserver,Chat),
   mod_groupchat_messages:send_message(Message,AllUsers,FromChat).
 
@@ -557,7 +572,7 @@ send_notifications(ChatAndIds,User,Server) ->
     mod_groupchat_service_message:send_to_all(Chat,M) end, ChatAndIds).
 
 notification_message(User, Server, Chat) ->
-  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
+  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
@@ -569,7 +584,7 @@ notification_message(User, Server, Chat) ->
   #message{from = ChatJID, to = ChatJID, type = headline, id = ID, body = [], sub_els = NewEls, meta = #{}}.
 
 notification_message_about_nick(User, Server, Chat) ->
-  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Groupchat">>),
+  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
@@ -1086,7 +1101,8 @@ delete_file(Server, Hash, AvatarType) ->
   File = <<Path/binary, "/" , Name/binary>>,
   file:delete(File).
 
-get_vcard(Chat,Server) ->
+get_vcard(LUser,Server) ->
+  Chat = jid:to_string(jid:make(LUser,Server)),
   {selected,[{Name,Privacy,Index,Membership,Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
     mod_groupchat_chats:get_all_information_chat(Chat,Server),
   Parent = define_parent_chat(ParentChat),
@@ -1094,27 +1110,23 @@ get_vcard(Chat,Server) ->
   Members = list_to_binary(MembersC),
   HumanStatus = case ParentChat of
                   <<"0">> ->
-                    define_human_status(Status);
+                    Status;
                   _ ->
                     <<"Private chat">>
                 end,
   Avatar = get_avatar_from_pubsub(Chat,Server),
-  #vcard_temp{jabberid = Chat, nickname = Name, desc = Desc, index = Index, privacy = Privacy, membership = Membership, parent = Parent, status = HumanStatus, photo = Avatar, members = Members}.
+  [xmpp:encode(#vcard_temp{
+    jabberid = Chat,
+    nickname = Name,
+    desc = Desc,
+    index = Index,
+    privacy = Privacy,
+    membership = Membership,
+    parent = Parent,
+    status = HumanStatus,
+    photo = Avatar,
+    members = Members})].
 
-define_human_status(<<"dnd">>) ->
-  <<"Restricted">>;
-define_human_status(<<"xa">>) ->
-  <<"Limited">>;
-define_human_status(<<"chat">>) ->
-  <<"Fiesta">>;
-define_human_status(<<"away">>) ->
-  <<"Regulated">>;
-define_human_status(<<"active">>) ->
-  <<"Discussion">>;
-define_human_status(<<"inactive">>) ->
-  <<"Inactive">>;
-define_human_status(_Status) ->
-  undefined.
 
 define_parent_chat(<<"0">>) ->
   undefined;
@@ -1215,7 +1227,7 @@ create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2)
       File = <<Path/binary, "/" , Filename/binary>>,
       case file:read_file(File) of
         {ok,F} ->
-          put_avatar_into_pubsub(Chat,F,<<"Groupchat">>);
+          put_avatar_into_pubsub(Chat,F,<<"Group">>);
         _ ->
           ok
       end;

@@ -135,45 +135,6 @@ process_groupchat(#iq{type = set, lang = Lang, to = To, from = From, sub_els = [
     _ ->
       xmpp:make_error(IQ, xmpp:serr_internal_server_error(<<"Internal server error">>,<<"en">>))
   end;
-process_groupchat(#iq{type = set, to = To, from = From,
-  sub_els = [#xabbergroupchat_create{name = undefined, anonymous= undefined, localpart= undefined,
-    searchable = undefined, description = undefined, model = undefined, pinned = undefined, domains = undefined, contacts = undefined, peer = Peer}]} = Iq) ->
-  Creator = jid:to_string(jid:remove_resource(From)),
-  Server = To#jid.lserver,
-  Result = ejabberd_hooks:run_fold(groupchat_peer_to_peer, Server, [], [Server,Creator,Peer]),
-  case Result of
-    {ok,Created} ->
-      xmpp:make_iq_result(Iq, Created);
-    {exist,ExistedChat} ->
-      ExistedChatJID = jid:from_string(ExistedChat),
-      NewSub = [#xabbergroupchat_x{jid = ExistedChatJID}],
-      NewIq = xmpp:set_els(Iq,NewSub),
-      xmpp:make_error(NewIq, xmpp:err_conflict());
-    stop ->
-      ok;
-    _ ->
-      xmpp:make_error(Iq, xmpp:serr_internal_server_error(<<"Internal server error">>,<<"en">>))
-  end;
-process_groupchat(#iq{type = set, to = To, from = From, lang = Lang,
-  sub_els = [#xabbergroupchat_create{name = Name, anonymous=Anon, localpart=LocalJid,
-  searchable = Searchable, description = Description, model = Model, pinned = Message, domains = Domains, contacts = Contacts, peer = undefined} = X]} = Iq) ->
-  Creator = From#jid.luser,
-  Server = To#jid.lserver,
-  Host = From#jid.lserver,
-  case mod_groupchat_inspector:create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,Model,Message,Contacts,Domains) of
-    {ok,Created} ->
-      ChatJID = jid:make(LocalJid,Server,<<"Groupchat">>),
-      User = jid:to_string(jid:remove_resource(From)),
-      mod_groupchat_presence:send_info_to_index(Server,ChatJID),
-      mod_groupchat_service_message:created_chat(X,User,ChatJID,Lang),
-      xmpp:make_iq_result(Iq, Created);
-    exist ->
-      xmpp:make_error(Iq, xmpp:err_conflict());
-    fail ->
-      xmpp:make_error(Iq, xmpp:err_not_allowed());
-    _ ->
-      xmpp:make_error(Iq, xmpp:err_not_allowed())
-  end;
 process_groupchat(#iq{type=get, to= To, from = From,
   sub_els = [#xabbergroupchat_search{name = Name, anonymous = Anon, description = Desc, model = Model}]} = Iq) ->
   Server = To#jid.lserver,
@@ -203,9 +164,9 @@ make_action(#iq{lang = Lang, to = To, from = From, type = get, sub_els = [#xmlel
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
   User = jid:to_string(jid:remove_resource(From)),
-  RightToBlock = mod_groupchat_restrictions:is_permitted(<<"block-participants">>,User,Chat),
+  RightToBlock = mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,User,Chat),
   case mod_groupchat_inspector_sql:check_user(User,Server,Chat) of
-    exist when RightToBlock == yes ->
+    exist when RightToBlock == true ->
       ejabberd_router:route(xmpp:make_iq_result(Iq,mod_groupchat_block:query(To)));
     _ ->
       ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed("You do not have permission to see the list of blocked users.",Lang)))
@@ -252,8 +213,8 @@ make_action(#iq{type = set, to = To, from = From,
   Server = To#jid.lserver,
   ChatJid = jid:to_string(jid:remove_resource(To)),
   IsOwner = mod_groupchat_restrictions:is_owner(Server,ChatJid,User),
-  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,ChatJid) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,ChatJid) of
+    true ->
       Xa = xmpp:decode(X),
       NewOwner = Xa#xabbergroupchat_update.owner,
       case NewOwner of
@@ -265,18 +226,10 @@ make_action(#iq{type = set, to = To, from = From,
               ejabberd_router:route(xmpp:make_error(Iq,Err))
           end;
         _  when IsOwner == yes->
-          Expires = <<"1000 years">>,
+          Expires = <<"0">>,
           Rule1 = <<"owner">>,
-          Rule2 = <<"change-restriction">>,
-          Rule3 = <<"Block participants">>,
-          Rule4 = <<"remove-member">>,
-          Rule5 = <<"block-member">>,
           IssuedBy = User,
           mod_groupchat_restrictions:insert_rule(Server,ChatJid,NewOwner,Rule1,Expires,IssuedBy),
-          mod_groupchat_restrictions:insert_rule(Server,ChatJid,NewOwner,Rule2,Expires,IssuedBy),
-          mod_groupchat_restrictions:insert_rule(Server,ChatJid,NewOwner,Rule3,Expires,IssuedBy),
-          mod_groupchat_restrictions:insert_rule(Server,ChatJid,NewOwner,Rule4,Expires,IssuedBy),
-          mod_groupchat_restrictions:insert_rule(Server,ChatJid,NewOwner,Rule5,Expires,IssuedBy),
           mod_groupchat_restrictions:delete_rule(Server,ChatJid,User,<<"owner">>)
       end;
     _ ->
@@ -326,8 +279,8 @@ make_action(#iq{type = get, lang = Lang, sub_els = [#xmlel{name = <<"query">>,
   Server = To#jid.lserver,
   Admin = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
-  case mod_groupchat_restrictions:is_permitted(<<"block-participants">>,Admin,Chat) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
+    true ->
       Query = mod_groupchat_inspector:get_invited_users(Server,Chat),
       ResIq = xmpp:make_iq_result(Iq,Query),
       ejabberd_router:route(ResIq);
@@ -352,8 +305,8 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"revoke">>,
   DecEls = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
   Revoke = lists:keyfind(xabbergroupchat_revoke,1,DecEls),
   #xabbergroupchat_revoke{jid = User} = Revoke,
-  case mod_groupchat_restrictions:is_permitted(<<"administrator">>,Admin,Chat) of
-    yes ->
+  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,Admin,Chat) of
+    true ->
       case mod_groupchat_inspector:revoke(Server,User,Chat) of
         ok ->
           ejabberd_hooks:run(revoke_invite, Server, [Chat, User]),
@@ -431,9 +384,11 @@ make_action(IQ) ->
   DecIQ = xmpp:decode_els(IQ),
   process_groupchat_iq(DecIQ).
 
+process_groupchat_iq(#iq{type = set, sub_els = [#mam_query{}]} = Iq) ->
+  process_mam_iq(Iq);
 process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = Less}]} = IQ) ->
 Chat = jid:to_string(jid:remove_resource(To)),
-  FromChat = jid:replace_resource(To,<<"Groupchat">>),
+  FromChat = jid:replace_resource(To,<<"Group">>),
   Server = To#jid.lserver,
   Result = ejabberd_hooks:run_fold(retract_query, Server, [], [{Server,From,Chat,Version,Less}]),
     case Result of
@@ -489,9 +444,9 @@ case ejabberd_hooks:run_fold(groupchat_update_user_hook, LServer, [], [LServer,C
     ejabberd_router:route(xmpp:make_error(IQ, xmpp:serr_internal_server_error()))
 end;
 process_groupchat_iq(#iq{to = To, type = get, sub_els = [#vcard_temp{}]} = IQ) ->
-  Chat = jid:to_string(jid:remove_resource(To)),
+  LUser = To#jid.luser,
   Server = To#jid.lserver,
-  Vcard = mod_groupchat_vcard:get_vcard(Chat,Server),
+  Vcard = mod_groupchat_vcard:get_vcard(LUser,Server),
   ejabberd_router:route(xmpp:make_iq_result(IQ,Vcard));
 process_groupchat_iq(#iq{lang = Lang, type = get, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = []}]} = IQ) ->
     Chat = jid:to_string(jid:remove_resource(To)),
@@ -853,20 +808,20 @@ process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type
   Query = get_query(SubElD,Lang),
   With = proplists:is_defined(with, Query),
   case mod_groupchat_inspector_sql:check_user(User,Server,Chat) of
-    exist when IsRestrictedToRead == no andalso With =/= false ->
+    exist when IsRestrictedToRead == false andalso With =/= false ->
       WithValue = jid:to_string(proplists:get_value(with, Query)),
       M1 = change_id_to_jid(SubElD,Server,Chat,WithValue),
       IQDecoded2 = #iq{from = To, lang = Lang, to = From, meta = Meta, sub_els = [M1], type = Type, id = Id},
       mod_mam:process_iq_v0_3(IQDecoded2);
-    exist when IsRestrictedToRead == no andalso With == false ->
+    exist when IsRestrictedToRead == false andalso With == false ->
       mod_mam:process_iq_v0_3(IQDecoded);
-    exist when IsRestrictedToRead == no andalso IsAnon == yes andalso With == false ->
+    exist when IsRestrictedToRead == false andalso IsAnon == yes andalso With == false ->
       mod_mam:process_iq_v0_3(IQDecoded);
     _ when IsIndex == true andalso IsGlobalIndexed == yes ->
       mod_mam:process_iq_v0_3(IQDecoded);
     _ ->
       ?DEBUG("not allowed",[]),
-      ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed()))
+      xmpp:make_error(Iq, xmpp:err_not_allowed())
   end.
 
 get_query(SubEl,Lang)->

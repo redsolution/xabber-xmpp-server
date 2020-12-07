@@ -63,6 +63,8 @@ init([]) ->
 	   worker(ejabberd_router_multicast),
 	   worker(ejabberd_local),
 	   worker(ejabberd_sm),
+		 worker(xabber_groups_sm),
+		 worker(xabber_channels_sm),
 	   worker(ejabberd_captcha),
 	   worker(ext_mod),
 	   supervisor(ejabberd_gen_mod_sup, gen_mod),

@@ -188,8 +188,10 @@ unique_received(UniqueReceived,
 %%% Internal functions
 %%%===================================================================
 
+strip_previous_id(#message{} = Pkt) ->
+    xmpp:remove_subtag(Pkt, #previous_id{});
 strip_previous_id(Pkt) ->
-    xmpp:remove_subtag(Pkt, #previous_id{}).
+  Pkt.
 
 -spec disco_sm_features({error, stanza_error()} | {result, [binary()]} | empty,
 		     jid(), jid(), binary(), binary()) ->

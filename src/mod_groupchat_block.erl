@@ -124,8 +124,6 @@ block_iq_handler(D, #iq{to = To, from = From}) ->
   case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
     true when OJ == false andalso OS == false andalso OId == false ->
       [Elements];
-    false ->
-      {stop,not_ok};
     _ ->
       {stop,not_ok}
   end.
@@ -140,7 +138,7 @@ unblock_iq_handler(_Acc, #iq{to = To, from = From, sub_els = Sub}) ->
   case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
     true ->
       unblock_elements(Elements,Server,Chat);
-    false ->
+    _ ->
       {stop,not_ok}
   end.
 

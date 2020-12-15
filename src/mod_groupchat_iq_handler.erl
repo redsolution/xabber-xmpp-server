@@ -284,7 +284,7 @@ make_action(#iq{type = get, lang = Lang, sub_els = [#xmlel{name = <<"query">>,
       Query = mod_groupchat_inspector:get_invited_users(Server,Chat),
       ResIq = xmpp:make_iq_result(Iq,Query),
       ejabberd_router:route(ResIq);
-    no ->
+    _ ->
       ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You do not have permission to see the list of invitations.">>,Lang)))
   end;
 make_action(#iq{to = To, type = get, sub_els = [#xmlel{name = <<"query">>,
@@ -459,9 +459,9 @@ process_groupchat_iq(#iq{lang = Lang, type = get, to = To, sub_els = [#xabbergro
 process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = Restrictions } = Query]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
-  Permission = mod_groupchat_restrictions:is_permitted(<<"administrator">>,User,Chat),
+  Permission = mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat),
   Result = case Permission of
-             yes when Restrictions =/= [] ->
+             true when Restrictions =/= [] ->
                mod_groupchat_default_restrictions:restrictions(Query,IQ);
              _ ->
                xmpp:err_not_allowed()

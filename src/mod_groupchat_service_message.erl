@@ -129,9 +129,6 @@ groupchat_avatar_changed(LServer, Chat, User) ->
   M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M).
 
-groupchat_changed(_LServer, Chat, _User, [{name_changed,false},{desc_changed,false},{status_changed,false},
-  {pinned_changed,false},{properties_changed,false}], _Status) ->
-  ?DEBUG("Nothing is changed in chat ~p~n",[Chat]);
 groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
   ChatJID = jid:from_string(Chat),
   Version = mod_groupchat_users:current_chat_version(LServer,Chat),
@@ -140,59 +137,65 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
   IsStatusChanged =  proplists:get_value(status_changed, ChatProperties),
   IsPinnedChanged = proplists:get_value(pinned_changed, ChatProperties),
   IsOtherChanged = proplists:get_value(properties_changed, ChatProperties),
-  Label = mod_groupchat_chats:get_status_label_name(LServer,Chat,Status),
-  ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
-  UserID = case anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
-             public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
-             anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
-           end,
-  MsgTxt = case IsNameChanged of
-             true when IsOtherChanged =/= true andalso IsDescChanged =/= true
-               andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-               <<UserID/binary, " changed group name">>;
-             true when IsOtherChanged == true andalso IsDescChanged =/= true
-               andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-               <<UserID/binary, " changed group name and updated propeties">>;
-             true when IsOtherChanged =/= true andalso IsDescChanged == true
-               andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-               <<UserID/binary, " changed group name and description">>;
-             true when IsOtherChanged == true andalso IsDescChanged == true
-               andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-               <<UserID/binary, " changed group name, description and updated properties">>;
-             _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged == true
-               andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-               <<UserID/binary, " changed group description">>;
-             _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged =/= true
-               andalso IsStatusChanged =/= true andalso IsPinnedChanged == true ->
-               <<UserID/binary, " pinned a message">>;
-             _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged =/= true
-               andalso IsStatusChanged == true andalso IsPinnedChanged =/= true ->
-               <<UserID/binary, " changed group status to ", Label/binary>>;
-             _ ->
-               <<UserID/binary, " updated group properties">>
-           end,
-  Body = [#text{lang = <<>>,data = MsgTxt}],
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
-  By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
+  case IsNameChanged of
+    false when IsDescChanged == false andalso IsStatusChanged == false
+      andalso IsPinnedChanged == false andalso IsOtherChanged == false ->
+      ok;
+    _ ->
+      %%  Label = mod_groupchat_chats:get_status_label_name(LServer,Chat,Status),
+      ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
+      UserID = case anon(ByUserCard) of
+                 public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
+                   ByUserCard#xabbergroupchat_user_card.nickname;
+                 public ->
+                   jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
+                 anonim ->
+                   ByUserCard#xabbergroupchat_user_card.nickname
+               end,
+      MsgTxt = case IsNameChanged of
+                 true when IsOtherChanged =/= true andalso IsDescChanged =/= true
+                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
+                   <<UserID/binary, " changed group name">>;
+                 true when IsOtherChanged == true andalso IsDescChanged =/= true
+                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
+                   <<UserID/binary, " changed group name and updated propeties">>;
+                 true when IsOtherChanged =/= true andalso IsDescChanged == true
+                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
+                   <<UserID/binary, " changed group name and description">>;
+                 true when IsOtherChanged == true andalso IsDescChanged == true
+                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
+                   <<UserID/binary, " changed group name, description and updated properties">>;
+                 _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged == true
+                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
+                   <<UserID/binary, " changed group description">>;
+                 _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged =/= true
+                   andalso IsStatusChanged =/= true andalso IsPinnedChanged == true ->
+                   <<UserID/binary, " pinned a message">>;
+                 _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged =/= true
+                   andalso IsStatusChanged == true andalso IsPinnedChanged =/= true ->
+                   <<UserID/binary, " changed group status to ", Status/binary>>;
+                 _ ->
+                   <<UserID/binary, " updated group properties">>
+               end,
+      Body = [#text{lang = <<>>,data = MsgTxt}],
+      X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
+      By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
 
-  {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,Status}]} =
-    mod_groupchat_chats:get_information_of_chat(Chat,LServer),
-  Group_X = #xabbergroupchat_x{
-    xmlns = ?NS_GROUPCHAT,
-    members = integer_to_binary(mod_groupchat_chats:count_users(LServer,Chat)),
-    sub_els =
-    [
-      #xabbergroupchat_name{cdata = Name},
-      #xabbergroupchat_privacy{cdata = Anonymous},
-      #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)}
-    ]},
-  SubEls =  [X,By,Group_X],
-  M = form_message(ChatJID,Body,SubEls),
-  send_to_all(Chat,M).
+      {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,Status}]} =
+        mod_groupchat_chats:get_information_of_chat(Chat,LServer),
+      Group_X = #xabbergroupchat_x{
+        xmlns = ?NS_GROUPCHAT,
+        members = integer_to_binary(mod_groupchat_chats:count_users(LServer,Chat)),
+        sub_els =
+        [
+          #xabbergroupchat_name{cdata = Name},
+          #xabbergroupchat_privacy{cdata = Anonymous},
+          #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)}
+        ]},
+      SubEls =  [X,By,Group_X],
+      M = form_message(ChatJID,Body,SubEls),
+      send_to_all(Chat,M)
+  end.
 
 
 user_change_avatar(User, Server, Chat, OtherUser) ->
@@ -566,7 +569,7 @@ send_presences(Server,Chat) ->
   To = jid:from_string(Chat),
   Users = mod_groupchat_users:user_list_to_send(Server,Chat),
   FromChat = jid:replace_resource(To,<<"Group">>),
-  mod_groupchat_messages:send_message(mod_groupchat_presence:form_presence(Chat),Users,FromChat).
+  mod_groupchat_presence:send_presence(mod_groupchat_presence:form_presence(Chat),Users,FromChat).
 
 -spec send_to_all(binary(), binary()) -> ok.
 send_to_all(Chat,Stanza) ->

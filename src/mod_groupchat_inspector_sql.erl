@@ -70,15 +70,13 @@ delete_user_chat(User,Server,Chat) ->
     {updated,1} when IsAnonim == yes->
       Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
       Unavailable = mod_groupchat_presence:form_presence_unavailable(),
-      mod_groupchat_messages:send_message(Unsubscribe,[{User}],From),
-      mod_groupchat_messages:send_message(Unavailable,[{User}],From),
-      mod_groupchat_service_message:send_service_message(user_left,User,Chat);
+      mod_groupchat_presence:send_presence(Unsubscribe,[{User}],From),
+      mod_groupchat_presence:send_presence(Unavailable,[{User}],From);
     {updated,1} when IsAnonim == no ->
       Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
       Unavailable = mod_groupchat_presence:form_presence_unavailable(),
-      mod_groupchat_messages:send_message(Unsubscribe,[{User}],From),
-      mod_groupchat_messages:send_message(Unavailable,[{User}],From),
-      mod_groupchat_service_message:send_service_message(user_left,User,Chat);
+      mod_groupchat_presence:send_presence(Unsubscribe,[{User}],From),
+      mod_groupchat_presence:send_presence(Unavailable,[{User}],From);
     _ ->
       nothing
   end,

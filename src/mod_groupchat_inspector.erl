@@ -115,7 +115,7 @@ update_chat(Server,To,Chat,User,Xa) ->
       ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
       {selected, AllUsers} = mod_groupchat_sql:user_list_of_channel(Server,Chat),
       FromChat = jid:replace_resource(To,<<"Group">>),
-      mod_groupchat_messages:send_message(UpdatePresence,AllUsers,FromChat)
+      mod_groupchat_presence:send_presence(UpdatePresence,AllUsers,FromChat)
   end.
 
 %%%%
@@ -394,8 +394,8 @@ remove_invite(Server,User,Chat) ->
     {updated,1} ->
       Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
       Unavailable = mod_groupchat_presence:form_presence_unavailable(),
-      mod_groupchat_messages:send_message(Unsubscribe,[{User}],From),
-      mod_groupchat_messages:send_message(Unavailable,[{User}],From),
+      mod_groupchat_presence:send_presence(Unsubscribe,[{User}],From),
+      mod_groupchat_presence:send_presence(Unavailable,[{User}],From),
       ok;
     _ ->
       nothing
@@ -418,8 +418,8 @@ case ejabberd_sql:sql_query(
     Unavailable = mod_groupchat_presence:form_presence_unavailable(),
     ejabberd_router:route(Msg),
     mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
-    mod_groupchat_messages:send_message(Unsubscribe,[{User}],FromChat),
-    mod_groupchat_messages:send_message(Unavailable,[{User}],FromChat);
+    mod_groupchat_presence:send_presence(Unsubscribe,[{User}],FromChat),
+    mod_groupchat_presence:send_presence(Unavailable,[{User}],FromChat);
   _ ->
     nothing
 end.

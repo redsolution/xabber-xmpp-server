@@ -280,7 +280,7 @@ do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headlin
           send_message(Message,AllUsers,FromChat),
           mod_groupchat_inspector:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar),
           Presence = mod_groupchat_presence:form_presence_vcard_update(IdAvatar),
-          send_message(Presence,AllUsers,FromChat);
+          mod_groupchat_presence:send_presence(Presence,AllUsers,FromChat);
         {avatar_meta,_AvatarInfo,_Smth} ->
           {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);

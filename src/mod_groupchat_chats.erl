@@ -240,18 +240,25 @@ change_chat(Acc,_User,Chat,Server,_FS) ->
       IsDescChanged = {desc_changed, is_value_changed(Desc,NewDesc)},
       IsStatusChanged = {status_changed, StatusState},
       IsPinnedChanged = {pinned_changed, is_value_changed(ChatMessage,NewMessage)},
+      IsIndexChanged = {global_indexing_changed, is_index_changed(Search,NewIndex)},
       IsOtherChanged = {properties_changed,
         lists:member(true,[
           is_value_changed(Search,NewIndex),
           is_value_changed(Model,NewMembership),
           is_value_changed(DomainList,NewDomains),
           is_value_changed(ContactList,NewContacts)])},
-      ChangeDiff = [IsNameChanged,IsDescChanged,IsStatusChanged,IsPinnedChanged,IsOtherChanged],
+      ChangeDiff = [IsNameChanged,IsDescChanged,IsStatusChanged,IsPinnedChanged, IsIndexChanged, IsOtherChanged],
       update_groupchat(Server,Chat,NewName,NewDesc,NewMessage,NewStatus,NewMembership,NewIndex,NewContacts,NewDomains),
       {stop, {ok,form_chat_information(Chat,Server,result),NewStatus,ChangeDiff}}
   end.
 
 %%
+is_index_changed(<<"global">>,<<"none">>) ->
+  true;
+is_index_changed(<<"global">>,<<"local">>) ->
+  true;
+is_index_changed(_OldValue,_NewValue) ->
+  false.
 
 is_value_changed(OldValue,NewValue) ->
   case OldValue of

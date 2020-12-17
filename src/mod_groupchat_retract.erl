@@ -295,7 +295,11 @@ check_if_less(_Acc,{Server,_User,Chat,Version,Less}) ->
                   <<>> -> 0;
                   _ -> Less
                 end,
-  Count = get_count_events(Server,Chat,Version),
+  VersionInteger = case Version of
+                     undefined -> 0;
+                     _ -> Version
+                   end,
+  Count = get_count_events(Server,Chat,VersionInteger),
   case Count of
     _ when LessInteger =/= 0 andalso Count > LessInteger ->
       {stop,too_much};

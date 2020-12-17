@@ -962,8 +962,9 @@ validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
   validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickname =/= undefined ->
   SetNick = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  IsValid = mod_groupchat_restrictions:validate_users(LServer,Chat,Admin,User),
   case SetNick of
-    true ->
+    true when IsValid == ok ->
       validate_unique(LServer,Chat,User,Nickname,undefined,Lang);
     _ ->
       Message = <<"You have no rights to change a nickname">>,
@@ -971,8 +972,9 @@ validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickn
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/= undefined ->
   SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  IsValid = mod_groupchat_restrictions:validate_users(LServer,Chat,Admin,User),
   case SetBadge of
-    true ->
+    true when IsValid == ok ->
       validate_unique(LServer,Chat,User,undefined,Badge,Lang);
     _ ->
       Message = <<"You have no rights to change a badge">>,
@@ -980,8 +982,9 @@ validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) when Badge =/= undefined andalso Nickname =/= undefined ->
   SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  IsValid = mod_groupchat_restrictions:validate_users(LServer,Chat,Admin,User),
   case SetBadge of
-    true ->
+    true when IsValid == ok ->
       validate_unique(LServer,Chat,User,Nickname,Badge,Lang);
     _ ->
       Message = <<"You have no rights to change a nickname and a badge">>,

@@ -806,13 +806,18 @@ change_message(OldCard,ChatandUsers,Pkt) ->
           Sub2 = xmpp:get_els(Pkt2),
           Reference = xmpp:get_subtag(Xtag, #xmppreference{}),
           UserChoose = mod_groupchat_users:choose_name(NewCard),
+          OldUserChoose = mod_groupchat_users:choose_name(OldCard),
+          Body = Msg#message.body,
+          Text = xmpp:get_text(Body),
           Username = <<UserChoose/binary, ":", "\n">>,
+          NewTxt = list_to_binary(string:replace(Text, binary_to_list(OldUserChoose), binary_to_list(UserChoose))),
+          NewBody = [#text{data = NewTxt, lang = <<>>}],
           Length = binary_length(Username),
           X = Reference#xmppreference{type = <<"mutable">>, sub_els = [NewCard], 'begin' = 0, 'end' = Length},
           NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [X]},
           XEl = xmpp:encode(NewX),
           Sub3 = [XEl|Sub2],
-          {ID,IDInt,El#forwarded{sub_els = [Msg0#message{sub_els = Sub3}]}}
+          {ID,IDInt,El#forwarded{sub_els = [Msg0#message{sub_els = Sub3, body = NewBody}]}}
       end
   end.
 

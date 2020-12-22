@@ -417,20 +417,41 @@ process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergro
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   LServer = To#jid.lserver,
-  Res = mod_groupchat_users:get_user_from_chat(LServer,Chat,User),
-  ejabberd_router:route(xmpp:make_iq_result(IQ,Res));
+  IsInChat = mod_groupchat_users:is_in_chat(LServer,Chat,User),
+  case IsInChat of
+    true ->
+      Res = mod_groupchat_users:get_user_from_chat(LServer,Chat,User),
+      ejabberd_router:route(xmpp:make_iq_result(IQ,Res));
+    _ ->
+      Err = xmpp:make_error(IQ,xmpp:err_not_allowed()),
+      ejabberd_router:route(Err)
+  end;
 process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, id = ID, rsm = undefined, version = undefined, sub_els = []}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   LServer = To#jid.lserver,
-  Res = mod_groupchat_users:get_user_from_chat(LServer,Chat,User,ID),
-  ejabberd_router:route(xmpp:make_iq_result(IQ,Res));
+  IsInChat = mod_groupchat_users:is_in_chat(LServer,Chat,User),
+  case IsInChat of
+    true ->
+      Res = mod_groupchat_users:get_user_from_chat(LServer,Chat,User,ID),
+      ejabberd_router:route(xmpp:make_iq_result(IQ,Res));
+    _ ->
+      Err = xmpp:make_error(IQ,xmpp:err_not_allowed()),
+      ejabberd_router:route(Err)
+  end;
 process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, version = Version, rsm = RSM, sub_els = []}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   LServer = To#jid.lserver,
-  Res = mod_groupchat_users:get_users_from_chat(LServer,Chat,User,RSM,Version),
-  ejabberd_router:route(xmpp:make_iq_result(IQ,Res));
+  IsInChat = mod_groupchat_users:is_in_chat(LServer,Chat,User),
+  case IsInChat of
+    true ->
+      Res = mod_groupchat_users:get_users_from_chat(LServer,Chat,User,RSM,Version),
+      ejabberd_router:route(xmpp:make_iq_result(IQ,Res));
+    _ ->
+      Err = xmpp:make_error(IQ,xmpp:err_not_allowed()),
+      ejabberd_router:route(Err)
+  end;
 process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = [#xabbergroupchat_user_card{id = ID, nickname = Nickname, badge = Badge}]}]} = IQ) ->
   LServer = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),

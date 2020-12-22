@@ -138,6 +138,10 @@ send_presence(Message,Users,From) ->
 
 chat_created(LServer,User,Chat,_Lang) ->
   Presence = form_subscribe_presence(LServer, User, Chat),
+  To = jid:from_string(User),
+  ChatJID = jid:replace_resource(jid:from_string(Chat), <<"Group">>),
+  Presence2 = #presence{type = subscribed, id = randoms:get_string(), to = To, from = ChatJID},
+  ejabberd_router:route(Presence2),
   ejabberd_router:route(Presence).
 
 form_subscribe_presence(LServer, User, Chat) ->

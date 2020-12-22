@@ -278,7 +278,7 @@ message_invite(User,Chat,Admin,Reason) ->
               end,
   Text = <<"Add ",Chat/binary," to the contacts to join a group chat">>,
     #message{type = chat,to = jid:from_string(User), from = jid:from_string(Chat), id = randoms:get_string(),
-      sub_els = [#xabbergroupchat_invite{user = U, reason = Reason},
+      sub_els = [#xabbergroupchat_invite{user = U, reason = Reason, jid = ChatJID},
         #xabbergroupchat_x{sub_els = [#xabbergroupchat_privacy{cdata = Anonymous}]}],
       body = [#text{lang = <<>>,data = Text}], meta = #{}}.
 

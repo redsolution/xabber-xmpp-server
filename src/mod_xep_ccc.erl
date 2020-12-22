@@ -329,7 +329,7 @@ handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, 
   Conversation = jid:to_string(jid:remove_resource(From)),
   case Propose of
     #jingle_propose{} ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Propose]),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Pkt]),
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
       update_metainfo(call, LServer,LUser,Conversation,TS,false),
       store_last_call(Pkt, From, LUser, LServer, TS);

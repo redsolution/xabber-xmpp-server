@@ -660,7 +660,11 @@ do_route(#presence{to = To, type = T} = Packet)
                 ok
             end, online(get_sessions(Mod, LUser, LServer)));
         false ->
-          ok
+					case mod_xabber_entity:get_entity_type(LUser,LServer) of
+						group -> mod_groupchat_presence:process_presence(Packet);
+						channel -> mod_channel_presence:process_presence(Packet);
+						_ -> ok
+					end
       end;
 do_route(#presence{to = #jid{lresource = <<"">>} = To} = Packet) ->
     ?DEBUG("processing presence to bare JID:~n~s", [xmpp:pp(Packet)]),

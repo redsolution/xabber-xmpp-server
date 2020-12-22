@@ -784,6 +784,24 @@ xabber_push_notification(<<"call">>, LUser, LServer, NotificationElement) ->
 		_ ->
 			ok
 	end;
+xabber_push_notification(<<"data">>, LUser, LServer, NotificationElement) ->
+	case lookup_sessions(LUser, LServer) of
+		{ok, [_|_] = Clients} ->
+			lists:foreach(
+				fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
+					HandleResponse = fun(#iq{type = result}) ->
+						ok;
+						(#iq{type = error}) ->
+							spawn(?MODULE, delete_session,
+								[LUser, LServer, TS]);
+						(timeout) ->
+							ok
+													 end,
+					make_notification(LServer, PushLJID, Node, XData, NotificationElement, HandleResponse, Cipher, Key, <<"data">>)
+				end, Clients);
+		_ ->
+			ok
+	end;
 xabber_push_notification(Type, LUser, LServer, NotificationElement) ->
 	case lookup_sessions(LUser, LServer) of
 		{ok, [_|_] = Clients} ->

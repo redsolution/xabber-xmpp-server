@@ -672,7 +672,7 @@ process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els 
       Result = ejabberd_hooks:run_fold(group_status_change, Server, [], [User,Chat,Server,FS]),
       case Result of
         {ok, Form, Status} ->
-          ejabberd_hooks:run(groupchat_changed,Server,[Server,Chat,Status,User]),
+          ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, [], Status]),
           ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS, sub_els = [Form]}));
         {error, Err} ->
           ejabberd_router:route(xmpp:make_error(IQ, Err));

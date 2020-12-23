@@ -1177,18 +1177,31 @@ handle_vcard_photo(Server,Photo) ->
   #vcard_photo{binval = Binval} = Photo,
   Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
   Name = get_name_from_hash_and_type(Photo),
-  File = <<Path/binary, "/" , Name/binary>>,
-  file:write_file(binary_to_list(File), Binval),
-  ok.
+  Len = string:length(Name),
+  case Name of
+    _ when Len > 0 ->
+      File = <<Path/binary, "/" , Name/binary>>,
+      file:write_file(binary_to_list(File), Binval);
+    _ ->
+      ok
+  end.
 
 get_name_from_hash_and_type(undefined) ->
   <<>>;
 get_name_from_hash_and_type(Photo) ->
   #vcard_photo{type = TypeRaw, binval = Binval} = Photo,
-  <<"image/", Type/binary>> = TypeRaw,
-  Hash = get_hash(Binval),
-  Name = <<Hash/binary, ".", Type/binary >>,
-  Name.
+  Len = string:length(TypeRaw),
+  case TypeRaw of
+    undefined ->
+      <<>>;
+    _ when Len > 0 ->
+      <<"image/", Type/binary>> = TypeRaw,
+      Hash = get_hash(Binval),
+      Name = <<Hash/binary, ".", Type/binary >>,
+      Name;
+    _ ->
+      <<>>
+  end.
 
 get_hash(Binval) ->
   H = iolist_to_binary([io_lib:format("~2.16.0B", [X])

@@ -1271,7 +1271,8 @@ send(Msgs, Count, IsComplete,
 						ejabberd_router:route(El)
 					end, Els),
 				IQ2 = xmpp:set_from_to(IQ,To,From),
-				ejabberd_router:route(xmpp:make_iq_result(IQ2, Result));
+				ejabberd_router:route(xmpp:make_iq_result(IQ2, Result)),
+				ignore;
 				true ->
 					ejabberd_router:route(xmpp:make_iq_result(IQ)),
 					lists:foreach(

@@ -441,12 +441,14 @@ process_iq(#iq{from = From,
             _ ->
               IQS = xmpp:set_from_to(IQ,jid:remove_resource(From),PeerJID),
               Proc = gen_mod:get_module_proc(LServer, ?MODULE),
-              gen_server:cast(Proc, {From,IQS})
+              gen_server:cast(Proc, {From,IQS}),
+              ignore
           end
       end;
     <<>> when To#jid.lresource == <<>> andalso To#jid.lserver == LServer ->
       ?DEBUG("Start deleting local messages ~p",[IQ]),
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()));
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request())),
+      ignore;
     _ ->
       ?INFO_MSG("Bad symmetric retract",[]),
       xmpp:make_error(IQ, xmpp:err_bad_request())
@@ -484,7 +486,8 @@ process_iq(#iq{
         _ ->
           IQS = xmpp:set_from_to(IQ,To,RetractUserJID),
           Proc = gen_mod:get_module_proc(LServer, ?MODULE),
-          gen_server:cast(Proc, {From,IQS})
+          gen_server:cast(Proc, {From,IQS}),
+          ignore
       end
   end;
 process_iq(#iq{
@@ -524,7 +527,8 @@ process_iq(#iq{
         _ ->
           IQS = xmpp:set_from_to(IQ,To,PeerJID),
           Proc = gen_mod:get_module_proc(LServer, ?MODULE),
-          gen_server:cast(Proc, {From,IQS})
+          gen_server:cast(Proc, {From,IQS}),
+          ignore
       end
   end;
 process_iq(IQ) ->

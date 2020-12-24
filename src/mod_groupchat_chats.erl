@@ -195,7 +195,7 @@ check_user_rights(_Acc,User,Chat,Server) ->
     true ->
       {stop, {ok,form_chat_information(Chat,Server,form)}};
     _ ->
-      {stop, {ok,form_fixed_chat_information(Chat,Server)}}
+      {stop, {error,xmpp:err_not_allowed(<<"You are not allowed to change group properties">>, <<"en">>)}}
   end.
 
 
@@ -686,25 +686,6 @@ created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)
   #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_GROUPCHAT_CREATE}],
     children = mod_groupchat_inspector:chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)
   }.
-
-
-form_fixed_chat_information(Chat,LServer) ->
-  Fields = get_fixed_chat_fields(Chat,LServer),
-  #xdata{type = form, title = <<"Groupchat change">>, instructions = [<<"Fill out this form to change the group chat">>], fields = Fields}.
-
-get_fixed_chat_fields(Chat,LServer) ->
-  {selected,[{Name,Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,_Status}]} =
-    get_all_information_chat(Chat,LServer),
-  [
-    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
-    #xdata_field{var = <<"name">>, type = 'fixed', values = [Name], label = <<"Name">>},
-    #xdata_field{var = <<"description">>, type = 'fixed', values = [Desc], label = <<"Description">>},
-    #xdata_field{var = <<"privacy">>, type = fixed, values = [Anonymous], label = <<"Privacy">>},
-    #xdata_field{var = <<"index">>, type = fixed, values = [Search], label = <<"Index">>},
-    #xdata_field{var = <<"membership">>, type = fixed, values = [Model], label = <<"Membership">>},
-    #xdata_field{var = <<"contacts">>, type = 'fixed', values = [ContactList], label = <<"Contacts">>},
-    #xdata_field{var = <<"domains">>, type = 'fixed', values = [DomainList], label = <<"Domains">>}
-  ].
 
 form_chat_information(Chat,LServer,Type) ->
   Fields = get_chat_fields(Chat,LServer),

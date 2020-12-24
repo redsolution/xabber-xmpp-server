@@ -692,6 +692,8 @@ process_groupchat_iq(#iq{type = get, from = From, to = To, sub_els = [#xabbergro
   case Result of
     {ok, Form} ->
       ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT, sub_els = [Form]}));
+    {error, Err} ->
+      ejabberd_router:route(xmpp:make_error(IQ, Err));
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()))
   end;

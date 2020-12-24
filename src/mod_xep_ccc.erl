@@ -1951,7 +1951,10 @@ handle_sub_els(headline, [#xabber_retract_user{version = Version, id = UserID, c
     _ ->
       ok
   end;
-handle_sub_els(headline, [#xabber_retract_all{type = Type, version = Version, conversation = ConversationJID} = Retract], _From, To) ->
+handle_sub_els(headline, [
+  #xabber_retract_all{type = Type, version = Version,
+  conversation = ConversationJID} = Retract], _From, To)
+  when ConversationJID =/= undefined andalso Version =/= undefined ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   Conversation = jid:to_string(ConversationJID),

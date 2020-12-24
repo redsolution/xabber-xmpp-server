@@ -494,7 +494,6 @@ pre_process_iq_v0_3(#iq{
 	type = set, sub_els = [#mam_query{}]} = IQ) ->
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
 		group ->
-			?INFO_MSG("Try to send to group ~p~n",[LUser]),
 			mod_groupchat_iq_handler:make_action(IQ);
 		channel -> mod_channels_iq_handler:process_iq(IQ);
 		_ -> process_iq_v0_3(IQ)

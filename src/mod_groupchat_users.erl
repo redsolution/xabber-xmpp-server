@@ -960,6 +960,24 @@ check_user(User) when is_binary(User) ->
 
 validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
   validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
+validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
+  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  case SetNick of
+    true ->
+      validate_unique(LServer,Chat,Admin,undefined,Badge,Lang);
+    _ ->
+      Message = <<"You have no rights to change a badge">>,
+      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
+  end;
+validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
+  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  case SetNick of
+    true ->
+      validate_unique(LServer,Chat,Admin,Nickname,Badge,Lang);
+    _ ->
+      Message = <<"You have no rights to change a badge">>,
+      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
+  end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickname =/= undefined ->
   SetNick = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
   IsValid = mod_groupchat_restrictions:validate_users(LServer,Chat,Admin,User),

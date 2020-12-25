@@ -37,11 +37,8 @@
          form_presence/2, form_presence/1,
          form_presence_unavailable/0,
          form_presence_vcard_update/1,
-         form_subscribe_presence/1,
-         form_subscribed_presence/0,
          form_unsubscribe_presence/0,
          form_unsubscribed_presence/0,
-         form_updated_presence/1,
          process_presence/1,
   send_info_to_index/2, get_global_index/1, send_message_to_index/2,
   chat_created/4, groupchat_changed/5, send_presence/3,
@@ -137,14 +134,12 @@ send_presence(Message,Users,From) ->
   send_presence(Message,RestUsers,From).
 
 chat_created(LServer,User,Chat,_Lang) ->
-  Presence = form_subscribe_presence(LServer, User, Chat),
-  To = jid:from_string(User),
-  ChatJID = jid:replace_resource(jid:from_string(Chat), <<"Group">>),
-  Presence2 = #presence{type = subscribed, id = randoms:get_string(), to = To, from = ChatJID},
+  Presence = form_presence_with_type(LServer, User, Chat, subscribe),
+  Presence2 = form_presence_with_type(LServer, User, Chat, subscribed),
   ejabberd_router:route(Presence2),
   ejabberd_router:route(Presence).
 
-form_subscribe_presence(LServer, User, Chat) ->
+form_presence_with_type(LServer, User, Chat, Type) ->
   ChatJID = jid:from_string(Chat),
   send_info_to_index(LServer,Chat),
   From = jid:replace_resource(ChatJID,<<"Group">>),
@@ -191,7 +186,7 @@ form_subscribe_presence(LServer, User, Chat) ->
                   _ ->
                     {[#text{data = <<"Private chat">>}],undefined}
                 end,
-  #presence{from = From, to = To, type = subscribe, id = randoms:get_string(), sub_els = SubEls, status = HumanStatus, show = Show}.
+  #presence{from = From, to = To, type = Type, id = randoms:get_string(), sub_els = SubEls, status = HumanStatus, show = Show}.
 
 process_presence(#presence{to=To} = Presence) ->
   Server = To#jid.lserver,
@@ -346,8 +341,8 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
     not_ok ->
       ejabberd_router:route(FromChat,From,form_unsubscribed_presence());
     _ ->
-      ejabberd_router:route(FromChat,From,form_subscribed_presence()),
-      ejabberd_router:route(FromChat,From,form_subscribe_presence(Server, User, ChatJid)),
+      ejabberd_router:route(form_presence_with_type(Server, User, ChatJid, subscribed)),
+      ejabberd_router:route(form_presence_with_type(Server, User, ChatJid, subscribe)),
       ejabberd_router:route(FromChat,From,mod_groupchat_vcard:get_pubsub_meta())
   end;
 answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) ->
@@ -357,7 +352,8 @@ answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) -
   Result = ejabberd_hooks:run_fold(groupchat_presence_subscribed_hook, Server, [], [{Server,From,Chat,Lang}]),
   case Result of
     ok ->
-      ejabberd_router:route(FromChat,From,form_subscribed_presence()),
+      User = jid:to_string(jid:remove_resource(From)),
+      ejabberd_router:route(form_presence_with_type(Server, User, Chat, subscribed)),
       ejabberd_router:route(FromChat,From,mod_groupchat_vcard:get_pubsub_meta());
     not_ok ->
       ejabberd_router:route(FromChat,From,form_unsubscribed_presence());
@@ -534,24 +530,6 @@ form_presence_unavailable() ->
                     ]
         }.
 
-
-  form_updated_presence(UpdatedInfo) ->
-  #xmlel{
-    name = <<"presence">>,
-    attrs = [
-      {<<"type">>, <<"available">>},
-      {<<"xmlns">>, <<"jabber:client">>}
-    ],
-    children = [#xmlel{
-      name = <<"x">>,
-      attrs = [
-        {<<"xmlns">>, ?NS_GROUPCHAT}
-      ],
-      children = UpdatedInfo
-    }
-    ]
-  }.
-
 form_presence_unavailable(Chat) ->
   {Groupchat_x, HumanStatus, Show} = info_about_chat(Chat),
   #presence{type = unavailable, id = randoms:get_string(), sub_els = [Groupchat_x], status = HumanStatus, show = Show}.
@@ -661,32 +639,6 @@ form_presence_vcard_update(Hash) ->
                     children = [#xmlel{name = <<"photo">>, children = [{xmlcdata,Hash}]}]
                        }
                 ] 
-        }.
-
-form_subscribe_presence(Nick) ->
-      #xmlel{
-         name = <<"presence">>,
-         attrs = [
-                  {<<"type">>, <<"subscribe">>}
-                 ],
-         children = [#xmlel{
-                        name = <<"nick">>,
-                        attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/nick">>}],
-                        children = [{xmlcdata,Nick}]
-                       },
-                     #xmlel{
-                        name = <<"status">>,
-                        children = []
-                       }
-                    ]
-        }.
-
-form_subscribed_presence() ->
-      #xmlel{
-         name = <<"presence">>,
-         attrs = [
-                  {<<"type">>, <<"subscribed">>}
-                 ]
         }.
 
 form_unsubscribe_presence() ->

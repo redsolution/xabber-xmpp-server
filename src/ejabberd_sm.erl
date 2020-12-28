@@ -641,31 +641,32 @@ do_route(To, Term) ->
 do_route(#presence{to = To, type = T} = Packet)
   when T == subscribe; T == subscribed; T == unsubscribe; T == unsubscribed ->
     ?DEBUG("processing subscription:~n~s", [xmpp:pp(Packet)]),
-    #jid{luser = LUser, lserver = LServer} = To,
-      case is_privacy_allow(Packet) andalso
-        ejabberd_hooks:run_fold(
-          roster_in_subscription,
-          LServer, false, [Packet]) of
-        true ->
-          Mod = get_sm_backend(LServer),
-          lists:foreach(
-            fun(#session{sid = SID, usr = {_, _, R},
-              priority = Prio}) when is_integer(Prio) ->
-              Pid = element(2, SID),
-              Packet1 = Packet#presence{to = jid:replace_resource(To, R)},
-              ?DEBUG("sending to process ~p:~n~s",
-                [Pid, xmpp:pp(Packet1)]),
-              ejabberd_c2s:route(Pid, {route, Packet1});
-              (_) ->
-                ok
-            end, online(get_sessions(Mod, LUser, LServer)));
-        false ->
-					case mod_xabber_entity:get_entity_type(LUser,LServer) of
-						group -> mod_groupchat_presence:process_presence(Packet);
-						channel -> mod_channel_presence:process_presence(Packet);
-						_ -> ok
-					end
-      end;
+	#jid{luser = LUser, lserver = LServer} = To,
+	case mod_xabber_entity:get_entity_type(LUser,LServer) of
+		group -> mod_groupchat_presence:process_presence(Packet);
+		channel -> mod_channel_presence:process_presence(Packet);
+		_ ->
+			case is_privacy_allow(Packet) andalso
+				ejabberd_hooks:run_fold(
+					roster_in_subscription,
+					LServer, false, [Packet]) of
+				true ->
+					Mod = get_sm_backend(LServer),
+					lists:foreach(
+						fun(#session{sid = SID, usr = {_, _, R},
+							priority = Prio}) when is_integer(Prio) ->
+							Pid = element(2, SID),
+							Packet1 = Packet#presence{to = jid:replace_resource(To, R)},
+							?DEBUG("sending to process ~p:~n~s",
+								[Pid, xmpp:pp(Packet1)]),
+							ejabberd_c2s:route(Pid, {route, Packet1});
+							(_) ->
+								ok
+						end, online(get_sessions(Mod, LUser, LServer)));
+				false ->
+					ok
+			end
+	end;
 do_route(#presence{to = #jid{lresource = <<"">>} = To} = Packet) ->
     ?DEBUG("processing presence to bare JID:~n~s", [xmpp:pp(Packet)]),
     {LUser, LServer, _} = jid:tolower(To),

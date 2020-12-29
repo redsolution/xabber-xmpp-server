@@ -393,13 +393,17 @@ Chat = jid:to_string(jid:remove_resource(To)),
   Result = ejabberd_hooks:run_fold(retract_query, Server, [], [{Server,From,Chat,Version,Less}]),
     case Result of
       ok ->
-        ejabberd_router:route(xmpp:make_iq_result(IQ));
+        ejabberd_router:route(xmpp:make_iq_result(IQ)),
+        ignore;
       too_much ->
         CurrentVersion = mod_groupchat_retract:get_version(Server,Chat),
         Invalidate = #xabber_retract_invalidate{version = binary_to_integer(CurrentVersion)},
-        ejabberd_router:route(#message{from = FromChat, to = From, id = randoms:get_string(), type = headline, sub_els = [Invalidate]});
+        ejabberd_router:route(#message{from = FromChat, to = From, id = randoms:get_string(), type = headline, sub_els = [Invalidate]}),
+        ejabberd_router:route(xmpp:make_iq_result(IQ)),
+        ignore;
       _ ->
-        ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
+        ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed())),
+        ignore
     end;
 process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set, sub_els = [#xabbergroup_kick{} = Kick]} = IQ) ->
   LServer = To#jid.lserver,

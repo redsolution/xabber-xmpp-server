@@ -45,7 +45,7 @@
   user_rights_changed/6, form_message/3
   ]).
 -export([groupchat_changed/5, groupchat_avatar_changed/3]).
--export([group_status_changed/4]).
+
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 start(Host, _Opts) ->
@@ -78,36 +78,6 @@ depends(_Host, _Opts) ->  [].
 
 mod_options(_Opts) -> [].
 
-group_status_changed(LServer, Chat, User, HumanStatus) ->
-  ChatJID = jid:from_string(Chat),
-  Version = mod_groupchat_users:current_chat_version(LServer,Chat),
-  ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
-  UserID = case anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
-             public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
-             anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
-           end,
-  MsgTxt = <<UserID/binary, " changed group status to ", HumanStatus/binary>>,
-  Body = [#text{lang = <<>>,data = MsgTxt}],
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
-  By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
-  {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,_Status}]} =
-    mod_groupchat_chats:get_information_of_chat(Chat,LServer),
-  Group_X = #xabbergroupchat_x{
-    xmlns = ?NS_GROUPCHAT,
-    members = integer_to_binary(mod_groupchat_chats:count_users(LServer,Chat)),
-    sub_els =
-    [
-      #xabbergroupchat_name{cdata = Name},
-      #xabbergroupchat_privacy{cdata = Anonymous},
-      #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)}
-    ]},
-  SubEls =  [X,By,Group_X],
-  M = form_message(ChatJID,Body,SubEls),
-  send_to_all(Chat,M).
 
 groupchat_avatar_changed(LServer, Chat, User) ->
   ChatJID = jid:from_string(Chat),
@@ -173,7 +143,8 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
                    <<UserID/binary, " pinned a message">>;
                  _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged =/= true
                    andalso IsStatusChanged == true andalso IsPinnedChanged =/= true ->
-                   <<UserID/binary, " changed group status to ", Status/binary>>;
+                   HumanStatus = mod_groupchat_chats:define_human_status(LServer, Chat, Status),
+                   <<UserID/binary, " changed group status to ", HumanStatus/binary>>;
                  _ ->
                    <<UserID/binary, " updated group properties">>
                end,

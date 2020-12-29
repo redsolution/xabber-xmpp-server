@@ -44,7 +44,7 @@
   get_all_information_chat/2,
   status_options/2,
   get_name_desc/2,
-  get_status_label_name/3, is_value_changed/2
+  get_status_label_name/3, is_value_changed/2, define_human_status/3
   ]).
 
 -export([parse_status_query/2, filter_fixed_fields/1, define_human_status_and_show/3, update_pinned/3]).
@@ -1004,7 +1004,7 @@ fill_fields(LServer, Chat, Status, Type) ->
 get_status_description(LServer, Chat) ->
   Statuses = statuses_and_values(LServer, Chat),
   lists:map(fun(StatusAndValue) ->
-    {Status, Value, Desc} = StatusAndValue,
+    {Status, _HumanStatus, Value, Desc} = StatusAndValue,
     #xdata_field{
       var = Status,
       type = 'fixed',
@@ -1015,21 +1015,21 @@ get_status_description(LServer, Chat) ->
 fill_status_options(LServer, Chat) ->
   Statuses = statuses_and_values(LServer, Chat),
   lists:map(fun(StatusAndValue) ->
-    {Status, _Value, _Desc} = StatusAndValue,
+    {Status, HumanLabel, _Value, _Desc} = StatusAndValue,
     #xdata_option{
-      label = Status,
+      label = HumanLabel,
       value = [Status]} end, Statuses
   ).
 
 statuses_and_values(LServer, Chat) ->
   Predefined =
     [
-      {<<"fiesta">>,<<"chat">>, <<"Everything is allowed, no restrictions. Stickers, pictures, voice messages are allowed.">>},
-      {<<"discussion">>,<<"active">>, <<"Regular chat. There is no limit on the number of messages. Limited voice messages">>},
-      {<<"regulated">>,<<"away">>, <<"Regulated chat. Only text messages and images. Limit on the number of messages per minute.">>},
-      {<<"limited">>, <<"xa">>, <<"Limited discussion. Text messages only. Limit on the number of messages per minute.">>},
-      {<<"restricted">>,<<"dnd">>, <<"Chat is allowed only for administrators">>},
-      {<<"inactive">>, <<"inactive">>, <<"Chat is off">>}
+      {<<"fiesta">>, <<"Fiesta">>,<<"chat">>, <<"Everything is allowed, no restrictions. Stickers, pictures, voice messages are allowed.">>},
+      {<<"discussion">>, <<"Discussion">>,<<"active">>, <<"Regular chat. There is no limit on the number of messages. Limited voice messages">>},
+      {<<"regulated">>, <<"Regulated">>,<<"away">>, <<"Regulated chat. Only text messages and images. Limit on the number of messages per minute.">>},
+      {<<"limited">>, <<"Limited">>, <<"xa">>, <<"Limited discussion. Text messages only. Limit on the number of messages per minute.">>},
+      {<<"restricted">>, <<"Restricted">>, <<"dnd">>, <<"Chat is allowed only for administrators">>},
+      {<<"inactive">>, <<"Inactive">>, <<"inactive">>, <<"Chat is off">>}
     ],
   Result = ejabberd_hooks:run_fold(chat_status_description, LServer, Predefined, [Chat]),
   Result.
@@ -1052,31 +1052,30 @@ check_user_rights_to_change_status(_Acc,User,Chat,_Server,_FS) ->
       {stop, {error, xmpp:err_not_allowed()}}
   end.
 
-check_status(_Acc, User,Chat,Server,FS) ->
+check_status(_Acc, _User,Chat,Server,FS) ->
   NewStatus = proplists:get_value(status,FS),
   case NewStatus of
     undefined ->
       {stop, {error, xmpp:err_bad_request(<<"Status undefined - please choose status from available values">>, <<"en">>)}};
     _ ->
-      check_status_value(Server, Chat, User, NewStatus)
+      check_status_value(Server, Chat, NewStatus)
   end.
 
-check_status_value(Server, Chat, User, Status) ->
+check_status_value(Server, Chat, Status) ->
   Statuses = statuses_and_values(Server,Chat),
   Search = lists:keyfind(Status,1,Statuses),
   case Search of
-    {Status,_StatusValue,_Desc} ->
-      update_status(Server,Status,Chat, User, Status);
+    {Status, _HumanStatus,_StatusValue,_Desc} ->
+      update_status(Server, Chat, Status);
     _ ->
       {stop, {error, xmpp:err_bad_request(<<"Value ", Status/binary, " is not allowed by server policy. Please, choose status from available values">>, <<"en">>)}}
   end.
 
-update_status(Server,HumanStatus,Chat, User, Status) ->
+update_status(Server, Chat, Status) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("update groupchats set status = %(Status)s where jid=%(Chat)s and status != %(Status)s and %(Server)H")) of
     {updated,1} ->
-      mod_groupchat_service_message:group_status_changed(Server, Chat, User, HumanStatus),
       Form = make_form(Server, Chat, Status, 'text-single'),
       {stop, {ok, Form, Status}};
     {updated,0} ->
@@ -1086,12 +1085,21 @@ update_status(Server,HumanStatus,Chat, User, Status) ->
       {stop, {error,xmpp:err_internal_server_error()}}
   end.
 
+define_human_status(LServer, Chat, Status) ->
+  Statuses = statuses_and_values(LServer, Chat),
+  case lists:keyfind(Status,1,Statuses) of
+    {Status, HumanStatus, _Show,_Desc} ->
+      HumanStatus;
+    _ ->
+      Status
+  end.
+
 define_human_status_and_show(LServer, Chat, Status) ->
   Statuses = statuses_and_values(LServer, Chat),
   Length = string:length(Status),
   case lists:keyfind(Status,1,Statuses) of
-    {Status,Show,_Desc} ->
-      {[#text{data = Status}], define_show(Show)};
+    {Status, HumanStatus, Show,_Desc} ->
+      {[#text{data = HumanStatus}], define_show(Show)};
     _ when Length > 0 ->
       {[#text{data = Status}], undefined};
     _ ->

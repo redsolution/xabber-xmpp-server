@@ -564,7 +564,7 @@ is_user_alone(Server,Chat) ->
   case length(Users) of
     _ when length(Users) > 1 ->
       no;
-    _ when length(Users) == 1 ->
+    _  ->
       yes
   end.
 

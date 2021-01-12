@@ -42,7 +42,8 @@
          process_presence/1,
   send_info_to_index/2, get_global_index/1, send_message_to_index/2,
   chat_created/4, groupchat_changed/5, send_presence/3,
-  change_present_state/2, revoke_invite/2
+  change_present_state/2, revoke_invite/2,
+  delete_session_from_counter_after/3
         ]).
 
 %% records
@@ -94,6 +95,14 @@ handle_cast(#presence{to = To} = Presence, State) ->
   {noreply, State};
 handle_cast(_Request, State) ->
   {noreply, State}.
+
+delete_session_from_counter_after(To, From, Timeout) ->
+  timer:sleep(Timeout),
+  User = [{jid:to_string(From)}],
+  Chat = jid:to_string(jid:remove_resource(To)),
+  FromChat = jid:replace_resource(To,<<"Group">>),
+  change_present_state(To,From),
+  send_presence(form_presence(Chat),User,FromChat).
 
 revoke_invite(Chat,User) ->
   ChatJID = jid:from_string(Chat),

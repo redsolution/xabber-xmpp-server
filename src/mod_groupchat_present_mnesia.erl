@@ -81,8 +81,24 @@ get_chat_sessions() ->
 set_session(Resource, User, ChatJid) ->
   case select_session(Resource,User,ChatJid) of
     [] ->
+      From = jid:replace_resource(jid:from_string(User),Resource),
+      To = jid:from_string(ChatJid),
+      PID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, 30000]),
       Session = #chat_session{
-        id = randoms:get_string(),
+        id = PID,
+        resource =  Resource,
+        user = User,
+        chat = ChatJid
+      },
+      mnesia:dirty_write(Session);
+    [#chat_session{id = PID} = SS] ->
+      exit(PID, kill),
+      delete_session(SS),
+      From = jid:replace_resource(jid:from_string(User),Resource),
+      To = jid:from_string(ChatJid),
+      NEWPID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, 30000]),
+      Session = #chat_session{
+        id = NEWPID,
         resource =  Resource,
         user = User,
         chat = ChatJid

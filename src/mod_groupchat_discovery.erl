@@ -30,8 +30,8 @@
 %% API
 -export([start/2, stop/1, reload/3, process_disco_info/1, process_disco_items/1]).
 -export([disco_local_items/5, get_local_items/5, get_local_identity/5, get_local_features/5,
-  depends/2, mod_options/1]).
-
+  depends/2, mod_options/1, mod_opt_type/1]).
+-export([get_xabber_group_servers/1]).
 -include("ejabberd.hrl").
 -include("logger.hrl").
 -include("translate.hrl").
@@ -66,7 +66,20 @@ reload(_Host, _NewOpts, _OldOpts) ->
 depends(_Host, _Opts) ->
   [{mod_adhoc, hard}, {mod_last, soft}].
 
-mod_options(_) -> [].
+mod_opt_type(xabber_group_servers) ->
+  fun (L) -> lists:map(fun iolist_to_binary/1, L) end.
+
+mod_options(Host) -> [
+  {xabber_group_servers, [Host]}
+].
+
+get_xabber_group_servers(LServer) ->
+  Servers = gen_mod:get_module_opt(LServer, ?MODULE,
+    xabber_group_servers),
+  lists:map(fun(JID) ->
+  #disco_item{jid = jid:make(JID),
+    node = ?NS_GROUPCHAT,
+    name = <<"Group Service">>} end, Servers).
 
 get_local_items(Acc, _From, #jid{lserver = LServer} = _To,
     <<"">>, _Lang) ->
@@ -77,10 +90,8 @@ get_local_items(Acc, _From, #jid{lserver = LServer} = _To,
                 {result, Its} -> Its;
                 empty -> []
               end,
-      D = #disco_item{jid = jid:make(LServer),
-        node = ?NS_GROUPCHAT,
-        name = <<"Groupchat Service">>},
-      {result,Items ++ [D]}
+      D = get_xabber_group_servers(LServer),
+      {result,Items ++ D}
       end;
 get_local_items(Acc, _From, _To, _Node, _Lang) ->
   Acc.
@@ -98,7 +109,7 @@ get_local_features(Acc, _From, _To, _Node, _Lang) ->
 get_local_identity(_Acc, _From, _To, ?NS_GROUPCHAT, _Lang) ->
   [#identity{category = <<"conference">>,
     type = <<"server">>,
-    name = <<"Groupchat Service">>}];
+    name = <<"Group Service">>}];
 get_local_identity(Acc, _From, _To, _Node, _Lang) ->
   Acc.
 

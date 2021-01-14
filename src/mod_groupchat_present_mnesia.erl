@@ -77,7 +77,7 @@ start_link() ->
 get_chat_sessions() ->
   select_sessions('_','_').
 
--spec set_session(binary(),binary(),binary()) -> ok.
+-spec set_session(binary(),binary(),binary()) -> ok | ignore.
 set_session(Resource, User, ChatJid) ->
   case select_session(Resource,User,ChatJid) of
     [] ->
@@ -103,9 +103,10 @@ set_session(Resource, User, ChatJid) ->
         user = User,
         chat = ChatJid
       },
-      mnesia:dirty_write(Session);
+      mnesia:dirty_write(Session),
+      ignore;
     _ ->
-      ok
+      ignore
   end.
 
 delete_session(Resource,Username,Chat) ->

@@ -303,8 +303,17 @@ answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
           ejabberd_router:route(FromChat,From,form_presence(ChatJid,User));
         _  when Present =/= false andalso NotPresent == false andalso Status == exist ->
           mod_groupchat_sql:update_last_seen(Server,User,ChatJid),
-          mod_groupchat_present_mnesia:set_session(Resource, User, ChatJid),
-          send_notification(From, To, PresentNum);
+          Result = mod_groupchat_present_mnesia:set_session(Resource, User, ChatJid),
+          Sessions = mod_groupchat_present_mnesia:select_sessions(User, ChatJid),
+          LS = length(Sessions),
+          case LS of
+            _ when LS > 1 ->
+              ignore;
+            _ when Result =/= ok ->
+              ignore;
+            _ ->
+              send_notification(From, To, PresentNum)
+          end;
         _  when Present == false andalso NotPresent =/= false andalso Status == exist->
           change_present_state(To,From);
         _ ->

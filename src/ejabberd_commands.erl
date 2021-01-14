@@ -485,9 +485,9 @@ execute_command2(Name, Arguments, CallerInfo, Version) ->
     case ejabberd_access_permissions:can_access(Name, CallerInfo) of
       allow when Special =/= true ->
       do_execute_command(Command, Arguments);
-      allow when Special == true ->
-        case mod_xabber_api:check_user(CallerInfo,Arguments) of
-          ok -> do_execute_command(Command, Arguments);
+      _ when Special == true ->
+        case mod_xabber_api:can_perform(CallerInfo,Arguments,Name) of
+          true -> do_execute_command(Command, Arguments);
           _ -> throw({error, access_rules_unauthorized})
         end;
       _ ->

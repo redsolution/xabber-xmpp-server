@@ -41,7 +41,7 @@
   % Accounts
   xabber_registered_chats/3, xabber_register_chat/9,
   xabber_registered_chats_count/1, xabber_registered_users_count/1,
-  set_password/3, check_user/2, xabber_revoke_user_token/2,
+  set_password/3, can_perform/3, xabber_revoke_user_token/2,
   % Vcard
   set_vcard/4,set_vcard/5,set_nickname/3,get_vcard_multi/4,get_vcard/3,get_vcard/4, oauth_issue_token/5,
 
@@ -52,7 +52,7 @@
   % Other API
   xabber_get_table_size/1,
   xabber_get_db_size/1,
-  xabber_sent_images_count/1
+  xabber_sent_images_count/1, xabber_add_acl/4
 ]).
 
 
@@ -376,7 +376,19 @@ get_commands_spec() ->
         result_desc = "List of tables and their size",
         result_example = [<<"users">>, <<"124 MB">>],
         args = [{host, binary}],
-        result = {tables, {list, {table, {tuple, [{name, string}, {size, string}]}}}}}
+        result = {tables, {list, {table, {tuple, [{name, string}, {size, string}]}}}}},
+      #ejabberd_commands{name = xabber_add_acl, tags = [xabber],
+        desc = "Grant a permission to perform actions to user",
+        longdesc = "Grant a permission to perform actions to user",
+        module = ?MODULE, function = xabber_add_acl,
+        args_desc = ["User", "Host", "Set admin", "Command"],
+        args_example = [<<"juliet">>, <<"capulet.lit">>, <<"true">>, <<"registered_users">>],
+        args = [{user, binary}, {host, binary}, {set_admin, binary}, {command, binary}],
+        result = {res, rescode},
+        result_example = 0,
+        result_desc = "Returns integer code:\n"
+        " - 0: operation succeeded\n"
+        " - 1: error: sql query error"}
     ].
 
 xabber_registered_vhosts() ->
@@ -594,7 +606,43 @@ validate(Anon,Searchable,Model) ->
   end.
 
 xabber_commands() ->
+  [xabber_oauth_issue_token,
+    xabber_revoke_token,
+    registered_vhosts,
+    xabber_registered_users,
+    xabber_registered_users_count,
+    xabber_registered_chats,
+    xabber_registered_chats_count,
+    register,
+    unregister,
+    set_vcard,
+    set_vcard2,
+    get_vcard,
+    get_vcard2,
+    change_password,
+    check_password,
+    srg_get_info,
+    srg_create,
+    srg_delete,
+    srg_user_add,
+    srg_user_del,
+    stats,
+    xabberuser_change_password,
+    xabberuser_set_vcard,
+    xabberuser_set_vcard2,
+    xabberuser_set_vcard2_multi,
+    xabberuser_set_nickname,
+    xabberuser_get_vcard,
+    xabberuser_get_vcard2,
+    xabberuser_get_vcard2_multi,
+    xabber_num_online_users].
+
+common_comands() ->
   [xabberuser_change_password,
+    set_vcard,
+    set_vcard2,
+    get_vcard,
+    get_vcard2,
     xabberuser_set_vcard,
     xabberuser_set_vcard2,
     xabberuser_set_vcard2_multi,
@@ -603,19 +651,143 @@ xabber_commands() ->
     xabberuser_get_vcard2,
     xabberuser_get_vcard2_multi].
 
-check_user(#{caller_module := mod_http_api} = Auth,Args) ->
-#{usr := USR} = Auth,
+can_perform(#{caller_module := mod_http_api} = Auth, Args, Command) ->
+  IsCommon = lists:member(Command, common_comands()),
+  #{usr := USR} = Auth,
   {U,S,_R} = USR,
-  [User|Rest] = Args,
-  [Server|_R2] = Rest,
-  case User of
-    U  when S == Server ->
-      ok;
+  case IsCommon of
+    true ->
+      [LUser|Rest] = Args,
+      [LServer|_R2] = Rest,
+      case LUser of
+        U  when S == LServer ->
+          true;
+        _ ->
+          false
+      end;
+    _ ->
+      check_user_permission(U, S, Command)
+  end;
+can_perform(_Auth,_Args,_Command) ->
+  true.
+
+check_user_permission(LUser, LServer, Command) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(is_admin)b,@(commands)s from user_acl
+    where username=%(LUser)s and %(LServer)H")) of
+    {selected,[{IsAdmin,Commands}]} ->
+      check_permissions(Command, IsAdmin, Commands);
     _ ->
       false
+  end.
+
+check_permissions(_Command, true, _Commands) ->
+  true;
+check_permissions(Command, _IsAdmin, Commands) ->
+  CommandList = parse_command_string(Commands),
+  lists:member(Command, CommandList).
+
+parse_command_string(Commands) ->
+  Splited = binary:split(Commands,<<",">>,[global]),
+  Empty = [X||X <- Splited, X == <<>>],
+  NotEmpty = Splited -- Empty,
+  NotEmpty.
+
+form_command_string(CommandList) ->
+  SortedList = lists:usort(CommandList),
+  list_to_binary(lists:map(fun(N)-> [N|[<<",">>]] end, SortedList)).
+
+xabber_add_acl(LUser, LServer, SetAdmin, Command) ->
+  case ejabberd_auth:user_exists(LUser, LServer) of
+    true ->
+      xabber_add_acl_checked(LUser, LServer, SetAdmin, Command);
+    false ->
+      1
+  end.
+
+xabber_add_acl_checked(LUser, LServer, <<"">>, _Command) ->
+  delete_acl(LUser, LServer);
+xabber_add_acl_checked(LUser, LServer, <<"false">>, <<"">>) ->
+  delete_acl(LUser, LServer);
+xabber_add_acl_checked(LUser, LServer, <<"true">>, _Command) ->
+  set_admin(LUser, LServer);
+xabber_add_acl_checked(LUser, LServer, SetAdmin, Commands) when SetAdmin == <<"false">> ->
+  CommandList = parse_command_string(Commands),
+  CheckedCommands = lists:map(fun(Command) ->
+    lists:member(binary_to_atom(Command, latin1), xabber_commands())
+                              end, CommandList),
+  HasWrongCommand = lists:member(false, CheckedCommands),
+  case HasWrongCommand of
+    false ->
+      add_acl_for_user(LUser, LServer, CommandList);
+    _ ->
+      1
   end;
-check_user(_Auth,_Args) ->
-  ok.
+xabber_add_acl_checked(_LUser, _LServer, _SetAdmin, _Command) ->
+  1.
+
+add_acl_for_user(LUser, LServer, CommandsToAdd) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(commands)s from user_acl
+    where username=%(LUser)s and %(LServer)H")) of
+    {selected,[{Commands}]} ->
+      CommandList = parse_command_string(Commands),
+      NewList = CommandList ++ CommandsToAdd,
+      NewCommandList = lists:usort(NewList),
+      case NewCommandList of
+        CommandList ->
+          ok;
+        _ ->
+          update_commands(LUser, LServer, NewCommandList)
+      end;
+    _ ->
+      add_commands(LUser, LServer, CommandsToAdd)
+  end.
+
+delete_acl(LUser, LServer) ->
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("delete from user_acl where username=%(LUser)s and %(LServer)H")).
+
+set_admin(LUser, LServer) ->
+  State = true,
+  case ?SQL_UPSERT(LServer, "user_acl",
+    [ "!username=%(LUser)s",
+      "!server_host=%(LServer)s",
+      "is_admin=%(State)b"]) of
+    ok ->
+      ok;
+    _Err ->
+      {error, db_failure}
+  end.
+
+update_commands(LUser, LServer, CommandList) ->
+  Commands = form_command_string(CommandList),
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update user_acl set commands = %(Commands)s where username=%(LUser)s and %(LServer)H")) of
+    {updated, N} when N > 0 ->
+      ok;
+    _ ->
+      error
+  end.
+
+add_commands(LUser, LServer, CommandList) ->
+  Commands = form_command_string(CommandList),
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL_INSERT(
+      "user_acl",
+      ["username=%(LUser)s",
+        "server_host=%(LServer)s",
+        "commands=%(Commands)s"])) of
+    {updated, N} when N > 0 ->
+      ok;
+    _ ->
+      error
+  end.
 
 xabber_test_api() ->
   Doc = {[{foo, [<<"bing">>, 2.3, true]}]},
@@ -625,7 +797,6 @@ xabber_test_api() ->
 convert_vcard([]) ->
   [{<<>>,<<>>,<<>>,<<>>,<<>>}];
 convert_vcard([Vcard_X|_Rest]) ->
-%%  ?INFO_MSG("Converted ~p",[Vcard]),
   Vcard = xmpp:decode(Vcard_X),
   [{set_default(Vcard#vcard_temp.nickname),set_default(Vcard#vcard_temp.nickname),set_default(Vcard#vcard_temp.nickname),set_default(Vcard#vcard_temp.photo),set_default(Vcard#vcard_temp.tel)}].
 

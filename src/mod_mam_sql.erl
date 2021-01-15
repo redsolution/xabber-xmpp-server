@@ -265,7 +265,7 @@ make_archive_el([TS, XML, PeerBin, Kind, Nick, PreviousId],
                          MsgType, JidRequestor, JidArchive) of
 	{ok, ArchiveElement} ->
             #forwarded{sub_els = [Message]} = ArchiveElement,
-            Previous = mod_previous:create_previous_id(PreviousId),
+            Previous = mod_previous:create_previous_id(PreviousId, jid:remove_resource(JidArchive)),
             NewEls = [Previous | xmpp:get_els(Message)],
             NewMessage = xmpp:set_els(Message, NewEls),
             NewArchiveElement = ArchiveElement#forwarded{sub_els = [NewMessage]},

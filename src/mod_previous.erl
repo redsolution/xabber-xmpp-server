@@ -34,7 +34,7 @@
 %% API
 -export([
   start/2, stop/1, depends/2, mod_options/1,
-  create_previous_id/1
+  create_previous_id/2
 ]).
 
 %% Hooks
@@ -94,25 +94,37 @@ depends(_Host, _Opts) ->
 
 mod_options(_) -> [].
 
--spec create_previous_id(null | integer() | binary())
+-spec create_previous_id(null | integer() | binary(), jid())
       -> previous_id().
-create_previous_id(null) ->
-    #previous_id{};
-create_previous_id(PreviousId) when is_integer(PreviousId) ->
-    create_previous_id(integer_to_binary(PreviousId));
-create_previous_id(PreviousId) ->
-    #previous_id{id = PreviousId}.
+create_previous_id(null, JID) ->
+    #previous_id{by = JID};
+create_previous_id(PreviousId, JID) when is_integer(PreviousId) ->
+    create_previous_id(integer_to_binary(PreviousId), JID);
+create_previous_id(PreviousId, JID) ->
+    #previous_id{id = PreviousId, by = JID}.
 
 -spec user_send_packet({stanza(), c2s_state()})
       -> {stanza(), c2s_state()}.
 user_send_packet({Pkt, C2SState}) ->
-    {strip_previous_id(Pkt), C2SState};
+  ShouldStrip = maps:get(should_strip, C2SState, true),
+  case ShouldStrip of
+    false ->
+      {Pkt, C2SState};
+    _ ->
+      {strip_previous_id(Pkt), C2SState}
+  end;
 user_send_packet(Acc) ->
     Acc.
 
 -spec filter_packet(stanza()) -> stanza().
 filter_packet(Pkt) ->
-    strip_previous_id(Pkt).
+  X = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+  case X of
+    false ->
+      strip_previous_id(Pkt);
+    _ ->
+      Pkt
+  end.
 
 -spec get_archive_columns_and_from({binary(), binary()}) ->
     {binary(), binary()}.
@@ -171,8 +183,8 @@ save_previous_id({ok, OriginPkt}, LServer, StanzaId, PreviousId) ->
 
 -spec receive_message_stored({ok, message()} | any())
         -> {ok, message()} | any().
-receive_message_stored({ok, #message{meta = #{previous_id := PreviousId}} = Pkt}) ->
-    Previous = create_previous_id(PreviousId),
+receive_message_stored({ok, #message{to = To, meta = #{previous_id := PreviousId}} = Pkt}) ->
+    Previous = create_previous_id(PreviousId, jid:remove_resource(To)),
     NewEls = [Previous | xmpp:get_els(Pkt)],
     {ok, xmpp:set_els(Pkt, NewEls)};
 receive_message_stored(Acc) ->
@@ -180,8 +192,8 @@ receive_message_stored(Acc) ->
 
 -spec unique_received(message(), message()) -> message().
 unique_received(UniqueReceived,
-        #message{meta = #{previous_id := PreviousId}} = _OriginPkt) ->
-    Previous = create_previous_id(PreviousId),
+        #message{from = From, meta = #{previous_id := PreviousId}} = _OriginPkt) ->
+    Previous = create_previous_id(PreviousId, jid:remove_resource(From)),
     UniqueReceived#unique_received{previous_id = Previous}.
 
 %%%===================================================================

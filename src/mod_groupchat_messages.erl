@@ -501,7 +501,7 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
       Pkt0 = strip_stanza_id(ArchiveMsg,Server),
       Pkt1 = mod_unique:remove_request(Pkt0,Retry),
       {Pkt2, _State2} = ejabberd_hooks:run_fold(
-        user_send_packet, Server, {Pkt1, #{jid => To}}, []),
+        user_send_packet, Server, {Pkt1, #{jid => To, should_strip => false}}, []),
       ejabberd_hooks:run(groupchat_send_message,Server,[From,To,Pkt2]),
       case Retry of
         _ when OriginID =/= false ->

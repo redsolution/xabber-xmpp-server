@@ -52,7 +52,7 @@
   % Other API
   xabber_get_table_size/1,
   xabber_get_db_size/1,
-  xabber_sent_images_count/1, xabber_add_acl/4
+  xabber_sent_images_count/1, xabber_add_permission/4
 ]).
 
 
@@ -377,10 +377,10 @@ get_commands_spec() ->
         result_example = [<<"users">>, <<"124 MB">>],
         args = [{host, binary}],
         result = {tables, {list, {table, {tuple, [{name, string}, {size, string}]}}}}},
-      #ejabberd_commands{name = xabber_add_acl, tags = [xabber],
+      #ejabberd_commands{name = xabber_add_permission, tags = [xabber],
         desc = "Grant a permission to perform actions to user",
         longdesc = "Grant a permission to perform actions to user",
-        module = ?MODULE, function = xabber_add_acl,
+        module = ?MODULE, function = xabber_add_permission,
         args_desc = ["User", "Host", "Set admin", "Command"],
         args_example = [<<"juliet">>, <<"capulet.lit">>, <<"true">>, <<"registered_users">>],
         args = [{user, binary}, {host, binary}, {set_admin, binary}, {command, binary}],
@@ -674,7 +674,7 @@ can_perform(_Auth,_Args,_Command) ->
 check_user_permission(LUser, LServer, Command) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(is_admin)b,@(commands)s from user_acl
+    ?SQL("select @(is_admin)b,@(commands)s from user_permissions
     where username=%(LUser)s and %(LServer)H")) of
     {selected,[{IsAdmin,Commands}]} ->
       check_permissions(Command, IsAdmin, Commands);
@@ -698,21 +698,21 @@ form_command_string(CommandList) ->
   SortedList = lists:usort(CommandList),
   list_to_binary(lists:map(fun(N)-> [N|[<<",">>]] end, SortedList)).
 
-xabber_add_acl(LUser, LServer, SetAdmin, Command) ->
+xabber_add_permission(LUser, LServer, SetAdmin, Command) ->
   case ejabberd_auth:user_exists(LUser, LServer) of
     true ->
-      xabber_add_acl_checked(LUser, LServer, SetAdmin, Command);
+      xabber_add_permission_checked(LUser, LServer, SetAdmin, Command);
     false ->
       1
   end.
 
-xabber_add_acl_checked(LUser, LServer, <<"">>, _Command) ->
-  delete_acl(LUser, LServer);
-xabber_add_acl_checked(LUser, LServer, <<"false">>, <<"">>) ->
-  delete_acl(LUser, LServer);
-xabber_add_acl_checked(LUser, LServer, <<"true">>, _Command) ->
+xabber_add_permission_checked(LUser, LServer, <<"">>, _Command) ->
+  delete_permission(LUser, LServer);
+xabber_add_permission_checked(LUser, LServer, <<"false">>, <<"">>) ->
+  delete_permission(LUser, LServer);
+xabber_add_permission_checked(LUser, LServer, <<"true">>, _Command) ->
   set_admin(LUser, LServer);
-xabber_add_acl_checked(LUser, LServer, SetAdmin, Commands) when SetAdmin == <<"false">> ->
+xabber_add_permission_checked(LUser, LServer, SetAdmin, Commands) when SetAdmin == <<"false">> ->
   CommandList = parse_command_string(Commands),
   CheckedCommands = lists:map(fun(Command) ->
     lists:member(binary_to_atom(Command, latin1), xabber_commands())
@@ -720,17 +720,17 @@ xabber_add_acl_checked(LUser, LServer, SetAdmin, Commands) when SetAdmin == <<"f
   HasWrongCommand = lists:member(false, CheckedCommands),
   case HasWrongCommand of
     false ->
-      add_acl_for_user(LUser, LServer, CommandList);
+      change_permission_for_user(LUser, LServer, CommandList);
     _ ->
       1
   end;
-xabber_add_acl_checked(_LUser, _LServer, _SetAdmin, _Command) ->
+xabber_add_permission_checked(_LUser, _LServer, _SetAdmin, _Command) ->
   1.
 
-add_acl_for_user(LUser, LServer, CommandsToAdd) ->
+change_permission_for_user(LUser, LServer, CommandsToAdd) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(commands)s from user_acl
+    ?SQL("select @(commands)s from user_permissions
     where username=%(LUser)s and %(LServer)H")) of
     {selected,[{Commands}]} ->
       CommandList = parse_command_string(Commands),
@@ -746,14 +746,14 @@ add_acl_for_user(LUser, LServer, CommandsToAdd) ->
       add_commands(LUser, LServer, CommandsToAdd)
   end.
 
-delete_acl(LUser, LServer) ->
+delete_permission(LUser, LServer) ->
   ejabberd_sql:sql_query(
     LServer,
-    ?SQL("delete from user_acl where username=%(LUser)s and %(LServer)H")).
+    ?SQL("delete from user_permissions where username=%(LUser)s and %(LServer)H")).
 
 set_admin(LUser, LServer) ->
   State = true,
-  case ?SQL_UPSERT(LServer, "user_acl",
+  case ?SQL_UPSERT(LServer, "user_permissions",
     [ "!username=%(LUser)s",
       "!server_host=%(LServer)s",
       "is_admin=%(State)b"]) of
@@ -767,7 +767,7 @@ update_commands(LUser, LServer, CommandList) ->
   Commands = form_command_string(CommandList),
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("update user_acl set commands = %(Commands)s where username=%(LUser)s and %(LServer)H")) of
+    ?SQL("update user_permissions set commands = %(Commands)s where username=%(LUser)s and %(LServer)H")) of
     {updated, N} when N > 0 ->
       ok;
     _ ->
@@ -779,7 +779,7 @@ add_commands(LUser, LServer, CommandList) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL_INSERT(
-      "user_acl",
+      "user_permissions",
       ["username=%(LUser)s",
         "server_host=%(LServer)s",
         "commands=%(Commands)s"])) of

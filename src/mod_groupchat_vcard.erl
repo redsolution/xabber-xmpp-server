@@ -1110,7 +1110,7 @@ get_vcard(LUser,Server) ->
   Members = list_to_binary(MembersC),
   HumanStatus = case ParentChat of
                   <<"0">> ->
-                    Status;
+                    mod_groupchat_chats:define_human_status(Server, Chat, Status);
                   _ ->
                     <<"Private chat">>
                 end,

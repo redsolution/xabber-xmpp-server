@@ -618,7 +618,12 @@ info_about_chat(ChatJid) ->
   ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',ChatJid),
   AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
   UniqueOnline = lists:usort(AllUsersSession),
-  Present = integer_to_binary(length(UniqueOnline)),
+  Present = case Status of
+              <<"inactive">> ->
+                <<"0">>;
+              _ ->
+                integer_to_binary(length(UniqueOnline))
+            end,
   {HumanStatus, Show} =  case ParentChat of
                    <<"0">> ->
                      mod_groupchat_chats:define_human_status_and_show(Server, ChatJid, Status);

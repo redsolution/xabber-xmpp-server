@@ -52,7 +52,7 @@
   % Other API
   xabber_get_table_size/1,
   xabber_get_db_size/1,
-  xabber_sent_images_count/1, xabber_add_permission/4
+  xabber_sent_images_count/1, xabber_add_permission/4, common_comands/0
 ]).
 
 
@@ -377,13 +377,13 @@ get_commands_spec() ->
         result_example = [<<"users">>, <<"124 MB">>],
         args = [{host, binary}],
         result = {tables, {list, {table, {tuple, [{name, string}, {size, string}]}}}}},
-      #ejabberd_commands{name = xabber_add_permission, tags = [xabber],
+      #ejabberd_commands{name = xabber_set_permissions, tags = [xabber],
         desc = "Grant a permission to perform actions to user",
         longdesc = "Grant a permission to perform actions to user",
         module = ?MODULE, function = xabber_add_permission,
-        args_desc = ["User", "Host", "Set admin", "Command"],
-        args_example = [<<"juliet">>, <<"capulet.lit">>, <<"true">>, <<"registered_users">>],
-        args = [{user, binary}, {host, binary}, {set_admin, binary}, {command, binary}],
+        args_desc = ["User", "Host", "Set admin", "Commands"],
+        args_example = [<<"juliet">>, <<"capulet.lit">>, <<"true">>, <<"registered_users, get_vcard">>],
+        args = [{user, binary}, {host, binary}, {set_admin, binary}, {commands, binary}],
         result = {res, rescode},
         result_example = 0,
         result_desc = "Returns integer code:\n"
@@ -734,11 +734,11 @@ change_permission_for_user(LUser, LServer, CommandsToAdd) ->
     where username=%(LUser)s and %(LServer)H")) of
     {selected,[{Commands}]} ->
       CommandList = parse_command_string(Commands),
-      NewList = CommandList ++ CommandsToAdd,
+      NewList = CommandsToAdd,
       NewCommandList = lists:usort(NewList),
       case NewCommandList of
         CommandList ->
-          ok;
+          0;
         _ ->
           update_commands(LUser, LServer, NewCommandList)
       end;
@@ -769,9 +769,9 @@ update_commands(LUser, LServer, CommandList) ->
     LServer,
     ?SQL("update user_permissions set commands = %(Commands)s where username=%(LUser)s and %(LServer)H")) of
     {updated, N} when N > 0 ->
-      ok;
+      0;
     _ ->
-      error
+      1
   end.
 
 add_commands(LUser, LServer, CommandList) ->

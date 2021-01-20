@@ -233,12 +233,14 @@ handle_cast({user_send,#message{id = ID, type = chat, from = #jid{luser =  LUser
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   case Accept of
     #jingle_accept{} ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Accept]),
       delete_last_call(To, LUser, LServer);
     _ ->
       ok
   end,
   case Reject of
     #jingle_reject{} ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Reject]),
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
       delete_last_call(To, LUser, LServer);
     _ ->

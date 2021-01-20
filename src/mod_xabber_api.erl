@@ -607,7 +607,7 @@ validate(Anon,Searchable,Model) ->
 
 xabber_commands() ->
   [xabber_oauth_issue_token,
-    xabber_revoke_token,
+    xabber_revoke_user_token,
     registered_vhosts,
     xabber_registered_users,
     xabber_registered_users_count,
@@ -638,18 +638,31 @@ xabber_commands() ->
     xabber_num_online_users].
 
 common_comands() ->
-  [xabberuser_change_password,
+  [
+    change_password,
+    check_password,
     set_vcard,
     set_vcard2,
     get_vcard,
     get_vcard2,
-    xabberuser_set_vcard,
-    xabberuser_set_vcard2,
-    xabberuser_set_vcard2_multi,
-    xabberuser_set_nickname,
-    xabberuser_get_vcard,
-    xabberuser_get_vcard2,
-    xabberuser_get_vcard2_multi].
+    xabber_oauth_issue_token,
+    xabber_revoke_user_token
+    ].
+
+get_user_and_server(Args, xabber_revoke_user_token) ->
+  [BareJIDString|_Rest] = Args,
+  JID = jid:from_string(list_to_binary(BareJIDString)),
+  #jid{luser = LUser, lserver = LServer} = JID,
+  {LUser, LServer};
+get_user_and_server(Args, xabber_oauth_issue_token) ->
+  [BareJIDString|_Rest] = Args,
+  JID = jid:from_string(list_to_binary(BareJIDString)),
+  #jid{luser = LUser, lserver = LServer} = JID,
+  {LUser, LServer};
+get_user_and_server(Args, _Command) ->
+  [LUser|Rest] = Args,
+  [LServer|_R2] = Rest,
+  {LUser, LServer}.
 
 can_perform(#{caller_module := mod_http_api} = Auth, Args, Command) ->
   IsCommon = lists:member(Command, common_comands()),
@@ -657,8 +670,7 @@ can_perform(#{caller_module := mod_http_api} = Auth, Args, Command) ->
   {U,S,_R} = USR,
   case IsCommon of
     true ->
-      [LUser|Rest] = Args,
-      [LServer|_R2] = Rest,
+      {LUser, LServer} = get_user_and_server(Args, Command),
       case LUser of
         U  when S == LServer ->
           true;
@@ -666,27 +678,34 @@ can_perform(#{caller_module := mod_http_api} = Auth, Args, Command) ->
           false
       end;
     _ ->
-      check_user_permission(U, S, Command)
+      check_user_permission(U, S, Command, Args)
   end;
 can_perform(_Auth,_Args,_Command) ->
   true.
 
-check_user_permission(LUser, LServer, Command) ->
+check_user_permission(LUser, LServer, Command, Args) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(is_admin)b,@(commands)s from user_permissions
     where username=%(LUser)s and %(LServer)H")) of
     {selected,[{IsAdmin,Commands}]} ->
-      check_permissions(Command, IsAdmin, Commands);
+      check_permissions(Command, IsAdmin, Commands, Args, LServer);
     _ ->
       false
   end.
 
-check_permissions(_Command, true, _Commands) ->
+check_permissions(_Command, true, _Commands, _Args, _LServer) ->
   true;
-check_permissions(Command, _IsAdmin, Commands) ->
+check_permissions(Command, _IsAdmin, Commands, Args, Server) ->
+  {_LUser, LServer} = get_user_and_server(Args, Command),
   CommandList = parse_command_string(Commands),
-  lists:member(Command, CommandList).
+  IsPermitted = lists:member(Command, CommandList),
+  case IsPermitted of
+    true when LServer == Server ->
+      true;
+    _ ->
+      false
+  end.
 
 parse_command_string(Commands) ->
   Splited = binary:split(Commands,<<",">>,[global]),

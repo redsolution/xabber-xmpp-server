@@ -30,7 +30,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 %% gen_mod callbacks
--export([stop/1,start/2,depends/2,mod_options/1,
+-export([stop/1,start/2,depends/2,mod_options/1, mod_opt_type/1,
   init/0,start_link/0
 ]).
 %% API
@@ -38,6 +38,7 @@
   get_chat_sessions/0,set_session/3,delete_session/1, select_sessions/2, delete_session/3, delete_all_user_sessions/2
 ]).
 -record(state, {}).
+-include("xmpp.hrl").
 -include("mod_groupchat_present.hrl").
 -include("logger.hrl").
 %%====================================================================
@@ -55,7 +56,12 @@ stop(Host) ->
 depends(_Host, _Opts) ->
   [].
 
-mod_options(_Opts) -> [].
+mod_opt_type(session_lifetime) ->
+  fun(I) when is_integer(I), I > 0 -> I end.
+
+mod_options(_Host) -> [
+  {session_lifetime, 45000}
+].
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -83,7 +89,10 @@ set_session(Resource, User, ChatJid) ->
     [] ->
       From = jid:replace_resource(jid:from_string(User),Resource),
       To = jid:from_string(ChatJid),
-      PID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, 30000]),
+      LServer = To#jid.lserver,
+      Timeout = gen_mod:get_module_opt(LServer, ?MODULE,
+        session_lifetime),
+      PID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, Timeout]),
       Session = #chat_session{
         id = PID,
         resource =  Resource,
@@ -96,7 +105,10 @@ set_session(Resource, User, ChatJid) ->
       delete_session(SS),
       From = jid:replace_resource(jid:from_string(User),Resource),
       To = jid:from_string(ChatJid),
-      NEWPID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, 30000]),
+      LServer = To#jid.lserver,
+      Timeout = gen_mod:get_module_opt(LServer, ?MODULE,
+        session_lifetime),
+      NEWPID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, Timeout]),
       Session = #chat_session{
         id = NEWPID,
         resource =  Resource,

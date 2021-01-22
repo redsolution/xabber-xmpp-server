@@ -63,6 +63,7 @@
 
 % syncronization_query hook
 -export([create_synchronization_metadata/11, check_conversation_type/11, get_invite_information/4]).
+-export([remove_from_roster/3]).
 -type c2s_state() :: ejabberd_c2s:state().
 %% records
 -record(state, {host = <<"">> :: binary()}).
@@ -496,6 +497,8 @@ code_change(_OldVsn, State, _Extra) ->
 %% Hooks handlers.
 %%--------------------------------------------------------------------
 register_hooks(Host) ->
+  ejabberd_hooks:add(remove_from_roster, Host, ?MODULE,
+    remove_from_roster, 10),
   ejabberd_hooks:add(syncronization_query, Host, ?MODULE,
     check_conversation_type, 50),
   ejabberd_hooks:add(syncronization_query, Host, ?MODULE,
@@ -524,6 +527,8 @@ register_hooks(Host) ->
     c2s_stream_features, 50).
 
 unregister_hooks(Host) ->
+  ejabberd_hooks:delete(remove_from_roster, Host, ?MODULE,
+    remove_from_roster, 10),
   ejabberd_hooks:delete(syncronization_query, Host, ?MODULE,
     check_conversation_type, 50),
   ejabberd_hooks:delete(syncronization_query, Host, ?MODULE,
@@ -550,6 +555,18 @@ unregister_hooks(Host) ->
     sm_receive_packet, 55),
   ejabberd_hooks:delete(c2s_post_auth_features, Host, ?MODULE,
     c2s_stream_features, 50).
+
+remove_from_roster(LUser, LServer, LJID) ->
+  {PUSer, PServer, _Resource} = LJID,
+  Conversation = jid:to_string(jid:make(PUSer, PServer)),
+  Type = get_conversation_type(LServer,LUser,Conversation),
+  IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
+  case Type of
+    <<"groupchat">> when IsLocal == false ->
+      delete_conversation(LServer, LUser, Conversation);
+    _ ->
+      ok
+  end.
 
 iq_result_from_remote_server(#iq{
   from = #jid{luser = ChatName, lserver = ChatServer},

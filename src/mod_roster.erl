@@ -466,6 +466,7 @@ process_iq_set(#iq{from = _From, to = To,
 	    push_item(To, OldItem, Item),
 	    case Item#roster.subscription of
 		remove ->
+			ejabberd_hooks:run(remove_from_roster,LServer,[LUser, LServer, LJID]),
 		    send_unsubscribing_presence(To, OldItem);
 		_ ->
 		    ok

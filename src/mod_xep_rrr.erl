@@ -42,7 +42,7 @@
   have_right_to_delete_all/6,
   message_exist/6,
   replace_message/6,
-  delete_message/6,
+  delete_message/6, delete_message/3,
   delete_all_message/6,
   delete_all_incoming_messages/6,
   store_event/6, store_replace_event/6,

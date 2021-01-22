@@ -70,7 +70,8 @@
 -record(invite_msg,
 {
   us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
-  bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_'
+  bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_',
+  id = 0                               :: non_neg_integer() | '_'
 }
 ).
 
@@ -380,7 +381,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
       case ChatJID of
         undefined ->
           store_special_message_id(LServer,LUser,Conversation,TS,OriginID,<<"invite">>),
-          store_invite_information(LUser,LServer,PUser,PServer),
+          store_invite_information(LUser,LServer,PUser,PServer, TS),
           ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
             #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation);
@@ -389,7 +390,7 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
           store_special_message_id(LServer,LUser,Chat,TS,OriginID,<<"invite">>),
           ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
             #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-          store_invite_information(LUser,LServer,ChatJID#jid.luser,ChatJID#jid.lserver),
+          store_invite_information(LUser,LServer,ChatJID#jid.luser,ChatJID#jid.lserver, TS),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat)
       end;
     _ when X =/= false andalso IsLocal == true ->
@@ -2392,14 +2393,14 @@ delete_conversation(LServer,LUser,Conversation,Type) ->
 
 %% invite logic
 
-store_invite_information(LUser,LServer,PUser,PServer) ->
-  NewInvite = #invite_msg{us = {LUser,LServer}, bare_peer = {PUser,PServer,<<>>}},
+store_invite_information(LUser,LServer,PUser,PServer, ID) ->
+  NewInvite = #invite_msg{us = {LUser,LServer}, bare_peer = {PUser,PServer,<<>>}, id = ID},
   mnesia:dirty_write(NewInvite).
 
 get_invite_information(LUser,LServer,PUser,PServer) ->
   FN = fun()->
     mnesia:match_object(invite_msg,
-      {invite_msg, {LUser, LServer}, {PUser, PServer,<<>>}},
+      {invite_msg, {LUser, LServer}, {PUser, PServer,<<>>}, '_'},
       read)
        end,
   {atomic,MsgRec} = mnesia:transaction(FN),
@@ -2425,7 +2426,8 @@ delete_old_invites(LUser,LServer,PUser,PServer) ->
     delete_invite(Invite) end, Invites
   ).
 
-delete_invite(#invite_msg{} = Invite) ->
+delete_invite(#invite_msg{us = {LUser,LServer}, id = ID} = Invite) ->
+  mod_xep_rrr:delete_message(LServer, LUser, ID),
   mnesia:dirty_delete_object(Invite).
 %% request jobs
 

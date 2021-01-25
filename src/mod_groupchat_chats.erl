@@ -519,9 +519,23 @@ get_all_info(LServer,Limit,Page) ->
              _  when Page > 0 ->
                Limit * (Page - 1)
            end,
+  Query = case ejabberd_sql:use_new_schema() of
+            true ->
+              [<<"select localpart,owner,(select count(*)
+              from groupchat_users where chatgroup = t.jid) as count,
+              (select count(*) from groupchats where parent_chat = t.jid
+              and server_host = '">>,LServer,<<"')
+              as private_chats from groupchats t
+              where t.parent_chat = '0' and server_host = '">>,LServer,<<"'
+              order by localpart limit ">>,
+                integer_to_binary(Limit),<<" offset ">>,integer_to_binary(Offset),<<";">>];
+            _ ->
+              [<<"select localpart,owner,(select count(*) from groupchat_users where chatgroup = t.jid) as count, (select count(*) from groupchats where parent_chat = t.jid) as private_chats from groupchats t where t.parent_chat = '0' order by localpart limit ">>,
+                integer_to_binary(Limit),<<" offset ">>,integer_to_binary(Offset),<<";">>]
+          end,
   ChatInfo = case ejabberd_sql:sql_query(
-    LServer,
-    [<<"select localpart,owner,(select count(*) from groupchat_users where chatgroup = t.jid) as count, (select count(*) from groupchats where parent_chat = t.jid) as private_chats from groupchats t where t.parent_chat = '0' order by localpart limit ">>,integer_to_binary(Limit),<<" offset ">>,integer_to_binary(Offset),<<";">>]) of
+    LServer, Query
+    ) of
     {selected,_Tab, Chats} ->
       Chats;
     _ -> []

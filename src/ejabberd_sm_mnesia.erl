@@ -76,13 +76,13 @@ delete_session(#session{sid = SID}) ->
 
 -spec get_sessions() -> [#session{}].
 get_sessions() ->
-    ets:tab2list(session).
+    delete_group_sessions(ets:tab2list(session)).
 
 -spec get_sessions(binary()) -> [#session{}].
 get_sessions(LServer) ->
-    mnesia:dirty_select(session,
+  delete_group_sessions(mnesia:dirty_select(session,
 			[{#session{usr = '$1', _ = '_'},
-			  [{'==', {element, 2, '$1'}, LServer}], ['$_']}]).
+			  [{'==', {element, 2, '$1'}, LServer}], ['$_']}])).
 
 -spec get_sessions(binary(), binary()) -> {ok, [#session{}]}.
 get_sessions(LUser, LServer) ->
@@ -159,3 +159,8 @@ update_tables() ->
 	false ->
 	    ok
     end.
+
+delete_group_sessions([]) -> [];
+delete_group_sessions(Sessions) ->
+  lists:filter(fun(#session{info = Info}) ->
+    not proplists:get_bool(group, Info) end, Sessions).

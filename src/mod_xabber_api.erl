@@ -510,77 +510,10 @@ xabber_register_chat(Server,Creator,Host,Name,LocalJid,Anon,Searchable,Model,Des
   end.
 
 xabber_num_online_users(Host) ->
-  xabber_num_active_users(0, Host).
-
-xabber_num_active_users(Days, Host) when Days == 0 ->
-  xabber_num_active_users(Host, 0, 0);
-xabber_num_active_users(Days, Host) ->
-  case get_last_from_db(Days, Host) of
-    {error, db_failure} ->
-      0;
-    {ok, UserLastList} ->
-      xabber_num_active_users(UserLastList, Host, 0, 0)
-  end.
+  length(lists:usort([U || {U, _H, _R} <- ejabberd_sm:get_vh_session_list(Host)])).
 
 xabber_revoke_user_token(BareJID,Token) ->
   ejabberd_oauth_sql:revoke_user_token(BareJID,Token).
-
-xabber_num_active_users(Host, Offset, UserCount) ->
-%%  UsersList = ejabberd_admin:registered_users(Host),
-  Limit = 500,
-  case ejabberd_auth:get_users(Host, [{limit, Limit}, {offset, Offset}]) of
-    [] ->
-      UserCount;
-    UsersList ->
-      UsersList2 = lists:filtermap(
-        fun(U) ->
-          {User, Host, _Type} = U,
-          case ejabberd_sm:get_user_resources(User, Host) of
-            [] ->
-              false;
-            _ ->
-              {true, 0}
-          end
-        end,UsersList),
-      xabber_num_active_users(Host, Offset+Limit, UserCount+length(UsersList2))
-  end.
-
-xabber_num_active_users(UserLastList, Host, Offset, UserCount) ->
-  Limit = 500,
-  case ejabberd_auth:get_users(Host, [{limit, Limit}, {offset, Offset}]) of
-    [] ->
-      UserCount;
-    UsersList ->
-      UsersList2 = lists:filtermap(
-        fun(U) ->
-          {User, Host} = U,
-          case ejabberd_sm:get_user_resources(User, Host) of
-            [] ->
-              case lists:member({User},UserLastList) of
-                false ->
-                  false;
-                true ->
-                  {true, 0}
-              end;
-            _ ->
-              {true, 0}
-          end
-        end,UsersList),
-      xabber_num_active_users(UserLastList, Host, Offset+Limit, UserCount+length(UsersList2))
-  end.
-
-get_last_from_db(Days, LServer) ->
-  CurrentTime = p1_time_compat:system_time(seconds),
-  Diff = Days * 24 * 60 * 60,
-  TimeStamp = CurrentTime - Diff,
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(username)s from last where seconds >= %(TimeStamp)s and %(LServer)H")) of
-    {selected, LastList} ->
-      {ok, LastList};
-    _Reason ->
-      {error, db_failure}
-  end.
 
 validate(Anon,Searchable,Model) ->
   IsPrivacyOkey = validate_privacy(Anon),

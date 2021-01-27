@@ -70,7 +70,7 @@ handle_call(_Request, _From, State = #xabber_sm_state{}) ->
   {stop, Reason :: term(), NewState :: #xabber_sm_state{}}).
 handle_cast({group_created,Server,Group}, #xabber_sm_state{pid = PID} = State) ->
   SID = {p1_time_compat:unique_timestamp(), PID},
-  ejabberd_sm:open_session(SID, Group, Server, <<"Group">>, 50, []),
+  ejabberd_sm:open_session(SID, Group, Server, <<"Group">>, 50, [{group, true}]),
   {noreply, State};
 handle_cast(_Request, State = #xabber_sm_state{}) ->
   {noreply, State}.
@@ -126,7 +126,7 @@ start_entities(Chats,Server,Pid,Resource) ->
   lists:foreach(fun(C) ->
     {Chat} = C,
     SID = {p1_time_compat:unique_timestamp(), Pid},
-    ejabberd_sm:open_session(SID, Chat, Server, Resource, 50, []) end, Chats).
+    ejabberd_sm:open_session(SID, Chat, Server, Resource, 50, [{group, true}]) end, Chats).
 
 activate(Server, Chat) ->
   gen_server:cast(?MODULE, {group_created,Server,Chat}).

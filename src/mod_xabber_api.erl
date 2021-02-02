@@ -659,6 +659,18 @@ get_user_and_server(Args, xabber_oauth_issue_token) ->
   JID = jid:from_string(list_to_binary(BareJIDString)),
   #jid{luser = LUser, lserver = LServer} = JID,
   {LUser, LServer};
+get_user_and_server(Args, xabber_registered_users) ->
+  [LServer] = Args,
+  {<<>>,LServer};
+get_user_and_server(Args, xabber_registered_users_count) ->
+  [LServer] = Args,
+  {<<>>,LServer};
+get_user_and_server(Args, xabber_registered_chats_count) ->
+  [LServer] = Args,
+  {<<>>,LServer};
+get_user_and_server(Args, xabber_registered_chats) ->
+  [LServer|_Rest] = Args,
+  {<<>>,LServer};
 get_user_and_server(Args, _Command) ->
   [LUser|Rest] = Args,
   [LServer|_R2] = Rest,
@@ -675,7 +687,7 @@ can_perform(#{caller_module := mod_http_api} = Auth, Args, Command) ->
         U  when S == LServer ->
           true;
         _ ->
-          false
+          check_user_permission(U, S, Command, Args)
       end;
     _ ->
       check_user_permission(U, S, Command, Args)

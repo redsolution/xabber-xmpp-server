@@ -711,7 +711,7 @@ check_permissions(_Command, true, _Commands, _Args, _LServer) ->
 check_permissions(Command, _IsAdmin, Commands, Args, Server) ->
   {_LUser, LServer} = get_user_and_server(Args, Command),
   CommandList = parse_command_string(Commands),
-  IsPermitted = lists:member(Command, CommandList),
+  IsPermitted = lists:member(atom_to_binary(Command, latin1), CommandList),
   case IsPermitted of
     true when LServer == Server ->
       true;

@@ -635,7 +635,8 @@ xabber_commands() ->
     xabberuser_get_vcard,
     xabberuser_get_vcard2,
     xabberuser_get_vcard2_multi,
-    xabber_num_online_users].
+    xabber_num_online_users,
+    xabber_set_permissions].
 
 common_comands() ->
   [
@@ -746,7 +747,7 @@ xabber_add_permission_checked(LUser, LServer, <<"true">>, _Command) ->
 xabber_add_permission_checked(LUser, LServer, SetAdmin, Commands) when SetAdmin == <<"false">> ->
   CommandList = parse_command_string(Commands),
   CheckedCommands = lists:map(fun(Command) ->
-    lists:member(binary_to_atom(Command, latin1), xabber_commands())
+    lists:member(binary_to_atom(Command, latin1), lists:delete(xabber_set_permissions,xabber_commands()))
                               end, CommandList),
   HasWrongCommand = lists:member(false, CheckedCommands),
   case HasWrongCommand of

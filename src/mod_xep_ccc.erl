@@ -1102,7 +1102,14 @@ store_last_msg(Pkt, Peer, LUser, LServer, TS, OriginIDRecord) ->
       {error, overflow};
     _ ->
       {PUser, PServer, _} = jid:tolower(Peer),
-      UserID = get_user_id(Pkt),
+      IsService = xmpp:get_subtag(Pkt,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
+      Res = get_user_id(Pkt),
+      UserID = case Res of
+                 false when IsService =/= false ->
+                   jid:to_string(jid:remove_resource(Peer));
+                 _ ->
+                   Res
+               end,
       case UserID of
         false -> ok;
         _ ->
@@ -1116,7 +1123,6 @@ store_last_msg(Pkt, Peer, LUser, LServer, TS, OriginIDRecord) ->
               })
                end,
           delete_last_msg(Peer, LUser, LServer),
-          IsService = xmpp:get_subtag(Pkt,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
           case mnesia:transaction(F1) of
             {atomic, ok} ->
               ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),

@@ -1093,8 +1093,7 @@ update_status(Server, Chat, Status) ->
       Form = make_form(Server, Chat, Status, 'text-single'),
       {stop, {ok, Form, Status}};
     {updated,0} ->
-      Form = make_form(Server, Chat, Status, 'text-single'),
-      {stop, {ok, Form, Status}};
+      {stop, {error,xmpp:err_bad_request(<<"Value ", Status/binary, " is unchanged">>, <<"en">>)}};
     _ ->
       {stop, {error,xmpp:err_internal_server_error()}}
   end.

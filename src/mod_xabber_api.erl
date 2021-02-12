@@ -621,6 +621,7 @@ xabber_commands() ->
     get_vcard2,
     change_password,
     check_password,
+    srg_list
     srg_get_info,
     srg_create,
     srg_delete,

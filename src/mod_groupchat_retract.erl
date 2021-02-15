@@ -33,7 +33,7 @@
 -include("ejabberd_sql_pt.hrl").
 %% API
 -export([get_version/2]).
-
+-export([strip_els/1, filter_els/1, shift_references/2]).
 -export([user_in_chat/2,check_user_permission/2,check_if_message_exist/2,check_if_message_pinned/2,check_if_less/2,send_query/2]).
 -export([check_user/2,delete_message/2,store_event/2,send_notifications/2]).
 -export([check_user_permission_to_delete_messages/2, check_and_unpin_message/2, delete_user_messages/2]).

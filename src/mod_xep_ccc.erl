@@ -1975,10 +1975,11 @@ handle_sub_els(headline, [
   end;
 handle_sub_els(headline, [#xabber_replace{version = undefined, conversation = _ConversationJID} = _Retract], _From, _To) ->
   ok;
-handle_sub_els(headline, [#xabber_replace{type = Type, version = Version, conversation = ConversationJID} = Retract], _From, To) ->
+handle_sub_els(headline, [#xabber_replace{type = Type, version = Version, conversation = ConversationJID} = Replace], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   Conversation = jid:to_string(ConversationJID),
-  update_retract(LServer,LUser,Conversation,Version,Retract,Type),
+  maybe_change_last_msg(LServer, LUser, ConversationJID, Replace),
+  update_retract(LServer,LUser,Conversation,Version,Replace,Type),
   ok;
 %%handle_sub_els(headline, [#xabbergroupchat_replace{version = Version} = Retract], _From, To) ->
 %%  #jid{luser = LUser, lserver = LServer} = To,
@@ -2594,3 +2595,115 @@ get_user_card(LUser, LServer, PUser, PServer) ->
 -spec body_is_encrypted(message()) -> boolean().
 body_is_encrypted(#message{sub_els = SubEls}) ->
   lists:keyfind(<<"encrypted">>, #xmlel.name, SubEls) /= false.
+
+maybe_change_last_msg(LServer, LUser, ConversationJID, Replace) ->
+  {PUser, PServer, _PRes} = jid:tolower(ConversationJID),
+  ReplaceID = Replace#xabber_replace.id,
+  M = get_last_message_with_timestamp(LUser, LServer, PUser, PServer, ReplaceID),
+  case M of
+    false -> ok;
+    _ ->
+      #xabber_replace{ xabber_replace_message = XabberReplaceMessage} = Replace,
+      #xabber_replace_message{body = Text, sub_els = NewEls} = XabberReplaceMessage,
+      MD = xmpp:decode(M),
+      From = MD#message.from,
+      MessageID = MD#message.id,
+      To = MD#message.to,
+      Meta = MD#message.meta,
+      Type = MD#message.type,
+      Sub = MD#message.sub_els,
+      Body = MD#message.body,
+      OldText = xmpp:get_text(Body),
+      X = xmpp:get_subtag(MD, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+      Reference = xmpp:get_subtag(X, #xmppreference{}),
+      NewSubFiltered = mod_groupchat_retract:filter_els(NewEls),
+      UserCard = xmpp:get_subtag(Reference, #xabbergroupchat_user_card{}),
+      UserChoose = mod_groupchat_users:choose_name(UserCard),
+      Username = <<UserChoose/binary, ":", "\n">>,
+      Length = mod_groupchat_messages:binary_length(Username),
+      NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [UserCard], 'begin' = 0, 'end' = Length}]},
+      Els1 = mod_groupchat_retract:strip_els(Sub),
+      NewSubRefShift = mod_groupchat_retract:shift_references(NewSubFiltered, Length),
+      Els2 = Els1 ++ [NewX] ++ NewSubRefShift,
+      NewBody = [#text{lang = <<>>,data = Text}],
+      R = #replaced{stamp = erlang:timestamp(), body = OldText},
+      Els3 = [R|Els2],
+      MessageDecoded = #message{id = MessageID, type = Type, from = From, to = To, sub_els = Els3, meta = Meta, body = NewBody},
+      change_last_msg(MessageDecoded, ConversationJID, LUser, LServer,ReplaceID)
+  end.
+
+get_last_message_with_timestamp(LUser, LServer, PUser, PServer, Timestamp) ->
+  TS = case is_integer(Timestamp) of
+         true ->
+           integer_to_binary(Timestamp);
+         _ ->
+           Timestamp
+       end,
+  FN = fun()->
+    mnesia:match_object(last_msg,
+      {last_msg, {LUser, LServer}, {PUser, PServer,<<>>},'_','_','_'},
+      read)
+       end,
+  {atomic,MsgRec} = mnesia:transaction(FN),
+  case MsgRec of
+    [] ->
+      false;
+    _ ->
+      SortFun = fun(E1,E2) -> ID1 = binary_to_integer(E1#last_msg.id), ID2 = binary_to_integer(E2#last_msg.id), ID1 > ID2 end,
+      MsgSort = lists:sort(SortFun,MsgRec),
+      [Msg|_Rest] = MsgSort,
+      #last_msg{packet = Packet, id = ID} = Msg,
+      case ID of
+        TS ->
+          Packet;
+        _ ->
+          false
+      end
+  end.
+
+change_last_msg(Pkt, Peer, LUser, LServer, Timestamp) ->
+  case {mnesia:table_info(last_msg, disc_only_copies),
+    mnesia:table_info(last_msg, memory)} of
+    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
+      ?ERROR_MSG("Last messages too large, won't store message id for ~s@~s",
+        [LUser, LServer]),
+      {error, overflow};
+    _ ->
+      TS = case is_integer(Timestamp) of
+             true ->
+               integer_to_binary(Timestamp);
+             _ ->
+               Timestamp
+           end,
+      {PUser, PServer, _} = jid:tolower(Peer),
+      IsService = xmpp:get_subtag(Pkt,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
+      Res = get_user_id(Pkt),
+      UserID = case Res of
+                 false when IsService =/= false ->
+                   jid:to_string(jid:remove_resource(Peer));
+                 _ ->
+                   Res
+               end,
+      case UserID of
+        false -> ok;
+        _ ->
+          F1 = fun() ->
+            mnesia:write(
+              #last_msg{us = {LUser, LServer},
+                bare_peer = {PUser, PServer, <<>>},
+                id = TS,
+                user_id = UserID,
+                packet = Pkt
+              })
+               end,
+          delete_last_msg(Peer, LUser, LServer),
+          case mnesia:transaction(F1) of
+            {atomic, ok} ->
+              ok;
+            {aborted, Err1} ->
+              ?DEBUG("Cannot add last msg for ~s@~s: ~s",
+                [LUser, LServer, Err1]),
+              Err1
+          end
+      end
+  end.

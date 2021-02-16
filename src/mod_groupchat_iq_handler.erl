@@ -82,6 +82,12 @@ handle_call(_Request, _From, _State) ->
   erlang:error(not_implemented).
 
 handle_cast({groupchat_created,Server,User,Chat,Lang}, State) ->
+  case nick_generator:get_avatar_file(Server) of
+    {ok, FileName, Bin} ->
+      mod_groupchat_vcard:publish_avatar(Chat, Bin, FileName);
+    _ ->
+      ok
+  end,
   ejabberd_hooks:run(groupchat_created, Server, [Server,User,Chat,Lang]),
   {noreply, State};
 handle_cast(_Request, State) ->

@@ -46,7 +46,7 @@
   get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, get_url/1, create_p2p_avatar/6,
   handle_iq/1
 ]).
--export([put_avatar_into_pubsub/3]).
+-export([publish_avatar/3]).
 %% gen_mod behavior
 -export([start/2, stop/1, mod_options/1, depends/2, mod_opt_type/1]).
 -include("ejabberd.hrl").
@@ -607,11 +607,11 @@ get_chat_meta_nodeid(Server,Chat)->
       Nodeid
   end.
 
-get_chat_meta(Server,Chat,Nodeid)->
+get_chat_meta(Server,_Chat,Nodeid)->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(payload)s,@(itemid)s from pubsub_item
-    where publisher = %(Chat)s and nodeid = %(Nodeid)d")) of
+    where nodeid = %(Nodeid)d")) of
     {selected,[]} ->
       no_avatar;
     {selected,[{Payload,ItemID}]} ->
@@ -1239,8 +1239,8 @@ create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2)
       Filename = nick_generator:merge_avatar(File1,File2,Path),
       File = <<Path/binary, "/" , Filename/binary>>,
       case file:read_file(File) of
-        {ok,F} ->
-          put_avatar_into_pubsub(Chat,F,<<"Group">>);
+        {ok, F} ->
+          publish_avatar(Chat, F, Filename);
         _ ->
           ok
       end;
@@ -1250,27 +1250,59 @@ create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2)
 create_p2p_avatar(_LServer,_Chat,_AvatarID1,_AvatarType1,_AvatarID2,_AvatarType2) ->
   ok.
 
-put_avatar_into_pubsub(Chat,Data,Resource) ->
-  TypeRaw = eimp:get_type(Data),
+%%put_avatar_into_pubsub(Chat,Data,Resource) ->
+%%  TypeRaw = eimp:get_type(Data),
+%%  Size = byte_size(Data),
+%%  HashID = get_hash(Data),
+%%  Type = atom_to_binary(TypeRaw, latin1),
+%%  ImageType = <<"image/",Type/binary>>,
+%%  AvatarInfo = #avatar_info{type = ImageType, bytes = Size, id = HashID},
+%%  AvatarData = #avatar_data{data = Data},
+%%  AvatarMeta = #avatar_meta{info = [AvatarInfo]},
+%%  To = jid:from_string(Chat),
+%%  FromGroupJID = jid:replace_resource(To,Resource),
+%%  AvatarItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarData)]},
+%%  MetaItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarMeta)]},
+%%  PublishData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_DATA, items = [AvatarItems]}},
+%%  PublishMetaData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_METADATA, items = [MetaItems]}},
+%%  IQData = #iq{from = FromGroupJID,to = To,id = randoms:get_string(),type = set, sub_els = [PublishData], meta = #{}},
+%%  IQMeta = #iq{from = FromGroupJID,to = To,id = randoms:get_string(),type = set, sub_els = [PublishMetaData], meta = #{}},
+%%  Res = mod_pubsub:iq_sm(IQData),
+%%  case Res of
+%%    #iq{type = result} ->
+%%      mod_pubsub:iq_sm(IQMeta);
+%%    _ ->
+%%      ok
+%%  end .
+
+
+publish_avatar(Chat, Data, FileName) when is_binary(Chat) ->
+  publish_avatar(jid:from_string(Chat), Data, FileName);
+
+publish_avatar(#jid{lserver = Server} = Chat, Data, FileName)->
+  Path = filename:absname(gen_mod:get_module_opt(Server,mod_http_fileserver,docroot)),
+  FullPath = filename:join(Path,FileName),
+  file:write_file(FullPath, Data),
+
+  Url = mod_groupchat_vcard:get_url(Server),
+  AvatarUrl = <<Url/binary, "/", FileName/binary>>,
+
   Size = byte_size(Data),
-  HashID = get_hash(Data),
-  Type = atom_to_binary(TypeRaw, latin1),
+  HashID = mod_groupchat_vcard:get_hash(Data),
+  Type = lists:last(binary:split(FileName,<<".">>)),
   ImageType = <<"image/",Type/binary>>,
-  AvatarInfo = #avatar_info{type = ImageType, bytes = Size, id = HashID},
-  AvatarData = #avatar_data{data = Data},
+
+  AvatarInfo = #avatar_info{type = ImageType, bytes = Size, id = HashID, url = AvatarUrl},
   AvatarMeta = #avatar_meta{info = [AvatarInfo]},
-  To = jid:from_string(Chat),
-  FromGroupJID = jid:replace_resource(To,Resource),
-  AvatarItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarData)]},
   MetaItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarMeta)]},
-  PublishData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_DATA, items = [AvatarItems]}},
   PublishMetaData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_METADATA, items = [MetaItems]}},
-  IQData = #iq{from = FromGroupJID,to = To,id = randoms:get_string(),type = set, sub_els = [PublishData], meta = #{}},
-  IQMeta = #iq{from = FromGroupJID,to = To,id = randoms:get_string(),type = set, sub_els = [PublishMetaData], meta = #{}},
-  Res = mod_pubsub:iq_sm(IQData),
-  case Res of
-    #iq{type = result} ->
-      mod_pubsub:iq_sm(IQMeta);
-    _ ->
-      ok
-  end .
+  IQMeta = #iq{from = jid:replace_resource(Chat,<<"Group">>),
+    to = jid:replace_resource(Chat,<<>>),
+    id = randoms:get_string(),
+    type = set,
+    sub_els = [PublishMetaData],
+    meta = #{}},
+  mod_pubsub:iq_sm(IQMeta);
+
+publish_avatar(_, _, _) ->
+  ok.

@@ -26,7 +26,7 @@
 -module(nick_generator).
 -author('andrey.gagarin@redsolution.com').
 %% API
--export([random_nick/3, init/1, handle_call/3, handle_cast/2]).
+-export([random_nick/3,get_avatar_file/1, init/1, handle_call/3, handle_cast/2]).
 -export([start/2, stop/1, mod_options/1, depends/2, reload/3, mod_opt_type/1]).
 -export([merge_avatar/3]).
 %%-export([delete_previous_block/3]).
@@ -720,29 +720,38 @@ old_random_nick() ->
   Nick.
 
 generate_nick_and_avatar(Server, User, Chat) ->
+  case get_avatar_file(Server) of
+    {ok,FileName,Bin} ->
+      Url = mod_groupchat_vcard:get_url(Server),
+      AvatarUrl = <<Url/binary, "/", FileName/binary>>,
+      random_avatar(Server, User, Chat, AvatarUrl, Bin),
+      hd(binary:split(FileName,<<".">>));
+    _ ->
+      old_random_nick()
+  end.
+
+get_avatar_file(Server) ->
   PreImages = gen_mod:get_module_opt(Server,?MODULE,pre_generated_images),
   case file:list_dir(PreImages) of
     {ok,[]} ->
-      generate_files(Server,[]);
+      generate_files(Server,[]),
+      error;
     {ok,Files} ->
       FilesLength = length(Files),
       RandomPicturePosition =  rand:uniform(FilesLength),
-      Result = list_to_binary(lists:nth(RandomPicturePosition,Files)),
+      FileName= list_to_binary(lists:nth(RandomPicturePosition,Files)),
       FullPath = <<PreImages/binary, "/">>,
-      File = <<FullPath/binary, Result/binary>>,
+      File = <<FullPath/binary, FileName/binary>>,
       case file:read_file(File) of
-        {ok,F} ->
+        {ok,Bin} ->
           Proc = gen_mod:get_module_proc(Server, ?MODULE),
           gen_server:cast(Proc, {update,Server,File}),
-          Url = mod_groupchat_vcard:get_url(Server),
-          AvatarUrl = <<Url/binary, "/", Result/binary>>,
-          random_avatar(Server, User, Chat, AvatarUrl, F),
-          hd(binary:split(Result,<<".">>));
+          {ok,FileName,Bin};
         _ ->
-          old_random_nick()
+          error
       end;
     _ ->
-      old_random_nick()
+      error
   end.
 
 pre_generation(Host) ->
@@ -780,11 +789,11 @@ generate_image(_Host,_Count) ->
   ok.
 
 generate_image(Host) ->
-  Path = gen_mod:get_module_opt(Host,?MODULE,pre_generated_images),
-  FullPath = <<Path/binary, "/">>,
-  CMD = binary_to_list(<<"python3 generateavatar.py ", FullPath/binary>>),
+  Path = filename:absname(gen_mod:get_module_opt(Host,?MODULE,pre_generated_images)),
+  CMD = binary_to_list(<<"python3 generateavatar.py ", Path/binary>>),
   Result = list_to_binary(os:cmd(CMD)),
-  File = <<FullPath/binary, Result/binary>>,
+  FileName = re:replace(Result, "(^\\s+)|(\\s+$)", "", [global,{return,binary}]),
+  File = filename:join(Path,FileName),
   case file:read_file(File) of
     {ok,_F} ->
       ok;

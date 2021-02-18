@@ -52,7 +52,7 @@
   % Other API
   xabber_get_table_size/1,
   xabber_get_db_size/1,
-  xabber_sent_images_count/1, xabber_add_permission/4, common_comands/0
+  xabber_sent_images_count/1, xabber_set_permission/4, common_comands/0
 ]).
 
 
@@ -126,10 +126,10 @@ get_commands_spec() ->
         result_example = {ok, <<"Some information">>},
         result_desc = "Result tuple"},
       #ejabberd_commands{name = xabber_registered_users, tags = [xabber],
-        desc = "List all registered vhosts in SERVER",
+        desc = "List all registered users in HOST",
         module = ?MODULE, function = xabber_registered_users,
-        result_desc = "List of available vhosts",
-        result_example = [<<"example.com">>, <<"anon.example.com">>],
+        result_desc = "List registered users and auth backend",
+        result_example = [<<"juliet">>, <<"ldap">>],
         args = [{host, binary}],
         args_desc = ["Name of HOST to check"],
         args_example = [<<"capulet.lit">>],
@@ -175,15 +175,15 @@ get_commands_spec() ->
         result = {users, integer},
         result_example = 123,
         result_desc = "Number of users online, exclude duplicated resources"},
-      #ejabberd_commands{name = xabber_registered_users, tags = [accounts],
-        desc = "List all registered users in HOST",
-        module = ?MODULE, function = xabber_registered_users,
-        args_desc = ["Local vhost"],
-        args_example = [<<"example.com">>,30,1],
-        result_desc = "List of registered accounts usernames",
-        result_example = [<<"user1">>, <<"user2">>],
-        args = [{host, binary},{limit,integer},{page,integer}],
-        result = {users, {list, {username, string}}}},
+%%      #ejabberd_commands{name = xabber_registered_users, tags = [accounts],
+%%        desc = "List all registered users in HOST",
+%%        module = ?MODULE, function = xabber_registered_users,
+%%        args_desc = ["Local vhost"],
+%%        args_example = [<<"example.com">>,30,1],
+%%        result_desc = "List of registered accounts usernames",
+%%        result_example = [<<"user1">>, <<"user2">>],
+%%        args = [{host, binary},{limit,integer},{page,integer}],
+%%        result = {users, {list, {username, string}}}},
       #ejabberd_commands{name = xabberuser_change_password, tags = [accounts],
         desc = "Change the password of an account",
         module = ?MODULE, function = set_password,
@@ -380,7 +380,7 @@ get_commands_spec() ->
       #ejabberd_commands{name = xabber_set_permissions, tags = [xabber],
         desc = "Grant a permission to perform actions to user",
         longdesc = "Grant a permission to perform actions to user",
-        module = ?MODULE, function = xabber_add_permission,
+        module = ?MODULE, function = xabber_set_permission,
         args_desc = ["User", "Host", "Set admin", "Commands"],
         args_example = [<<"juliet">>, <<"capulet.lit">>, <<"true">>, <<"registered_users, get_vcard">>],
         args = [{user, binary}, {host, binary}, {set_admin, binary}, {commands, binary}],
@@ -661,21 +661,17 @@ get_user_and_server(Args, xabber_oauth_issue_token) ->
   JID = jid:from_string(list_to_binary(BareJIDString)),
   #jid{luser = LUser, lserver = LServer} = JID,
   {LUser, LServer};
-get_user_and_server(Args, xabber_registered_users) ->
-  [LServer] = Args,
-  {<<>>,LServer};
-get_user_and_server(Args, xabber_registered_users_count) ->
-  [LServer] = Args,
-  {<<>>,LServer};
-get_user_and_server(Args, xabber_registered_chats_count) ->
-  [LServer] = Args,
-  {<<>>,LServer};
-get_user_and_server(Args, xabber_registered_chats) ->
-  [LServer|_Rest] = Args,
-  {<<>>,LServer};
-get_user_and_server(Args, _Command) ->
-  [LUser|Rest] = Args,
-  [LServer|_R2] = Rest,
+get_user_and_server(Args, Command) ->
+  {ArgsFormat, _} = ejabberd_commands:get_command_format(Command),
+  LookUp = fun(Key) ->
+    case proplists:lookup(Key, ArgsFormat) of
+      none -> <<>>;
+      V ->
+        Index = index_of(V,ArgsFormat),
+        lists:nth(Index, Args)
+    end end,
+  LServer = LookUp(host),
+  LUser  = LookUp(user),
   {LUser, LServer}.
 
 can_perform(#{caller_module := mod_http_api} = Auth, Args, Command) ->
@@ -723,60 +719,45 @@ check_permissions(Command, _IsAdmin, Commands, Args, Server) ->
 
 parse_command_string(Commands) ->
   Splited = binary:split(Commands,<<",">>,[global]),
-  Empty = [X||X <- Splited, X == <<>>],
-  NotEmpty = Splited -- Empty,
-  NotEmpty.
+  lists:usort([X||X <- Splited, X =/= <<>>]).
 
-form_command_string(CommandList) ->
-  SortedList = lists:usort(CommandList),
-  list_to_binary(lists:map(fun(N)-> [N|[<<",">>]] end, SortedList)).
-
-xabber_add_permission(LUser, LServer, SetAdmin, Command) ->
+xabber_set_permission(LUser, LServer, SetAdmin, Commands) ->
   case ejabberd_auth:user_exists(LUser, LServer) of
     true ->
-      xabber_add_permission_checked(LUser, LServer, SetAdmin, Command);
+      xabber_set_permission_checked(LUser, LServer, SetAdmin, Commands);
     false ->
       1
   end.
 
-xabber_add_permission_checked(LUser, LServer, <<"">>, _Command) ->
+xabber_set_permission_checked(LUser, LServer, <<"">>, _Command) ->
   delete_permission(LUser, LServer);
-xabber_add_permission_checked(LUser, LServer, <<"false">>, <<"">>) ->
+xabber_set_permission_checked(LUser, LServer, <<"false">>, <<"">>) ->
   delete_permission(LUser, LServer);
-xabber_add_permission_checked(LUser, LServer, <<"true">>, _Command) ->
+xabber_set_permission_checked(LUser, LServer, <<"true">>, _Command) ->
   set_admin(LUser, LServer);
-xabber_add_permission_checked(LUser, LServer, SetAdmin, Commands) when SetAdmin == <<"false">> ->
+xabber_set_permission_checked(LUser, LServer, SetAdmin, Commands) when SetAdmin == <<"false">> ->
   CommandList = parse_command_string(Commands),
-  CheckedCommands = lists:map(fun(Command) ->
-    lists:member(binary_to_atom(Command, latin1), lists:delete(xabber_set_permissions,xabber_commands()))
-                              end, CommandList),
-  HasWrongCommand = lists:member(false, CheckedCommands),
-  case HasWrongCommand of
-    false ->
-      change_permission_for_user(LUser, LServer, CommandList);
+  PermittedCommands =  lists:delete(xabber_set_permissions,xabber_commands()),
+  Excess =  [binary_to_atom(X, latin1) || X <- CommandList] -- PermittedCommands,
+  case Excess of
+    [] ->
+      Commands2 = list_to_binary(lists:join(<<",">>,CommandList)),
+      change_permission_for_user(LUser, LServer, Commands2);
     _ ->
       1
   end;
-xabber_add_permission_checked(_LUser, _LServer, _SetAdmin, _Command) ->
+xabber_set_permission_checked(_LUser, _LServer, _SetAdmin, _Command) ->
   1.
 
-change_permission_for_user(LUser, LServer, CommandsToAdd) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(commands)s from user_permissions
-    where username=%(LUser)s and %(LServer)H")) of
-    {selected,[{Commands}]} ->
-      CommandList = parse_command_string(Commands),
-      NewList = CommandsToAdd,
-      NewCommandList = lists:usort(NewList),
-      case NewCommandList of
-        CommandList ->
-          0;
-        _ ->
-          update_commands(LUser, LServer, NewCommandList)
-      end;
-    _ ->
-      add_commands(LUser, LServer, CommandsToAdd)
+change_permission_for_user(LUser, LServer, Commands) ->
+  case ?SQL_UPSERT(LServer, "user_permissions",
+    [ "!username=%(LUser)s",
+      "!server_host=%(LServer)s",
+      "commands=%(Commands)s"]) of
+    ok ->
+      ok;
+    _Err ->
+      {error, db_failure}
   end.
 
 delete_permission(LUser, LServer) ->
@@ -794,32 +775,6 @@ set_admin(LUser, LServer) ->
       ok;
     _Err ->
       {error, db_failure}
-  end.
-
-update_commands(LUser, LServer, CommandList) ->
-  Commands = form_command_string(CommandList),
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("update user_permissions set commands = %(Commands)s where username=%(LUser)s and %(LServer)H")) of
-    {updated, N} when N > 0 ->
-      0;
-    _ ->
-      1
-  end.
-
-add_commands(LUser, LServer, CommandList) ->
-  Commands = form_command_string(CommandList),
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL_INSERT(
-      "user_permissions",
-      ["username=%(LUser)s",
-        "server_host=%(LServer)s",
-        "commands=%(Commands)s"])) of
-    {updated, N} when N > 0 ->
-      ok;
-    _ ->
-      error
   end.
 
 xabber_test_api() ->
@@ -880,3 +835,10 @@ auth_modules(Server) ->
   [{ejabberd:module_name([<<"ejabberd">>, <<"auth">>,
     misc:atom_to_binary(M)]), misc:atom_to_binary(M)}
     || M <- Methods].
+
+index_of(Value, List) ->
+  Map = lists:zip(List, lists:seq(1, length(List))),
+  case lists:keyfind(Value, 1, Map) of
+    {Value, Index} -> Index;
+    false -> notfound
+  end.

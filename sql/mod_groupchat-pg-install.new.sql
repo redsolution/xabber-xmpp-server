@@ -508,8 +508,7 @@ CREATE TABLE groupchat_policy (
     username text NOT NULL,
     chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
     right_name text NOT NULL REFERENCES groupchat_rights(name),
-    valid_from timestamp NOT NULL,
-    valid_until timestamp NOT NULL,
+    valid_until bigint NOT NULL default 0,
     issued_by text NOT NULL,
     issued_at timestamp NOT NULL,
     CONSTRAINT UC_groupchat_policy UNIQUE (username,chatgroup,right_name)

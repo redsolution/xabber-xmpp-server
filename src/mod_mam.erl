@@ -740,9 +740,10 @@ should_archive_in(#message{type = groupchat}, _LServer) ->
 	false;
 should_archive_in(#message{meta = #{from_offline := true}}, _LServer) ->
 	false;
-should_archive_in(#message{to = To, body = Body, subject = Subject,
+should_archive_in(#message{to = To,from = From, body = Body, subject = Subject,
 	type = Type} = Pkt, _LServer) ->
 	By = jid:remove_resource(To),
+	FromBare = jid:remove_resource(From),
 	case is_archived_by(Pkt, By) of
 		true ->
 			false;
@@ -753,6 +754,8 @@ should_archive_in(#message{to = To, body = Body, subject = Subject,
 				no_store ->
 					false;
 				none when Type == headline ->
+					false;
+				none when By == FromBare andalso From#jid.resource /= <<>> ->
 					false;
 				none ->
 					xmpp:get_text(Body) /= <<>> orelse

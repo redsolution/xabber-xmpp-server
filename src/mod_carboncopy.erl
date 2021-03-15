@@ -193,7 +193,11 @@ remove_connection(User, Server, Resource, _Status)->
 send_copies(JID, To, Packet, Direction)->
     {U, S, R} = jid:tolower(JID),
     PrioRes = ejabberd_sm:get_user_present_resources(U, S),
-    {_, AvailRs} = lists:unzip(PrioRes),
+    {_, AvailRs0} = lists:unzip(PrioRes),
+    AvailRs = case Direction of
+                send -> lists:usort(AvailRs0 ++ ejabberd_sm:get_user_resources(U, S));
+                _ -> AvailRs0
+              end,
     {MaxPrio, _MaxRes} = case catch lists:max(PrioRes) of
 	{Prio, Res} -> {Prio, Res};
 	_ -> {0, undefined}

@@ -58,7 +58,7 @@ channel_created(LServer,User,Channel,Lang) ->
       ContactsEl = #channel_contacts{contact = mod_channels:make_list(Contacts, contacts)},
       DomainsEl = #channel_domains{domain = mod_channels:make_list(Domains, domains)},
       XSubEls = [NameEl,LocalpartEl,MembershipEl,DescEl,IndexEl,ContactsEl,DomainsEl],
-      Txt = <<"created chat">>,
+      Txt = <<"created channel">>,
 %%      X = mod_groupchat_users:form_user_card(User,Channel),
       UserID = User,
       MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),

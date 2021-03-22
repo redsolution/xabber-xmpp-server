@@ -222,7 +222,6 @@ user_change_own_avatar(User, Server, Chat) ->
 
 
 chat_created(LServer,User,Chat,Lang) ->
-  Txt = <<"created chat">>,
   X = mod_groupchat_users:form_user_card(User,Chat),
   UserID = case anon(X) of
              public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
@@ -232,10 +231,11 @@ chat_created(LServer,User,Chat,Lang) ->
              anonim ->
                X#xabbergroupchat_user_card.nickname
            end,
-  MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
-  Body = [#text{lang = <<>>,data = MsgTxt}],
   {selected,[{Name,Anonymous,Search,Model,Desc,_Message,_ContactList,_DomainList,_ParentChat}]} =
     mod_groupchat_chats:get_detailed_information_of_chat(Chat,LServer),
+  Txt =  <<"created ",Anonymous/binary," group">>,
+  MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
+  Body = [#text{lang = <<>>,data = MsgTxt}],
   Privacy = #xabbergroupchat_privacy{cdata = Anonymous},
   Membership = #xabbergroupchat_membership{cdata = Model},
   Description = #xabbergroupchat_description{cdata = Desc},

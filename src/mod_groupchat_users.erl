@@ -512,13 +512,13 @@ add_user_pre_approval(Server,Member,Role,Groupchat,Subscription) ->
       {stop,not_ok}
   end.
 
-add_user_to_db(LServer,User,Role,Chatgroup,Subscription) ->
+add_user_to_db(Server,User,Role,Chatgroup,Subscription) ->
   R = randoms:get_alphanum_string(16),
   R_s = binary_to_list(R),
   R_sl = string:to_lower(R_s),
   Id = list_to_binary(R_sl),
-  case ejabberd_sql:sql_query(
-    LServer,
+  ejabberd_sql:sql_query(
+    Server,
     ?SQL_INSERT(
       "groupchat_users",
       ["username=%(User)s",
@@ -526,24 +526,7 @@ add_user_to_db(LServer,User,Role,Chatgroup,Subscription) ->
         "chatgroup=%(Chatgroup)s",
         "id=%(Id)s",
         "subscription=%(Subscription)s"
-      ])) of
-    {updated, N} when N > 0 ->
-      ChatJID = jid:from_string(Chatgroup),
-      UserJID = jid:from_string(User),
-      LUser = ChatJID#jid.luser,
-      PUser = UserJID#jid.luser,
-      PServer = UserJID#jid.lserver,
-      RosterSubscription = case Subscription of
-                             <<"both">> ->
-                               <<"both">>;
-                             _ ->
-                               <<"from">>
-                           end,
-      mod_admin_extra:add_rosteritem(LUser,
-        LServer,PUser,PServer,PUser,<<"Users">>,RosterSubscription);
-    _ ->
-      ok
-  end.
+      ])).
 
 user_list_to_send(Server, Groupchat) ->
  case ejabberd_sql:sql_query(

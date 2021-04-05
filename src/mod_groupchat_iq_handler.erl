@@ -630,9 +630,9 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   Result = ejabberd_hooks:run_fold(replace_message, Server, [], [{Server,User,Chat,ID,Text,Replace,Version}]),
   case Result of
     ok ->
-      ejabberd_router:route(xmpp:make_iq_result(IQ));
+      xmpp:make_iq_result(IQ);
     _ ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
+      xmpp:make_error(IQ, xmpp:err_not_allowed())
   end;
 process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS}]} = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),

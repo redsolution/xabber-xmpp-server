@@ -365,8 +365,6 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   Meta = MD#message.meta,
   Type = MD#message.type,
   Sub = MD#message.sub_els,
-  Body = MD#message.body,
-  OldText = xmpp:get_text(Body),
   X = xmpp:get_subtag(MD, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   Reference = xmpp:get_subtag(X, #xmppreference{}),
   NewSubFiltered = filter_els(NewEls),
@@ -383,9 +381,8 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   Els2 = Els1 ++ [NewX] ++ NewSubRefShift,
   NewText = <<Username/binary, Text/binary >>,
   NewBody = [#text{lang = <<>>,data = NewText}],
-  R = #replaced{stamp = erlang:timestamp(), body = OldText},
-  Els3 = [R|Els2],
-  MessageDecoded = #message{id = MessageID, type = Type, from = From, to = To, sub_els = Els3, meta = Meta, body = NewBody},
+  Replaced = XabberReplaceMessage#xabber_replace_message.replaced,
+  MessageDecoded = #message{id = MessageID, type = Type, from = From, to = To, sub_els = [Replaced|Els2], meta = Meta, body = NewBody},
   NewM = xmpp:encode(MessageDecoded),
   XML = fxml:element_to_binary(NewM),
   ?SQL_UPSERT(
@@ -396,8 +393,7 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
       "xml=%(XML)s",
       "txt=%(NewText)s",
       "server_host=%(Server)s"]),
-  Els4 =  set_stanza_id(Els3,ChatJID,ID),
-  NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{body = NewText, sub_els = Els4},
+  NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{body = NewText, sub_els = Els2},
   NewReplace = Replace#xabber_replace{xabber_replace_message = NewXabberReplaceMessage},
   NewReplace.
 
@@ -620,20 +616,3 @@ shift_references(Els, Length) ->
       end
     end, Els),
   NewEls.
-
--spec set_stanza_id(list(), jid(), binary()) -> list().
-set_stanza_id(SubELS, JID, ID) ->
-  TimeStamp = usec_to_now(binary_to_integer(ID)),
-  BareJID = jid:remove_resource(JID),
-  Archived = #mam_archived{by = BareJID, id = ID},
-  StanzaID = #stanza_id{by = BareJID, id = ID},
-  Time = #unique_time{by = BareJID, stamp = TimeStamp},
-  [Archived, StanzaID, Time|SubELS].
-
--spec usec_to_now(non_neg_integer()) -> erlang:timestamp().
-usec_to_now(Int) ->
-  Secs = Int div 1000000,
-  USec = Int rem 1000000,
-  MSec = Secs div 1000000,
-  Sec = Secs rem 1000000,
-  {MSec, Sec, USec}.

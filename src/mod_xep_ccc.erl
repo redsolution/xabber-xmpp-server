@@ -64,6 +64,20 @@
 % syncronization_query hook
 -export([create_synchronization_metadata/11, check_conversation_type/11, get_invite_information/4]).
 -type c2s_state() :: ejabberd_c2s:state().
+
+%% Delete after updating servers
+-export([update_table/1]).
+
+-record(old_unread_msg_counter,
+{
+  us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
+  bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_',
+  type = <<>>                          :: binary() | '_',
+  user_id = <<>>                       :: binary() | '_',
+  origin_id = <<>>                     :: binary() | '_',
+  id = <<>>                            :: binary() | '_'
+}).
+
 %% records
 -record(state, {host = <<"">> :: binary()}).
 
@@ -118,7 +132,8 @@
   type = <<>>                          :: binary() | '_',
   user_id = <<>>                       :: binary() | '_',
   origin_id = <<>>                     :: binary() | '_',
-  id = <<>>                            :: binary() | '_'
+  id = <<>>                            :: binary() | '_',
+  ts = <<>>                            :: binary() | '_'
 }).
 
 -record(request_job,
@@ -272,22 +287,27 @@ handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver 
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   Type = get_conversation_type(LServer,LUser,Conversation),
   case Displayed of
-    #message_displayed{id = OriginID} when IsLocal == false andalso Type == <<"groupchat">> ->
-      StanzaID = get_stanza_id_of_chat(Displayed,LUser,LServer,PUser,PServer,OriginID),
+    #message_displayed{id = OriginID} when Type == <<"groupchat">> ->
+      FilPacket = filter_packet(Displayed,jid:make(PUser,PServer)),
+      StanzaID = case xmpp:get_subtag(FilPacket, #stanza_id{}) of
+                   #stanza_id{id = SID} ->
+                     SID;
+                   _ ->
+                     get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID)
+                 end,
       update_metainfo(read, LServer,LUser,Conversation,StanzaID),
       ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]),
-      delete_msg(LUser, LServer, PUser, PServer, StanzaID);
+      if
+        IsLocal -> pass;
+        true ->
+          delete_msg(LUser, LServer, PUser, PServer, StanzaID)
+      end;
     #message_displayed{id = OriginID} ->
       BareJID = jid:make(LUser,LServer),
       Displayed2 = filter_packet(Displayed,BareJID),
       StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
       IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID),
-      case IsEncrypted of
-        true ->
-          update_metainfo(read, LServer,LUser,Conversation,StanzaID,true);
-        _ ->
-          update_metainfo(read, LServer,LUser,Conversation,StanzaID,false)
-      end,
+      update_metainfo(read, LServer,LUser,Conversation,StanzaID,IsEncrypted),
       ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]);
     _ ->
       ok
@@ -324,47 +344,16 @@ handle_cast({sm, #presence{type = unsubscribe,from = #jid{lserver = PServer, lus
 handle_cast({sm, #presence{type = unsubscribed,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}}},State) ->
   maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
   {noreply, State};
-handle_cast({sm,#message{id = ID, type = chat, body = [], from = From, to = To, sub_els = SubEls, meta = #{stanza_id := TS}} = Pkt}, State) ->
-  Propose = xmpp:get_subtag(Pkt, #jingle_propose{}),
-  Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
-  Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
-  {LUser, LServer, _ } = jid:tolower(To),
-  Conversation = jid:to_string(jid:remove_resource(From)),
-  case Propose of
-    #jingle_propose{} ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Pkt]),
-      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
-      update_metainfo(call, LServer,LUser,Conversation,TS,false),
-      store_last_call(Pkt, From, LUser, LServer, TS);
-    _ ->
-      ok
-  end,
-  case Accept of
-    #jingle_accept{} ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Accept]),
-      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
-      update_metainfo(call, LServer,LUser,Conversation,TS,false),
-      delete_last_call(From, LUser, LServer);
-    _ ->
-      ok
-  end,
-  case Reject of
-    #jingle_reject{} ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Reject]),
-      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
-      update_metainfo(call, LServer,LUser,Conversation,TS,false),
-      delete_last_call(From, LUser, LServer);
-    _ ->
-      ok
-  end,
+handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els = SubEls} = Pkt}, State) ->
+  check_voip_msg(Pkt),
   DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
   handle_sub_els(chat,DecSubEls,From,To),
   {noreply, State};
-handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els = SubEls}}, State) ->
-  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-  handle_sub_els(chat,DecSubEls,From,To),
-  {noreply, State};
-handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{stanza_id := TS}} = Pkt}, State) ->
+%%handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els = SubEls}}, State) ->
+%%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
+%%  handle_sub_els(chat,DecSubEls,From,To),
+%%  {noreply, State};
+handle_cast({sm,#message{id = _ID, type = chat, from = Peer, to = To, meta = #{stanza_id := TS}} = Pkt}, State) ->
   {LUser, LServer, _ } = jid:tolower(To),
   {PUser, PServer, _} = jid:tolower(Peer),
   PktRefGrp = filter_reference(Pkt,<<"groupchat">>),
@@ -375,107 +364,57 @@ handle_cast({sm,#message{id = ID, type = chat, from = Peer, to = To, meta = #{st
   OriginIDElemnt = xmpp:get_subtag(Pkt, #origin_id{}),
   OriginID = get_origin_id(OriginIDElemnt),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
-  case Type of
-    _ when Invite =/= false ->
+  if
+    Invite  =/= false ->
       #xabbergroupchat_invite{jid = ChatJID} = Invite,
       case ChatJID of
         undefined ->
-          store_special_message_id(LServer,LUser,Conversation,TS,OriginID,<<"invite">>),
-          store_invite_information(LUser,LServer,PUser,PServer, TS),
+          update_metainfo(message, LServer,LUser,Conversation,TS),
           ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-            #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-          update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation);
+            #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}]);
         _ ->
           Chat = jid:to_string(jid:remove_resource(ChatJID)),
           store_special_message_id(LServer,LUser,Chat,TS,OriginID,<<"invite">>),
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-            #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
           store_invite_information(LUser,LServer,ChatJID#jid.luser,ChatJID#jid.lserver, TS),
-          update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat)
+          update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+            #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}])
       end;
-    _ when X =/= false andalso IsLocal == true ->
+    Type == <<"groupchat">>; Type == <<"channel">> ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
       case StanzaID of
         false ->
+          %% Bad message
           ok;
         _ ->
           TSGroupchat = StanzaID#stanza_id.id,
-          store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),OriginID,<<"service">>),
-          update_metainfo(message, LServer,LUser,Conversation,TS)
+          if
+            IsLocal andalso X ->
+              store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),OriginID,<<"service">>);
+            IsLocal ->
+              pass;
+            true ->
+              store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID)
+          end,
+          update_metainfo(message, LServer,LUser,Conversation,binary_to_integer(TSGroupchat)),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer, StanzaID])
       end;
-    _ when X =/= false andalso IsLocal == false ->
-      FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
-      StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
-      TSGroupchat = StanzaID#stanza_id.id,
-      store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID),
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-      update_metainfo(message, LServer,LUser,Conversation,TS);
-    <<"channel">> when IsLocal == false ->
-      FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
-      StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
-      TSGroupchat = StanzaID#stanza_id.id,
-      store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID),
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-      update_metainfo(message, LServer,LUser,Conversation,binary_to_integer(TSGroupchat));
-    <<"channel">> ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-      update_metainfo(message, LServer,LUser,Conversation,TS);
-    <<"groupchat">> when IsLocal == false ->
-      FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
-      StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
-      TSGroupchat = StanzaID#stanza_id.id,
-      store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID),
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-      update_metainfo(message, LServer,LUser,Conversation,binary_to_integer(TSGroupchat));
-    <<"groupchat">> ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-      update_metainfo(message, LServer,LUser,Conversation,TS);
-    _ ->
-      Propose = xmpp:get_subtag(Pkt, #jingle_propose{}),
-      Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
-      Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
-      case Propose of
-        #jingle_propose{} ->
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Pkt]),
-          store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
-          update_metainfo(call, LServer,LUser,Conversation,TS,false),
-          store_last_call(Pkt, Peer, LUser, LServer, TS);
-        _ ->
-          ok
-      end,
-      case Accept of
-        #jingle_accept{} ->
-          store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Accept]),
-          update_metainfo(call, LServer,LUser,Conversation,TS,false),
-          delete_last_call(Peer, LUser, LServer);
-        _ ->
-          ok
-      end,
-      case Reject of
-        #jingle_reject{} ->
-          Conversation = jid:to_string(jid:remove_resource(Peer)),
-          store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Reject]),
-          update_metainfo(call, LServer,LUser,Conversation,TS,false),
-          delete_last_call(Peer, LUser, LServer);
-        _ ->
-          IsEncrypted = body_is_encrypted(Pkt),
-          case IsEncrypted of
+    true ->
+      case check_voip_msg(Pkt) of
+        false ->
+          case body_is_encrypted(Pkt) of
             true ->
               create_conversation(LServer,LUser,Conversation,<<"">>,true),
               update_metainfo(message, LServer,LUser,Conversation,TS,true);
             _ ->
+              ?INFO_MSG("PUSH8 ~p ~p~n",[Type, Pkt#message.meta]),
               ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-                #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
+                #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}]),
               update_metainfo(message, LServer,LUser,Conversation,TS,false)
-          end
+          end;
+        _ ->
+          ok
       end
   end,
   {noreply, State};
@@ -1093,7 +1032,7 @@ get_actual_last_call(LUser, LServer, PUser, PServer) ->
     _ -> []
   end.
 
-store_last_msg(Pkt, Peer, LUser, LServer, TS, OriginIDRecord) ->
+store_last_msg(Pkt, Peer, LUser, LServer, StanzaID, OriginIDRecord) ->
   case {mnesia:table_info(last_msg, disc_only_copies),
     mnesia:table_info(last_msg, memory)} of
     {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
@@ -1117,7 +1056,7 @@ store_last_msg(Pkt, Peer, LUser, LServer, TS, OriginIDRecord) ->
             mnesia:write(
               #last_msg{us = {LUser, LServer},
                 bare_peer = {PUser, PServer, <<>>},
-                id = TS,
+                id = StanzaID,
                 user_id = UserID,
                 packet = Pkt
               })
@@ -1127,7 +1066,7 @@ store_last_msg(Pkt, Peer, LUser, LServer, TS, OriginIDRecord) ->
             {atomic, ok} ->
               ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
               OriginID = get_origin_id(OriginIDRecord),
-              store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID, IsService),
+              store_last_msg_in_counter(Peer, LUser, LServer, UserID, StanzaID, OriginID, IsService),
               ok;
             {aborted, Err1} ->
               ?DEBUG("Cannot add last msg for ~s@~s: ~s",
@@ -1208,9 +1147,9 @@ get_x(false) ->
 get_x(X) ->
   get_card_from_refence(xmpp:get_subtag(X,#xmppreference{}), channel).
 
-store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID, false) ->
-  case {mnesia:table_info(last_msg, disc_only_copies),
-    mnesia:table_info(last_msg, memory)} of
+store_last_msg_in_counter(Peer, LUser, LServer, UserID, StanzaID, OriginID, false) ->
+  case {mnesia:table_info(unread_msg_counter, disc_only_copies),
+    mnesia:table_info(unread_msg_counter, memory)} of
     {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
       ?ERROR_MSG("Unread counter too large, won't store message id for ~s@~s",
         [LUser, LServer]),
@@ -1223,7 +1162,8 @@ store_last_msg_in_counter(Peer, LUser, LServer, UserID, TS, OriginID, false) ->
             bare_peer = {PUser, PServer, <<>>},
             origin_id = OriginID,
             user_id = UserID,
-            id = TS
+            id = StanzaID,
+            ts = time_now()
           })
            end,
       case mnesia:transaction(F1) of
@@ -1250,7 +1190,7 @@ delete_last_msg(Peer, LUser, LServer) ->
 get_count(LUser, LServer, PUser, PServer) ->
   FN = fun()->
     mnesia:match_object(unread_msg_counter,
-      {unread_msg_counter, {LUser, LServer}, {PUser, PServer,<<>>},'_','_','_','_'},
+      {unread_msg_counter, {LUser, LServer}, {PUser, PServer,<<>>},'_','_','_','_','_'},
       read)
        end,
   {atomic,Msgs} = mnesia:transaction(FN),
@@ -1286,20 +1226,22 @@ get_last_messages(LUser, LServer, PUser, PServer) ->
 
 delete_msg(_LUser, _LServer, _PUser, _PServer, empty) ->
   ok;
-delete_msg(LUser, LServer, PUser, PServer, TS) ->
+delete_msg(LUser, LServer, PUser, PServer, StanzaID) ->
   Msgs = get_count(LUser, LServer, PUser, PServer),
-  MsgsToDelete = [X || X <- Msgs, X#unread_msg_counter.id =< TS],
-  ?DEBUG("to delete ~p~n~n TS ~p",[MsgsToDelete,TS]),
-  lists:foreach(
-    fun(Msg) ->
-      mnesia:dirty_delete_object(Msg)
-    end, MsgsToDelete).
+  MsgsToDelete = case [M#unread_msg_counter.ts || M <- Msgs, M#unread_msg_counter.id == StanzaID] of
+                   [] ->
+                     [X || X <- Msgs, X#unread_msg_counter.ts =< time_now()];
+                   TSList ->
+                     [X || X <- Msgs, X#unread_msg_counter.ts =< lists:max(TSList)]
+                 end,
+  ?DEBUG("to delete ~p~n",[MsgsToDelete]),
+  lists:foreach(fun(Msg) -> mnesia:dirty_delete_object(Msg) end, MsgsToDelete).
 
-delete_one_msg(LUser, LServer, PUser, PServer, TS) ->
+delete_one_msg(LUser, LServer, PUser, PServer, StanzaID) ->
   Msgs = get_count(LUser, LServer, PUser, PServer),
   LastMsg = get_last_messages(LUser, LServer, PUser, PServer),
   case LastMsg of
-    [#last_msg{id = TS,packet = _Pkt}] ->
+    [#last_msg{id = StanzaID,packet = _Pkt}] ->
       lists:foreach(
         fun(LMsg) ->
           mnesia:dirty_delete_object(LMsg)
@@ -1307,7 +1249,7 @@ delete_one_msg(LUser, LServer, PUser, PServer, TS) ->
     _ ->
       ok
   end,
-  MsgsToDelete = [X || X <- Msgs, X#unread_msg_counter.id == TS],
+  MsgsToDelete = [X || X <- Msgs, X#unread_msg_counter.id == StanzaID],
   lists:foreach(
     fun(Msg) ->
       mnesia:dirty_delete_object(Msg)
@@ -1348,15 +1290,6 @@ get_stanza_id(Pkt,BareJID) ->
       empty
   end.
 
-get_stanza_id_of_chat(Pkt,LUser,LServer,PUser,PServer,OriginID) ->
-  BareJID = jid:make(LUser, LServer),
-  case xmpp:get_subtag(Pkt, #stanza_id{}) of
-    #stanza_id{by = BareJID, id = StanzaID} ->
-      StanzaID;
-    _ ->
-      get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID)
-  end.
-
 get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
   case xmpp:get_subtag(Pkt, #stanza_id{}) of
     #stanza_id{by = BareJID, id = StanzaID} ->
@@ -1369,34 +1302,35 @@ get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
 get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID) ->
   Msgs = get_count(LUser, LServer, PUser, PServer),
   Msg = [X || X <- Msgs, X#unread_msg_counter.origin_id == OriginID],
-  SortFun = fun(E1,E2) -> ID1 = binary_to_integer(E1#unread_msg_counter.id), ID2 = binary_to_integer(E2#unread_msg_counter.id), ID1 > ID2 end,
-  SortMsg = lists:sort(SortFun,Msg),
+%%  SortFun = fun(E1,E2) -> TS1 = binary_to_integer(E1#unread_msg_counter.ts), TS2 = binary_to_integer(E2#unread_msg_counter.ts), TS1 > TS2 end,
+%%  SortMsg = lists:sort(SortFun,Msg),
+  SortMsg = lists:reverse(lists:keysort(#unread_msg_counter.ts,Msg)),
   case SortMsg of
     [#unread_msg_counter{id = StanzaID}| _Rest] ->
       StanzaID;
     _ ->
-      get_id_from_special_messages(LUser,LServer,PUser,PServer,OriginID)
+      undefined
   end.
 
-get_id_from_special_messages(LUser,LServer,PUser,PServer,OriginID) ->
-  Conv = jid:to_string(jid:make(PUser,PServer)),
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select
-    @(timestamp)s
-     from special_messages"
-    " where username=%(LUser)s and conversation=%(Conv)s and origin_id=%(OriginID)s and %(LServer)H order by timestamp desc")) of
-    {selected,[<<>>]} ->
-      empty;
-    {selected,[]} ->
-      empty;
-    {selected,[{}]} ->
-      empty;
-    {selected,[{ID}]} ->
-      ID;
-    _ ->
-      empty
-  end.
+%%get_id_from_special_messages(LUser,LServer,PUser,PServer,OriginID) ->
+%%  Conv = jid:to_string(jid:make(PUser,PServer)),
+%%  case ejabberd_sql:sql_query(
+%%    LServer,
+%%    ?SQL("select
+%%    @(timestamp)s
+%%     from special_messages"
+%%    " where username=%(LUser)s and conversation=%(Conv)s and origin_id=%(OriginID)s and %(LServer)H order by timestamp desc")) of
+%%    {selected,[<<>>]} ->
+%%      empty;
+%%    {selected,[]} ->
+%%      empty;
+%%    {selected,[{}]} ->
+%%      empty;
+%%    {selected,[{ID}]} ->
+%%      ID;
+%%    _ ->
+%%      empty
+%%  end.
 
 store_last_sync(Sync, ChatName, ChatServer, PUser, PServer, TS) ->
   case {mnesia:table_info(last_sync, disc_only_copies),
@@ -1611,11 +1545,11 @@ get_conversation_type(LServer,LUser,Conversation) ->
      from conversation_metadata"
     " where username=%(LUser)s and conversation=%(Conversation)s and %(LServer)H")) of
     {selected,[<<>>]} ->
-      not_ok;
+      undefined;
     {selected,[{Type}]} ->
       Type;
     _ ->
-      not_ok
+      error
   end.
 
 update_retract(LServer,LUser,Conversation,NewVersion,Stanza)  ->
@@ -2005,6 +1939,39 @@ handle_sub_els(headline, [#delivery_x{ sub_els = [Message]}], From, To) ->
   ok;
 handle_sub_els(_Type, _SubEls, _From, _To) ->
   ok.
+
+%%%===================================================================
+%%% Check VoIP message
+%%%===================================================================
+check_voip_msg(#message{id = ID, type = chat,
+  from = From, to = To, meta = #{stanza_id := TS}} = Pkt)->
+  Propose = xmpp:get_subtag(Pkt, #jingle_propose{}),
+  Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
+  Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
+  {LUser, LServer, _ } = jid:tolower(To),
+  Conversation = jid:to_string(jid:remove_resource(From)),
+  if
+    is_record(Propose, jingle_propose) ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"call">>, LUser, LServer, Pkt]),
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
+      update_metainfo(call, LServer,LUser,Conversation,TS,false),
+      store_last_call(Pkt, From, LUser, LServer, TS),
+      true;
+    is_record(Accept, jingle_accept) ->
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Accept]),
+      update_metainfo(call, LServer,LUser,Conversation,TS,false),
+      delete_last_call(From, LUser, LServer),
+      true;
+    is_record(Reject, jingle_reject) ->
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Reject]),
+      update_metainfo(call, LServer,LUser,Conversation,TS,false),
+      delete_last_call(From, LUser, LServer),
+      true;
+    true ->
+      false
+  end.
 
 %%%===================================================================
 %%% Internal functions
@@ -2707,3 +2674,17 @@ change_last_msg(Pkt, Peer, LUser, LServer, Timestamp) ->
           end
       end
   end.
+
+update_table(unread_msg_counter) ->
+%%  For updating old installations
+%%  It works only when starting in debug shell
+  Transformer1 = fun({_V1, V2, V3 ,V4, V5, V6, V7}) -> {old_unread_msg_counter, V2, V3 ,V4, V5, V6, V7} end,
+  Transformer2 = fun({_V1, V2, V3 ,V4, V5, V6, V7}) -> {unread_msg_counter, V2, V3 ,V4, V5, V6, V7, V7} end,
+    {atomic, ok} = mnesia:transform_table(unread_msg_counter, Transformer1,
+      record_info(fields, old_unread_msg_counter),
+      old_unread_msg_counter),
+    {atomic, ok} = mnesia:transform_table(unread_msg_counter, Transformer2,
+      record_info(fields, unread_msg_counter),
+      unread_msg_counter);
+update_table(_) ->
+  ok.

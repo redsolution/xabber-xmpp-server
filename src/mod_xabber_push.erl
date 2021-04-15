@@ -280,7 +280,13 @@ process_iq(#iq{from = #jid{lserver = LServer} = JID,
 	?INFO_MSG("Push with encryption enabled for ~p",[jid:to_string(JID)]),
 	case enable(JID, PushJID, Node, XData, Cipher, EncryptionKey) of
 		ok ->
-			xmpp:make_iq_result(IQ);
+      El = try mod_http_iq:get_url(LServer) of
+             undefined -> undefined;
+             URL -> #oob_x{url = URL}
+           catch
+             _:_ -> undefined
+           end,
+			xmpp:make_iq_result(IQ,El);
 		{error, db_failure} ->
 			Txt = <<"Database failure">>,
 			xmpp:make_error(IQ, xmpp:err_internal_server_error(Txt, Lang));
@@ -840,19 +846,17 @@ make_notification(LServer, PushLJID, Node, XData, NotificationElement, HandleRes
 		sub_els = [PubSub]},
 	ejabberd_router:route_iq(IQ, HandleResponse).
 
-make_new_form(<<"outgoing">>) ->
-	Fields = [
-		#xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_XABBER_PUSH_INFO]},
-		#xdata_field{var = <<"type">>, values = [<<"message">>]},
-		#xdata_field{var = <<"outgoing">>, values = [<<"true">>]}
-	],
-	#xdata{type = result,
-		fields = Fields};
-make_new_form(Type) ->
+make_new_form(Type_) ->
+	{Out, Type} = case Type_ of
+                  <<"outgoing">> ->
+                    {[#xdata_field{var = <<"outgoing">>, values = [<<"true">>]}], <<"message">>};
+                  _ ->
+                    {[], Type_}
+                 end,
 	Fields = [
 		#xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_XABBER_PUSH_INFO]},
 		#xdata_field{var = <<"type">>, values = [Type]}
-	],
+	] ++ Out,
 	#xdata{type = result,
 		fields = Fields}.
 

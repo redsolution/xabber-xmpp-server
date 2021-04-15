@@ -28,7 +28,7 @@
 -behavior(gen_mod).
 %% API
 -compile([{parse_transform, ejabberd_sql_pt}]).
--export([check_token/3]).
+-export([check_token/3,user_token_info/2]).
 -export([strong_rand_bytes_proxy/1,disco_sm_features/5, check_session/1]).
 -export([
   stop/1,

@@ -103,11 +103,18 @@ handle_call(get_url, _From, State) ->
 handle_call(Req, _From, State) ->
   ?WARNING_MSG("unexpected call: ~p", [Req]),
   {reply, {error, badarg}, State}.
-
+handle_cast({vcard_request, Server, User, ReqID, JID, Caller}, #state{tab = Tab} = State) ->
+  make_session(User, Server, ReqID, Caller, Tab),
+  Query = #vcard_temp{},
+  IQ=#iq{type=get,
+    id = ReqID,
+    from = jid:make(User,Server,ReqID),
+    to = JID,
+    sub_els = [Query]},
+  ejabberd_router:route(IQ),
+  {noreply, State};
 handle_cast({mam_request, Server, User, ReqID, StanzaID, Remote, Caller}, #state{tab = Tab} = State) ->
-  ets:insert(Tab, {ReqID,Caller}),
-  SID = {p1_time_compat:unique_timestamp(), self()},
-  ejabberd_sm:open_session(SID, User, Server, ReqID, 0, [{getpush, true}]),
+  make_session(User, Server, ReqID, Caller, Tab),
   To = case Remote of
          undefined -> jid:make(User,Server,<<>>);
          R -> jid:from_string(R)
@@ -120,7 +127,7 @@ handle_cast({mam_request, Server, User, ReqID, StanzaID, Remote, Caller}, #state
   Query = #mam_query{id = ReqID, xmlns = <<"urn:xmpp:mam:2">>, xdata = XData},
   IQ=#iq{type=set,
     id = ReqID,
-    from =  jid:make(User,Server,ReqID),
+    from = jid:make(User,Server,ReqID),
     to = To,
     sub_els = [Query]},
   ejabberd_router:route(IQ),
@@ -136,22 +143,32 @@ handle_cast(_Request, State = #state{}) ->
   {stop, Reason :: term(), NewState :: #state{}}).
 handle_info({route, #presence{}}, State) ->
   {noreply, State};
-handle_info({route, #iq{type=result, to= #jid{luser = LUser, lserver = LServer, resource = Res}}}, State) ->
-  answer(State#state.tab, Res, stop),
-  delete(LUser, LServer, Res),
+handle_info({route, #iq{type = IQType}}, State) when IQType == set orelse  IQType == get ->
   {noreply, State};
-handle_info({route, #iq{type=error, to= #jid{luser = LUser, lserver = LServer, resource = Res}}}, State) ->
-  answer(State#state.tab, Res, error),
-  delete(LUser, LServer, Res),
+handle_info({route, #iq{to= #jid{resource = ReqID}} = Pkt},
+    #state{tab = Tab} = State) ->
+  answer(Tab, ReqID, Pkt),
+  delete_session(Tab, ReqID),
   {noreply, State};
-handle_info({route, #message{to= #jid{luser = LUser, lserver = LServer, resource = Res}} = Packet}, State) ->
-  answer(State#state.tab,Res, Packet),
-  delete(LUser, LServer, Res),
+handle_info({route, #message{to= #jid{resource = ReqID}, sub_els = [#mam_result{queryid = ReqID}]}= Packet}, State) ->
+  answer(State#state.tab,ReqID, Packet),
+  {noreply, State};
+handle_info({route, #message{to= #jid{resource = ReqID}, sub_els = [SubEl | _]}= Packet}, State) ->
+  try xmpp:decode(SubEl) of
+    #mam_result{queryid = ReqID} ->
+      answer(State#state.tab,ReqID, Packet)
+  catch
+    _:_ -> pass
+  end,
   {noreply, State};
 handle_info(_Info, State) ->
   {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{tab = Tab}) ->
+  Sessions = ets:tab2list(Tab),
+  ?INFO_MSG("~p",[Sessions]),
+  lists:foreach(fun({ReqID, _, {SID, User, Server}}) ->
+    ejabberd_sm:close_session(SID, User, Server, ReqID) end, Sessions),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -160,54 +177,64 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% HTTP API
 %%%===================================================================
-
-process([<<"archive">>] = Path, #request{method = 'GET', data = Data, q = Q, headers = Headers} = Req)->
+process(Path, #request{method = 'GET', data = Data, q = Q, headers = Headers} = Req) ->
   ?DEBUG("Request: ~p ~p ~p ~p~n",[Path,Data,Headers,Q]),
+  Host = get_host(Headers),
+  IsLoaded = gen_mod:is_loaded(Host, ?MODULE),
+  if
+    IsLoaded ->
+      case extract_auth(Req, Host) of
+        {error, unknown_host } ->
+          {400, [], [<<"unknown host">>]};
+        {error, Reason} ->
+          {401, [],[atom_to_binary(Reason, latin1)]};
+        Auth when is_map(Auth) ->
+          {User, Server, <<"">>} = maps:get(usr, Auth),
+          IsLoaded = gen_mod:is_loaded(Host, ?MODULE),
+          if
+            Server == Host ->
+              handle_reuest(Path, Req, User, Server);
+            true ->
+              {401, [],[<<"host mismatch">>]}
+          end
+      end;
+    true ->
+      {500, [],[<<"unknown host">>]}
+  end.
+
+handle_reuest([<<"archive">>], #request{q = Q}, User, Server) ->
   To = proplists:get_value(<<"by">>, Q),
   StanzaID = proplists:get_value(<<"id">>, Q),
-  Host = get_host(Headers),
-  case extract_auth(Req, Host) of
-    {error, unknown_host } ->
-      {400, [], [<<"unknown host">>]};
-    {error, Reason} ->
-      {401, [],[atom_to_binary(Reason, latin1)]};
-    Auth when is_map(Auth) ->
-      {User, Server, <<"">>} = maps:get(usr, Auth),
-      if
-        Server == Host ->
-          handle_archive(Server, User, StanzaID, To);
-        true ->
-          {401, [],[<<"host mismatch">>]}
-      end
-  end;
+  handle_archive(Server, User, StanzaID, To);
+handle_reuest([<<"vcard">>], #request{q = Q}, User, Server) ->
+  Target = proplists:get_value(<<"jid">>, Q, error),
+  handle_vcard(Server, User, Target);
+handle_reuest(Path, _Req, _User, _Server) ->
+  ?DEBUG("path no found: ~p~n", [Path]),
+  {404, [], [<<"path no found">>]}.
 
-process(Path, Request) ->
-  ?DEBUG("Bad Request: no handler ~p~n~p", [Path,Request]),
-  {400, [], [<<"no handler">>]}.
+handle_vcard(_Server, _User, error) ->
+  {400, [], [<<"bad jid">>]};
+handle_vcard(Server, User, Target) when is_binary(Target) ->
+  JID = jid:from_string(Target),
+  handle_vcard(Server, User, JID);
+handle_vcard(Server, User, JID) ->
+  ReqID = randoms:get_string(),
+  Proc = gen_mod:get_module_proc(Server, ?MODULE),
+  gen_server:cast(Proc, {vcard_request,Server, User, ReqID, JID, self()}),
+  loop(ReqID).
 
 handle_archive(_LServer, _LUser, undefined, _To) ->
   {400, [], [<<"no stanza id">>]};
 handle_archive(LServer, LUser, StanzaID, To) ->
   ReqID = randoms:get_string(),
-  activate(LServer, LUser, ReqID, StanzaID, To, self()),
-  case loop(ReqID) of
-    #message{} = Pkt ->
-      {200, [],[fxml:element_to_binary(xmpp:encode(Pkt))]};
-    _ ->
-      {404, [],[]}
-  end.
+  Proc = gen_mod:get_module_proc(LServer, ?MODULE),
+  gen_server:cast(Proc, {mam_request,LServer,LUser,ReqID,StanzaID,To, self()}),
+  loop(ReqID).
 
-loop(ReqID) ->
-  receive
-    {mam_result, ReqID, error} ->
-      error;
-    {mam_result, ReqID, stop} ->
-      stop;
-    {mam_result, ReqID, Pkt} ->
-      Pkt
-  after ?TIMEOUT ->
-    timeout
-  end.
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 
 extract_auth(_, undefined) ->
   {error, unknown_host};
@@ -244,31 +271,39 @@ extract_auth(#request{auth = HTTPAuth}, Host) ->
 extract_auth(_,_) ->
   {error, invalid_auth}.
 
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
+make_session(User, Server, ReqID, Caller, Tab)->
+  SID = {p1_time_compat:unique_timestamp(), self()},
+  ets:insert(Tab, {ReqID,Caller, {SID, User, Server}}),
+  ejabberd_sm:open_session(SID, User, Server, ReqID, 0, [{http_iq, true}]).
 
 
-activate(Server, User, ReqID, StanzaID, To, Caller) ->
-  Proc = gen_mod:get_module_proc(Server, ?MODULE),
-  gen_server:cast(Proc, {mam_request,Server,User,ReqID,StanzaID,To, Caller}).
-
-delete(User, Server, Res) ->
-  case ejabberd_sm:get_session_sid(User, Server, Res) of
-    none ->
-      ok;
-    SID ->
-      ejabberd_sm:close_session(SID, User, Server, Res)
+delete_session(Tab, ReqID) ->
+  case ets:lookup(Tab,ReqID) of
+    [{_, _, {SID, User, Server}}] ->
+      ejabberd_sm:close_session(SID, User, Server, ReqID),
+      ets:delete(Tab, ReqID);
+    _ -> pass
   end.
 
 answer(Tab, ReqID, Pkt) ->
+  ?INFO_MSG("Pkt ~p~n",[Pkt]),
   case ets:lookup(Tab,ReqID) of
-    [{Res, Pid}] ->
-      Pid ! {mam_result, Res, Pkt},
-      ets:delete(Tab, ReqID);
-    _ ->
-      pass
+    [{ReqID, Pid, _ }] -> Pid ! {request_result, ReqID, Pkt};
+    _ -> pass
   end.
+
+loop(ReqID) ->
+  loop(ReqID, []).
+
+loop(ReqID, Acc) ->
+  receive
+    {request_result, ReqID, #message{} = Pkt} ->
+      loop(ReqID, Acc ++ [Pkt]);
+    {request_result, ReqID, #iq{} = Pkt} ->
+      {200, [],[make_string(Acc ++ [Pkt])]}
+  after ?TIMEOUT ->
+    {408, [],[<<"Request Timeout">>]}
+end.
 
 get_host(Headers) ->
   Host = proplists:get_value(<<"Xmpp-Domain">>, Headers),
@@ -276,6 +311,9 @@ get_host(Headers) ->
   catch
     _:_ -> undefined
   end.
+
+make_string(Values) ->
+  list_to_binary(lists:map(fun(X) -> fxml:element_to_binary(xmpp:encode(X)) end, Values)).
 
 %%%===================================================================
 %%% API

@@ -553,6 +553,9 @@ handle_call(Request, From, #{lserver := LServer} = State) ->
 handle_cast(Msg, #{lserver := LServer} = State) ->
     ejabberd_hooks:run_fold(c2s_handle_cast, LServer, State, [Msg]).
 
+handle_info({timeout, _TRef, {broadcast_presence_available, OState, Pres, FromUnavailable}}, State) ->
+    broadcast_presence_available(OState, Pres, FromUnavailable),
+    State;
 handle_info(Info, #{lserver := LServer} = State) ->
     ejabberd_hooks:run_fold(c2s_handle_info, LServer, State, [Info]).
 
@@ -720,7 +723,8 @@ process_self_presence(#{lserver := LServer} = State,
     State2 = State1#{pres_last => Pres1,
 		     pres_timestamp => p1_time_compat:timestamp()},
     FromUnavailable = PreviousPres == undefined,
-    broadcast_presence_available(State2, Pres1, FromUnavailable);
+    erlang:start_timer(1000, self(),{broadcast_presence_available,State2, Pres1, FromUnavailable}),
+    State2;
 process_self_presence(State, _Pres) ->
     State.
 

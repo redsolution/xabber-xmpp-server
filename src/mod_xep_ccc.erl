@@ -318,13 +318,15 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
   IsChat = xmpp:get_subtag(PktNew, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   IsChannel = xmpp:get_subtag(PktNew, #channel_x{xmlns = ?NS_CHANNELS}),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
-  case IsChat of
-    _ when IsChat =/= false ->
-      update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,IsChat);
-    _ when IsChannel =/= false ->
-      update_metainfo(<<"channel">>, LServer,LUser,Conversation,IsChannel);
-    _ ->
-      update_metainfo(<<"chat">>, LServer,LUser,Conversation,<<>>)
+  {NewType, X} = if
+                  IsChat =/= false -> {<<"groupchat">>, IsChat} ;
+                  IsChannel =/= false -> {<<"channel">>, IsChannel};
+                  true -> {<<"chat">>, <<>>}
+                end,
+  CurrentType = get_conversation_type(LServer,LUser,Conversation),
+  if
+    NewType =/= CurrentType -> update_metainfo(NewType, LServer,LUser,Conversation,X);
+    true -> ok
   end,
   {noreply, State};
 handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
@@ -1419,14 +1421,14 @@ update_metainfo(<<"groupchat">>, LServer,LUser,Conversation,X) ->
       ejabberd_sql:sql_query(
         LServer,
         ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d,  incognito = 'true'
-    where username=%(LUser)s and conversation=%(Conversation)s and %(LServer)H")
+    where username=%(LUser)s and conversation=%(Conversation)s and type != %(Type)s and %(LServer)H")
       );
     _ when Parent =/= undefined ->
       TS = time_now(),
       ejabberd_sql:sql_query(
         LServer,
         ?SQL("update conversation_metadata set type = %(Type)s, metadata_updated_at = %(TS)d,  p2p = 'true'
-    where username=%(LUser)s and conversation=%(Conversation)s and %(LServer)H")
+    where username=%(LUser)s and conversation=%(Conversation)s and type != %(Type)s and %(LServer)H")
       );
     _ ->
       TS = time_now(),

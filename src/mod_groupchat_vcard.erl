@@ -1280,29 +1280,81 @@ publish_avatar(Chat, Data, FileName) when is_binary(Chat) ->
   publish_avatar(jid:from_string(Chat), Data, FileName);
 
 publish_avatar(#jid{lserver = Server} = Chat, Data, FileName)->
-  Path = filename:absname(gen_mod:get_module_opt(Server,mod_http_fileserver,docroot)),
-  FullPath = filename:join(Path,FileName),
-  file:write_file(FullPath, Data),
+  JIDinURL = gen_mod:get_module_opt(Server,mod_http_upload,jid_in_url),
+  UserStr = make_user_string(Chat, JIDinURL),
+  DocRoot = filename:absname(gen_mod:get_module_opt(Server,mod_http_upload,docroot)),
+  AvatarDir = <<DocRoot/binary,$/,UserStr/binary,$/,"avatar">>,
+  FullPath = filename:join(AvatarDir,FileName),
+  case do_store_file(FullPath, Data, undefined, undefined) of
+    ok ->
+      UrlOpt = gen_mod:get_module_opt(Server,mod_http_upload,get_url),
+      Url = misc:expand_keyword(<<"@HOST@">>, str:strip(UrlOpt, right, $/), Server),
+      AvatarUrl = <<Url/binary, "/",UserStr/binary,$/,"avatar",$/,FileName/binary>>,
+      Size = byte_size(Data),
+      HashID = get_hash(Data),
+      Type = lists:last(binary:split(FileName,<<".">>)),
+      ImageType = <<"image/",Type/binary>>,
 
-  Url = mod_groupchat_vcard:get_url(Server),
-  AvatarUrl = <<Url/binary, "/", FileName/binary>>,
+      AvatarInfo = #avatar_info{type = ImageType, bytes = Size, id = HashID, url = AvatarUrl},
+      AvatarMeta = #avatar_meta{info = [AvatarInfo]},
+      MetaItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarMeta)]},
+      PublishMetaData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_METADATA, items = [MetaItems]}},
 
-  Size = byte_size(Data),
-  HashID = mod_groupchat_vcard:get_hash(Data),
-  Type = lists:last(binary:split(FileName,<<".">>)),
-  ImageType = <<"image/",Type/binary>>,
-
-  AvatarInfo = #avatar_info{type = ImageType, bytes = Size, id = HashID, url = AvatarUrl},
-  AvatarMeta = #avatar_meta{info = [AvatarInfo]},
-  MetaItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarMeta)]},
-  PublishMetaData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_METADATA, items = [MetaItems]}},
-  IQMeta = #iq{from = jid:replace_resource(Chat,<<"Group">>),
-    to = jid:replace_resource(Chat,<<>>),
-    id = randoms:get_string(),
-    type = set,
-    sub_els = [PublishMetaData],
-    meta = #{}},
-  mod_pubsub:iq_sm(IQMeta);
+      IQMeta = #iq{from = jid:replace_resource(Chat,<<"Group">>),
+        to = jid:replace_resource(Chat,<<>>),
+        id = randoms:get_string(),
+        type = set,
+        sub_els = [PublishMetaData],
+        meta = #{}},
+      mod_pubsub:iq_sm(IQMeta);
+    Err ->
+      Err
+  end;
 
 publish_avatar(_, _, _) ->
   ok.
+
+%% block from mod_http_upload
+
+-spec make_user_string(jid(), sha1 | node) -> binary().
+make_user_string(#jid{luser = U, lserver = S}, sha1) ->
+  str:sha(<<U/binary, $@, S/binary>>);
+make_user_string(#jid{luser = U}, node) ->
+  replace_special_chars(U).
+
+-spec replace_special_chars(binary()) -> binary().
+replace_special_chars(S) ->
+  re:replace(S, <<"[^\\p{Xan}_.-]">>, <<$_>>,
+    [unicode, global, {return, binary}]).
+
+-spec do_store_file(file:filename_all(), binary(),
+    integer() | undefined,
+    integer() | undefined)
+      -> ok | {error, term()}.
+do_store_file(Path, Data, FileMode, DirMode) ->
+  try
+    ok = filelib:ensure_dir(Path),
+    {ok, Io} = file:open(Path, [write, exclusive, raw]),
+    Ok = file:write(Io, Data),
+    ok = file:close(Io),
+    if is_integer(FileMode) ->
+      ok = file:change_mode(Path, FileMode);
+      FileMode == undefined ->
+        ok
+    end,
+    if is_integer(DirMode) ->
+      RandDir = filename:dirname(Path),
+      UserDir = filename:dirname(RandDir),
+      ok = file:change_mode(RandDir, DirMode),
+      ok = file:change_mode(UserDir, DirMode);
+      DirMode == undefined ->
+        ok
+    end,
+    ok = Ok % Raise an exception if file:write/2 failed.
+  catch
+    _:{badmatch, {error, Error}} ->
+      {error, Error};
+    _:Error ->
+      {error, Error}
+  end.
+%% end block

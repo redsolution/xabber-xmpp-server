@@ -2575,29 +2575,20 @@ maybe_change_last_msg(LServer, LUser, ConversationJID, Replace) ->
       #xabber_replace{ xabber_replace_message = XabberReplaceMessage} = Replace,
       #xabber_replace_message{body = Text, sub_els = NewEls} = XabberReplaceMessage,
       MD = xmpp:decode(M),
-      From = MD#message.from,
-      MessageID = MD#message.id,
-      To = MD#message.to,
-      Meta = MD#message.meta,
-      Type = MD#message.type,
       Sub = MD#message.sub_els,
       Body = MD#message.body,
       OldText = xmpp:get_text(Body),
-      X = xmpp:get_subtag(MD, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-      Reference = xmpp:get_subtag(X, #xmppreference{}),
-      NewSubFiltered = mod_groupchat_retract:filter_els(NewEls),
-      UserCard = xmpp:get_subtag(Reference, #xabbergroupchat_user_card{}),
-      UserChoose = mod_groupchat_users:choose_name(UserCard),
-      Username = <<UserChoose/binary, ":", "\n">>,
-      Length = mod_groupchat_messages:binary_length(Username),
-      NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [UserCard], 'begin' = 0, 'end' = Length}]},
-      Els1 = mod_groupchat_retract:strip_els(Sub),
-      NewSubRefShift = mod_groupchat_retract:shift_references(NewSubFiltered, Length),
-      Els2 = Els1 ++ [NewX] ++ NewSubRefShift,
+      Sub1 = lists:filter(fun(El) ->
+        case xmpp:get_ns(El) of
+          ?NS_REFERENCE_0 -> false;
+          ?NS_GROUPCHAT -> false;
+          _ -> true
+        end end, Sub),
+      Els1 = Sub1 ++ NewEls,
       NewBody = [#text{lang = <<>>,data = Text}],
       R = #replaced{stamp = erlang:timestamp(), body = OldText},
-      Els3 = [R|Els2],
-      MessageDecoded = #message{id = MessageID, type = Type, from = From, to = To, sub_els = Els3, meta = Meta, body = NewBody},
+      Els2 = [R|Els1],
+      MessageDecoded = MD#message{sub_els = Els2, body = NewBody},
       change_last_msg(MessageDecoded, ConversationJID, LUser, LServer,ReplaceID)
   end.
 

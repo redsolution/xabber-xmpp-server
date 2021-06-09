@@ -231,6 +231,12 @@ check_permissions(Media,User,Chat) ->
 process_message(Message) ->
   do_route(Message).
 
+
+send_received_and_message(Pkt, From, To, OriginID, Users) ->
+  {Pkt2, _State2} = mod_mam:user_send_packet({Pkt,#{jid => To}}),
+  send_received(Pkt2,From,OriginID,To),
+  send_message(Pkt2,Users,To).
+
 send_message(Message,[],From) ->
   mod_groupchat_presence:send_message_to_index(From, Message),
   ok;
@@ -476,40 +482,34 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
   NewEls = [Reference|Els2],
   ToArchived = jid:remove_resource(From),
   ArchiveMsg = message_for_archive(Id,Type,NewBody,NewEls,Meta,From,ToArchived),
-  OriginID = get_origin_id(xmpp:get_subtag(ArchiveMsg, #origin_id{})),
+  OriginID = case get_origin_id(xmpp:get_subtag(ArchiveMsg, #origin_id{})) of
+               false ->
+                 Id;
+               Val -> Val
+             end,
   Retry = xmpp:get_subtag(ArchiveMsg, #delivery_retry{}),
+  Pkt0 = strip_stanza_id(ArchiveMsg,Server),
+  Pkt1 = mod_unique:remove_request(Pkt0,Retry),
   case Retry of
-    _ when Retry /= false andalso OriginID /= false ->
-      case mod_unique:get_message(Server, LUser, OriginID) of
-            #message{} = Found ->
-              send_received(Found, From, OriginID,To);
-        _ ->
-          Pkt0 = strip_stanza_id(ArchiveMsg,Server),
-          Pkt1 = mod_unique:remove_request(Pkt0,Retry),
-          {Pkt2, _State2} = ejabberd_hooks:run_fold(
-            user_send_packet, Server, {Pkt1, #{jid => To}}, []),
-          case Retry of
-            false ->
-              send_message(Pkt2,Users,To);
-            _ when OriginID /= false ->
-              #message{meta = #{stanza_id := _StanzaID}} = Pkt2,
-              send_received(Pkt2,From,OriginID,To),
-              send_message(Pkt2,Users,To)
-          end
-      end;
+    false ->
+      send_received_and_message(Pkt1, From, To, OriginID, Users);
     _ ->
-      Pkt0 = strip_stanza_id(ArchiveMsg,Server),
-      Pkt1 = mod_unique:remove_request(Pkt0,Retry),
-      {Pkt2, _State2} = ejabberd_hooks:run_fold(
-        user_send_packet, Server, {Pkt1, #{jid => To}}, []),
-      ejabberd_hooks:run(groupchat_send_message,Server,[From,To,Pkt2]),
-      case Retry of
-        _ when OriginID =/= false ->
-          #message{meta = #{stanza_id := _StanzaID}} = Pkt2,
-          send_received(Pkt2,From,OriginID,To),
-          send_message(Pkt2,Users,To);
+      case mod_unique:get_message(Server, LUser, OriginID) of
+        #message{} = Found ->
+          FoundMeta = Found#message.meta,
+          StanzaID = integer_to_binary(maps:get('stanza_id', FoundMeta)),
+          Message =  case mod_mam_sql:select(Server, To, To,[{'stanza-id',StanzaID}], undefined, chat) of
+                       {[{_, _, Forwarded}], true, 1} ->
+                         Message1 = hd(Forwarded#forwarded.sub_els),
+                         Message2 = Message1#message{meta = FoundMeta},
+                         xmpp:set_from_to(Message2,From,To);
+                       _ ->
+                         %%  message not found in archive
+                         Found
+                     end,
+          send_received(Message, From, OriginID,To);
         _ ->
-          send_message(Pkt2,Users,To)
+         send_received_and_message(Pkt1, From, To, OriginID, Users)
       end
   end.
 

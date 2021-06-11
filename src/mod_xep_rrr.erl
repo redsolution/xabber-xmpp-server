@@ -843,23 +843,7 @@ message_exist(_Acc,_RewriteAsk,LUser,LServer,StanzaID, _Version)->
   end.
 
 delete_message(_Acc,_RewriteAsk,LUser,LServer,StanzaID, _Version) ->
-  NextID = select_next_id(LServer,StanzaID),
-  case NextID of
-    [] ->
-      delete_message(LServer,LUser,StanzaID);
-    _ ->
-      PreviousID = select_previous_id(LServer,StanzaID),
-      delete_message(LServer,LUser,StanzaID),
-      ejabberd_sql:sql_query(
-        LServer,
-        ?SQL_INSERT(
-          "previous_id",
-          [ "id=%(PreviousID)d",
-            "server_host=%(LServer)s",
-            "stanza_id=%(NextID)d"
-          ])),
-      ok
-  end.
+  delete_message(LServer,LUser,StanzaID).
 
 replace_message(XML, RewriteAsk, LUser,LServer,StanzaID, _Version) ->
   #xabber_replace{xabber_replace_message = ReplaceMessage} = RewriteAsk,
@@ -998,32 +982,6 @@ insert_event(LServer,Username,Txt,Version,Type) ->
         "version=%(Version)d"
       ])).
 
-select_previous_id(Server,ID) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(id)d from previous_id"
-    " where stanza_id=%(ID)d and %(Server)H")) of
-    {selected,[<<>>]} ->
-      [];
-    {selected,[{Query}]} ->
-      Query;
-    _ ->
-      []
-  end.
-
-select_next_id(Server,ID) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(stanza_id)d from previous_id"
-    " where id=%(ID)d and %(Server)H")) of
-    {selected,[<<>>]} ->
-      [];
-    {selected,[{Query}]} ->
-      Query;
-    _ ->
-      []
-  end.
-
 delete_message(LServer,LUser,StanzaID) ->
   case ejabberd_sql:sql_query(
     LServer,
@@ -1092,6 +1050,8 @@ clean_tables() ->
 
 %% save foreign stanza-id
 
+save_foreign_id_and_jid(_,_,F,_,L) when F == undefined orelse L == undefined ->
+  skip;
 save_foreign_id_and_jid(LServer,FUsername,FID,OurUser,OurID) ->
   ejabberd_sql:sql_query(
     LServer,
@@ -1117,25 +1077,33 @@ get_our_stanza_id(LServer,FUsername,FID) ->
       not_ok
   end.
 
+save_id_in_conversation({#message{body = []} = Pkt, C2SState}) ->
+  {Pkt, C2SState};
 save_id_in_conversation({#message{from = FJID, to = LJID} = Pkt, C2SState}) ->
   PktGrpOnly = filter_all_exept_groupchat(Pkt),
   Reference = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   SystemMessage = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
   if
     Reference == false andalso SystemMessage == false ->
-      LJIDStr = jid:to_string(jid:remove_resource(LJID)),
-      FJIDStr = jid:to_string(jid:remove_resource(FJID)),
-      IDs = lists:filtermap(fun
-                              (#stanza_id{id = ID, by = By}) when By == FJIDStr-> {true, {fid,ID}};
-                              (#stanza_id{id = ID, by = By}) when By == LJIDStr-> {true, {lid,ID}};
-                              (_) -> false  end, xmpp:get_els(Pkt)),
+      LJIDBare = jid:remove_resource(LJID),
+      FJIDBare = jid:remove_resource(FJID),
+      IDs = lists:filtermap(fun(E) ->
+        try xmpp:decode(E) of
+          #stanza_id{id = ID, by = By} when By == FJIDBare -> {true, {fid,ID}};
+          #stanza_id{id = ID, by = By} when By == LJIDBare -> {true, {lid,ID}};
+          _ -> false
+        catch _:{xmpp_codec, _Why} ->
+            false
+        end  end, xmpp:get_els(Pkt)),
       LServer = LJID#jid.lserver,
       FID = proplists:get_value(fid, IDs),
       LID = proplists:get_value(lid, IDs),
-      save_foreign_id_and_jid(LServer,FJIDStr,FID,LJIDStr,LID);
+      save_foreign_id_and_jid(LServer,jid:to_string(FJIDBare),FID,jid:to_string(LJIDBare),LID);
     true ->
       pass
   end,
+  {Pkt, C2SState};
+save_id_in_conversation({Pkt, C2SState}) ->
   {Pkt, C2SState}.
 
 create_replace() ->

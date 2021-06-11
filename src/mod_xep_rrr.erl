@@ -47,7 +47,7 @@
   delete_all_incoming_messages/6,
   store_event/6, store_replace_event/6,
   notificate/6, notificate_replace/6,
-  save_id_in_conversation/4,
+  save_id_in_conversation/1,
   get_version/3,
   message_type/2
 ]).
@@ -233,8 +233,8 @@ disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
 %%--------------------------------------------------------------------
 -spec register_hooks(binary()) -> ok.
 register_hooks(Host) ->
-  ejabberd_hooks:add(save_previous_id,
-    Host, ?MODULE, save_id_in_conversation, 50),
+  ejabberd_hooks:add(user_receive_packet,
+    Host, ?MODULE, save_id_in_conversation, 100),
   ejabberd_hooks:add(s2s_receive_packet, Host, ?MODULE,
     check_iq, 30),
   %% add retract rewrite message hooks
@@ -281,8 +281,8 @@ register_hooks(Host) ->
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
-  ejabberd_hooks:delete(save_previous_id,
-    Host, ?MODULE, save_id_in_conversation, 50),
+  ejabberd_hooks:delete(user_receive_packet,
+    Host, ?MODULE, save_id_in_conversation, 100),
   ejabberd_hooks:delete(s2s_in_handle_call, Host, ?MODULE,
     check_iq, 10),
   %% delete retract one message hooks
@@ -1117,23 +1117,26 @@ get_our_stanza_id(LServer,FUsername,FID) ->
       not_ok
   end.
 
--spec save_id_in_conversation({ok, message()}, binary(),
-    binary(), null | binary()) -> {ok, message()} | any().
-save_id_in_conversation({ok, OriginPkt}, LServer, StanzaId, _PreviousId) ->
-  A = xmpp:get_subtag(OriginPkt, #stanza_id{}),
-  PktGrpOnly = filter_all_exept_groupchat(OriginPkt),
+save_id_in_conversation({#message{from = FJID, to = LJID} = Pkt, C2SState}) ->
+  PktGrpOnly = filter_all_exept_groupchat(Pkt),
   Reference = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   SystemMessage = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
-  case A of
-    #stanza_id{id = FID, by = JID} when Reference == false andalso SystemMessage == false ->
-      To = xmpp:get_to(OriginPkt),
-      FUsername = jid:to_string(jid:remove_resource(JID)),
-      OurUser = jid:to_string(jid:remove_resource(To)),
-      save_foreign_id_and_jid(LServer,FUsername,FID,OurUser,StanzaId);
-    _ ->
-      ok
+  if
+    Reference == false andalso SystemMessage == false ->
+      LJIDStr = jid:to_string(jid:remove_resource(LJID)),
+      FJIDStr = jid:to_string(jid:remove_resource(FJID)),
+      IDs = lists:filtermap(fun
+                              (#stanza_id{id = ID, by = By}) when By == FJIDStr-> {true, {fid,ID}};
+                              (#stanza_id{id = ID, by = By}) when By == LJIDStr-> {true, {lid,ID}};
+                              (_) -> false  end, xmpp:get_els(Pkt)),
+      LServer = LJID#jid.lserver,
+      FID = proplists:get_value(fid, IDs),
+      LID = proplists:get_value(lid, IDs),
+      save_foreign_id_and_jid(LServer,FJIDStr,FID,LJIDStr,LID);
+    true ->
+      pass
   end,
-  {ok, OriginPkt}.
+  {Pkt, C2SState}.
 
 create_replace() ->
   #replaced{stamp = erlang:timestamp()}.

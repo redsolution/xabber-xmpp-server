@@ -244,27 +244,7 @@ check_if_message_pinned(_Acc, {Server,_User,Chat,ID,_X,_V}) ->
   end.
 
 delete_message(_Acc, {Server,_User,Chat,ID,_X,_V}) ->
-  NextID = select_next_id(Server,ID),
-  PreviousID = select_previous_id(Server,ID),
-  case NextID of
-    [] ->
-      delete_message_from_archive(Server,Chat,ID),
-      ok;
-    _ when NextID =/= [] andalso PreviousID =/= [] ->
-      delete_message_from_archive(Server,Chat,ID),
-      ejabberd_sql:sql_query(
-        Server,
-        ?SQL_INSERT(
-          "previous_id",
-          [ "id=%(PreviousID)d",
-            "server_host=%(Server)s",
-            "stanza_id=%(NextID)d"
-          ])),
-      ok;
-    _ ->
-      delete_message_from_archive(Server,Chat,ID),
-      ok
-  end.
+  delete_message_from_archive(Server,Chat,ID).
 
 store_event(_Acc, {Server,_User,Chat,_ID,Retract,Version}) ->
   XR = xmpp:encode(Retract),
@@ -396,32 +376,6 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{body = NewText, sub_els = Els2},
   NewReplace = Replace#xabber_replace{xabber_replace_message = NewXabberReplaceMessage},
   NewReplace.
-
-select_previous_id(Server,ID) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(id)d from previous_id"
-    " where stanza_id=%(ID)d and %(Server)H")) of
-    {selected,[<<>>]} ->
-      [];
-    {selected,[{Query}]} ->
-      Query;
-    _ ->
-      []
-  end.
-
-select_next_id(Server,ID) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(stanza_id)d from previous_id"
-    " where id=%(ID)d and %(Server)H")) of
-    {selected,[<<>>]} ->
-      [];
-    {selected,[{Query}]} ->
-      Query;
-    _ ->
-      []
-  end.
 
 get_owner_of_message(Server,Chat,ID) ->
   ChatJID = jid:from_string(Chat),

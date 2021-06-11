@@ -998,21 +998,11 @@ store(OriginPkt, Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, Dir) ->
     ID = get_stanza_id(Pkt),
     El = xmpp:encode(Pkt),
     Mod = gen_mod:db_mod(LServer, ?MODULE),
-    case ejabberd_hooks:run_fold(
-            get_previous_id, LServer,
-            unknown, [LServer, {LUser, LHost}, Type, Peer]) of
-        error ->
-            error;
-        PreviousId ->
-            case Mod:store(El, LServer, {LUser, LHost},
-                           Type, Peer, Nick, Dir, ID) of
-                ok ->
-                    ejabberd_hooks:run_fold(
-                            save_previous_id, LServer,
-                            {ok, OriginPkt}, [LServer, ID, PreviousId]);
-                Err ->
-                    Err
-            end
+    case Mod:store(El, LServer, {LUser, LHost}, Type, Peer, Nick, Dir, ID) of
+      ok ->
+        {ok, OriginPkt};
+      Err ->
+        Err
     end.
 
 write_prefs(LUser, LServer, Host, Default, Always, Never) ->

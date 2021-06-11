@@ -259,21 +259,6 @@ get_prefs(LUser, LServer) ->
 	    error
     end.
 
-make_archive_el([TS, XML, PeerBin, Kind, Nick, PreviousId],
-                MsgType, JidRequestor, JidArchive) ->
-    case make_archive_el(TS, XML, PeerBin, Kind, Nick,
-                         MsgType, JidRequestor, JidArchive) of
-	{ok, ArchiveElement} ->
-            #forwarded{sub_els = [Message]} = ArchiveElement,
-            Previous = mod_previous:create_previous_id(PreviousId),
-            NewEls = [Previous | xmpp:get_els(Message)],
-            NewMessage = xmpp:set_els(Message, NewEls),
-            NewArchiveElement = ArchiveElement#forwarded{sub_els = [NewMessage]},
-	    {ok, NewArchiveElement, TS};
-	{error, _} ->
-	    error
-    end.
-
 select(LServer, JidRequestor, #jid{luser = LUser} = JidArchive,
        MAMQuery, RSM, MsgType) ->
     User = case MsgType of
@@ -302,10 +287,10 @@ select(LServer, JidRequestor, #jid{luser = LUser} = JidArchive,
 			{Res, true}
 		end,
 	    {lists:flatmap(
-	       fun(Row) ->
-		       case make_archive_el(Row,
-			      MsgType, JidRequestor, JidArchive) of
-			   {ok, El, TS} ->
+	       fun([TS, XML, PeerBin, Kind, Nick]) ->
+		       case make_archive_el(TS, XML, PeerBin, Kind, Nick,
+             MsgType, JidRequestor, JidArchive) of
+			   {ok, El} ->
 			       [{TS, binary_to_integer(TS), El}];
 			   error ->
 			       []
@@ -390,7 +375,6 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
     End = proplists:get_value('end', MAMQuery),
     With = proplists:get_value(with, MAMQuery),
     WithText = proplists:get_value(withtext, MAMQuery),
-    Last = proplists:get_value(last, MAMQuery),
     FilterAudio = proplists:get_value(filter_audio, MAMQuery),
     FilterVideo = proplists:get_value(filter_video, MAMQuery),
     FilterDocument = proplists:get_value(filter_document, MAMQuery),
@@ -401,22 +385,6 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
     FilterImage = proplists:get_value(filter_image, MAMQuery),
     {Max, Direction, ID} = get_max_direction_id(RSM),
     {ODBCType, Escape} = get_odbctype_and_escape(LServer),
-    DistinctColumn = <<"bare_peer">>,
-    DistinctClause = if Last ->
-        [<<" DISTINCT ON (">>, DistinctColumn, <<")">>];
-                       true ->
-                         []
-                           end,
-    DistinctOrderByColumn = if Last ->
-      [<<" ">>, DistinctColumn, <<",">>];
-                              true ->
-                                []
-                                  end,
-    CountExpression = if Last ->
-      [<<"DISTINCT ">>, DistinctColumn];
-                        true ->
-                          <<"*">>
-                          end,
     LimitClause = if is_integer(Max), Max >= 0, ODBCType /= mssql ->
 			  [<<" limit ">>, integer_to_binary(Max+1)];
 		     true ->
@@ -547,47 +515,42 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
            end,
     SUser = Escape(User),
     SServer = Escape(LServer),
-    {Columns, From} = mod_previous:get_archive_columns_and_from(get_columns_and_from()),
     Query =
         case ejabberd_sql:use_new_schema() of
             true ->
-                [<<"SELECT ">>, TopClause, DistinctClause, Columns, From,
-                 <<" WHERE username='">>,
-                 SUser, <<"' and archive.server_host='">>,
+                [<<"SELECT ">>, TopClause,
+                 <<" timestamp, xml, peer, kind, nick"
+                 " FROM archive WHERE username='">>,
+                 SUser, <<"' and server_host='">>,
                  SServer, <<"'">>, WithClause, WithTextClause,
                  StartClause, EndClause, PageClause, StanzaIdClause, ImageClause,
                   AudioClause, VideoClause, VoiceClause, DocumentClause, StickerClause, GeoClause, EncryptedClause];
             false ->
-                [<<"SELECT ">>, TopClause, DistinctClause, Columns, From,
-                 <<" WHERE username='">>,
+                [<<"SELECT ">>, TopClause,
+                  <<" timestamp, xml, peer, kind, nick"
+                  " FROM archive WHERE username='">>,
                  SUser, <<"'">>, WithClause, WithTextClause,
                  StartClause, EndClause, PageClause, StanzaIdClause, ImageClause,
                   AudioClause, VideoClause, VoiceClause, DocumentClause, StickerClause, GeoClause, EncryptedClause]
         end,
 
     QueryPage =
-	case {Direction, Last} of
-    {before, _} ->
-		% ID can be empty because of
-		% XEP-0059: Result Set Management
-		% 2.5 Requesting the Last Page in a Result Set
-		[<<"SELECT * FROM (">>, Query,
-		 <<" ORDER BY ">>, DistinctOrderByColumn,
-		 <<"timestamp + 0 DESC ">>,
-		 LimitClause, <<") AS t ORDER BY timestamp ASC;">>];
-    {_, true} ->
-      [<<"SELECT * FROM (">>, Query,
-        <<" ORDER BY ">>, DistinctOrderByColumn,
-        <<" timestamp + 0 DESC) AS t ORDER BY timestamp ASC ">>,
-        LimitClause, <<";">>];
-	    _ ->
-		[Query, <<" ORDER BY timestamp ASC ">>,
-		 LimitClause, <<";">>]
-	end,
+      case Direction of
+        before ->
+          % ID can be empty because of
+          % XEP-0059: Result Set Management
+          % 2.5 Requesting the Last Page in a Result Set
+          [<<"SELECT timestamp, xml, peer, kind, nick FROM (">>, Query,
+            <<" ORDER BY timestamp DESC ">>,
+            LimitClause, <<") AS t ORDER BY timestamp ASC;">>];
+        _ ->
+          [Query, <<" ORDER BY timestamp ASC ">>,
+            LimitClause, <<";">>]
+      end,
     case ejabberd_sql:use_new_schema() of
         true ->
             {QueryPage,
-             [<<"SELECT COUNT(">>, CountExpression,<<") FROM archive WHERE username='">>,
+             [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
               SUser, <<"' and server_host='">>,
               SServer, <<"'">>, WithClause, WithTextClause,
               StartClause, EndClause, StanzaIdClause, ImageClause,
@@ -595,7 +558,7 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
                StickerClause, GeoClause, EncryptedClause, <<";">>]};
         false ->
             {QueryPage,
-             [<<"SELECT COUNT(">>, CountExpression,<<") FROM archive WHERE username='">>,
+             [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
               SUser, <<"'">>, WithClause, WithTextClause,
               StartClause, EndClause, StanzaIdClause, ImageClause,
                AudioClause, VideoClause, VoiceClause, DocumentClause,

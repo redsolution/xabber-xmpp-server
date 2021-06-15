@@ -383,7 +383,7 @@ extract_path_query(#state{request_method = Method,
 			  request_path = {abs_path, Path}} = State)
     when Method =:= 'GET' orelse
 	   Method =:= 'HEAD' orelse
-	     Method =:= 'DELETE' orelse Method =:= 'OPTIONS' ->
+	     Method =:= 'OPTIONS' ->
     case catch url_decode_q_split(Path) of
 	{'EXIT', _} -> {State, false};
 	{NPath, Query} ->
@@ -400,7 +400,7 @@ extract_path_query(#state{request_method = Method,
 			  request_content_length = Len,
 			  sockmod = _SockMod,
 			  socket = _Socket} = State)
-    when (Method =:= 'POST' orelse Method =:= 'PUT') andalso
+    when (Method =:= 'POST' orelse Method =:= 'PUT' orelse Method =:= 'DELETE') andalso
 	   is_integer(Len) ->
     case recv_data(State, Len) of
 	error -> {State, false};

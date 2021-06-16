@@ -1298,7 +1298,7 @@ get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
       StanzaID;
     _ ->
       LUser = BareJID#jid.luser,
-      get_stanza_id_by_origin_id(LServer,OriginID,LUser)
+      mod_unique:get_stanza_id_by_origin_id(LServer,OriginID,LUser)
   end.
 
 get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID) ->
@@ -1794,20 +1794,6 @@ convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer) ->
       []
   end.
 
-get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select
-    @(stanza_id)d
-     from origin_id"
-    " where id=%(OriginID)s and username=%(LUser)s and %(LServer)H")) of
-    {selected,[<<>>]} ->
-      0;
-    {selected,[{StanzaID}]} ->
-      StanzaID;
-    _ ->
-      0
-  end.
 
 %%%===================================================================
 %%% Handle sub_els

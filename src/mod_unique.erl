@@ -36,7 +36,7 @@
   start/2, stop/1, depends/2, mod_options/1
 ]).
 -export([
-  remove_request/2, get_message/3, store_origin_id/4, receive_message_stored/1
+  remove_request/2, get_message/3, store_origin_id/4, receive_message_stored/1, get_stanza_id_by_origin_id/3
 ]).
 
 %% Hooks
@@ -195,60 +195,34 @@ store_origin_id(LServer, LUser, StanzaID, OriginID) ->
 	    Err
     end.
 
--spec get_columns_and_from() ->
-    {binary(), binary()}.
-get_columns_and_from() ->
-  case ejabberd_sql:use_new_schema() of
-    true ->
-      {<<" origin_id.stanza_id">>,
-        <<" FROM origin_id"
-        " INNER JOIN archive"
-        " ON origin_id.stanza_id = archive.timestamp and origin_id.server_host = archive.server_host">>} ;
-    false ->
-      {<<" origin_id.stanza_id">>,
-        <<" FROM origin_id"
-        " INNER JOIN archive"
-        " ON origin_id.stanza_id = archive.timestamp">>}
+get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
+  OriginIDLike = <<"%<origin-id %",
+    (ejabberd_sql:escape(ejabberd_sql:escape_like_arg_circumflex(OriginID)))/binary,
+    "%/>%">>,
+  TS = integer_to_binary(misc:now_to_usec(erlang:now()) - (24 * 3600000000)), %% last 24 hour
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    max(@(timestamp)d)
+    from archive
+    where username=%(LUser)s and timestamp > %(TS)d
+    and xml like %(OriginIDLike)s
+    and %(LServer)H")) of
+    {selected,[<<>>]} ->
+      0;
+    {selected,[{StanzaID}]} ->
+      StanzaID;
+    _ ->
+      0
   end.
 
-make_message([BinaryStanzaId, BinaryPreviousId]) ->
-    StanzaId = binary_to_integer(BinaryStanzaId),
-    PreviousId = case BinaryPreviousId of
-                     null ->
-                         null;
-                     _ ->
-                         binary_to_integer(BinaryPreviousId)
-                 end,
-    #message{
-        meta = #{
-            stanza_id => StanzaId,
-            previous_id => PreviousId,
-            unique_time => StanzaId}}.
-
 get_message(LServer, LUser, OriginID) ->
-    {_ODBCType, Escape} = mod_mam_sql:get_odbctype_and_escape(LServer),
-    {Columns, From} = mod_previous:get_archive_columns_and_from(get_columns_and_from()),
-    R =   case ejabberd_sql:use_new_schema() of
-            true ->
-              SServer = Escape(LServer),
-              ejabberd_sql:sql_query(
-                LServer,
-                [<<"SELECT">>, Columns, From,
-                  <<" WHERE origin_id.id = '">>, Escape(OriginID), <<"'">>,
-                  <<" AND archive.username = '">>, Escape(LUser), <<"' and archive.server_host = '">>,SServer,<<"'">>]);
-            false ->
-              ejabberd_sql:sql_query(
-                LServer,
-                [<<"SELECT">>, Columns, From,
-                  <<" WHERE origin_id.id = '">>, Escape(OriginID), <<"'">>,
-                  <<" AND archive.username = '">>, Escape(LUser), <<"'">>])
-          end,
-    case R of
-	{selected, _, [Row]} ->
-            make_message(Row);
-	_ ->
-	    error
-    end.
+  case get_stanza_id_by_origin_id(LServer,OriginID, LUser) of
+    0 ->
+      error;
+    StanzaID ->
+      #message{meta = #{stanza_id => StanzaID, unique_time => StanzaID}}
+  end.
 
 remove_request(Pkt,false) ->
   Pkt;

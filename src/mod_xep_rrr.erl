@@ -389,7 +389,9 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_mess
           PeerJID = jid:from_string(PeerString),
           Type = message_type(LServer,StanzaID),
           Version = get_version(LServer,LUser,Type) + 1,
-          Retract = #xabber_retract_message{by = To, id = StanzaID, conversation = PeerJID, symmetric = false, version = Version, type = Type},
+          Retract = #xabber_retract_message{by = To, id = StanzaID, conversation = PeerJID,
+            symmetric = false, version = Version, type = Type,
+            xmlns = ?NS_XABBER_REWRITE_NOTIFY},
           start_retract_message(LUser, LServer, StanzaID, IQ, Retract, Version)
       end;
     _ ->

@@ -233,7 +233,7 @@ disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
 %%--------------------------------------------------------------------
 -spec register_hooks(binary()) -> ok.
 register_hooks(Host) ->
-  ejabberd_hooks:add(user_receive_packet,
+  ejabberd_hooks:add(receive_message_stored,
     Host, ?MODULE, save_id_in_conversation, 100),
   ejabberd_hooks:add(s2s_receive_packet, Host, ?MODULE,
     check_iq, 30),
@@ -281,7 +281,7 @@ register_hooks(Host) ->
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
-  ejabberd_hooks:delete(user_receive_packet,
+  ejabberd_hooks:delete(receive_message_stored,
     Host, ?MODULE, save_id_in_conversation, 100),
   ejabberd_hooks:delete(s2s_in_handle_call, Host, ?MODULE,
     check_iq, 10),
@@ -1079,9 +1079,9 @@ get_our_stanza_id(LServer,FUsername,FID) ->
       not_ok
   end.
 
-save_id_in_conversation({#message{body = []} = Pkt, C2SState}) ->
-  {Pkt, C2SState};
-save_id_in_conversation({#message{from = FJID, to = LJID} = Pkt, C2SState}) ->
+save_id_in_conversation({ok,#message{meta = #{sm_copy := true} } = Pkt}) ->
+  {ok, Pkt};
+save_id_in_conversation({ok,#message{from = FJID, to = LJID, meta = #{stanza_id := LIDi} } = Pkt}) ->
   PktGrpOnly = filter_all_exept_groupchat(Pkt),
   Reference = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   SystemMessage = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
@@ -1089,24 +1089,18 @@ save_id_in_conversation({#message{from = FJID, to = LJID} = Pkt, C2SState}) ->
     Reference == false andalso SystemMessage == false ->
       LJIDBare = jid:remove_resource(LJID),
       FJIDBare = jid:remove_resource(FJID),
-      IDs = lists:filtermap(fun(E) ->
-        try xmpp:decode(E) of
-          #stanza_id{id = ID, by = By} when By == FJIDBare -> {true, {fid,ID}};
-          #stanza_id{id = ID, by = By} when By == LJIDBare -> {true, {lid,ID}};
-          _ -> false
-        catch _:{xmpp_codec, _Why} ->
-            false
-        end  end, xmpp:get_els(Pkt)),
+      FID = case xmpp:get_subtag(Pkt, #stanza_id{}) of
+              #stanza_id{id = ID, by = FJIDBare} -> ID;
+              _ -> undefined
+            end,
       LServer = LJID#jid.lserver,
-      FID = proplists:get_value(fid, IDs),
-      LID = proplists:get_value(lid, IDs),
+      LID = integer_to_binary(LIDi),
       save_foreign_id_and_jid(LServer,jid:to_string(FJIDBare),FID,jid:to_string(LJIDBare),LID);
     true ->
       pass
   end,
-  {Pkt, C2SState};
-save_id_in_conversation({Pkt, C2SState}) ->
-  {Pkt, C2SState}.
+  {ok,Pkt};
+save_id_in_conversation(Val) -> Val.
 
 create_replace() ->
   #replaced{stamp = erlang:timestamp()}.

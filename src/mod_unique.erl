@@ -36,7 +36,7 @@
   start/2, stop/1, depends/2, mod_options/1
 ]).
 -export([
-  remove_request/2, get_message/3, store_origin_id/4, receive_message_stored/1, get_stanza_id_by_origin_id/3
+  remove_request/2, get_message/3, get_stanza_id_by_origin_id/3
 ]).
 
 %% Hooks
@@ -60,8 +60,8 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(disco_sm_features, Host, ?MODULE, disco_sm_features, 50),
     ejabberd_hooks:add(sent_message_stored,
         Host, ?MODULE, sent_message_stored, 50),
-  ejabberd_hooks:add(receive_message_stored,
-    Host, ?MODULE, receive_message_stored, 88),
+%%  ejabberd_hooks:add(receive_message_stored,
+%%    Host, ?MODULE, receive_message_stored, 88),
     ejabberd_hooks:add(user_send_packet,
         Host, ?MODULE, user_send_packet, 1),
     ok.
@@ -69,8 +69,8 @@ start(Host, _Opts) ->
 stop(Host) ->
     ejabberd_hooks:delete(sent_message_stored,
         Host, ?MODULE, sent_message_stored, 50),
-  ejabberd_hooks:delete(receive_message_stored,
-    Host, ?MODULE, receive_message_stored, 88),
+%%  ejabberd_hooks:delete(receive_message_stored,
+%%    Host, ?MODULE, receive_message_stored, 88),
     ejabberd_hooks:delete(user_send_packet,
         Host, ?MODULE, user_send_packet, 1),
   ejabberd_hooks:delete(disco_local_features, Host, ?MODULE,
@@ -83,27 +83,28 @@ depends(_Host, _Opts) ->
 
 mod_options(_) -> [].
 
--spec receive_message_stored({ok, message()} | any())
-      -> {ok, message()} | any().
-receive_message_stored({ok, #message{ meta = #{sm_copy := true}} = Pkt}) ->
-  {ok,Pkt};
-receive_message_stored({ok, #message{to = #jid{luser = LUser, lserver = LServer},meta = #{stanza_id := StanzaID}} = Pkt}) ->
-  case xmpp:get_subtag(Pkt, #origin_id{}) of
-    #origin_id{id = OriginID} ->
-      store_origin_id(LServer, LUser, StanzaID, OriginID);
-    _ ->
-      ok
-  end,
-  {ok, Pkt};
-receive_message_stored(Acc) ->
-  Acc.
+%%-spec receive_message_stored({ok, message()} | any())
+%%      -> {ok, message()} | any().
+%%receive_message_stored({ok, #message{ meta = #{sm_copy := true}} = Pkt}) ->
+%%  {ok,Pkt};
+%%receive_message_stored({ok, #message{to = #jid{luser = LUser, lserver = LServer},meta = #{stanza_id := StanzaID}} = Pkt}) ->
+%%  case xmpp:get_subtag(Pkt, #origin_id{}) of
+%%    #origin_id{id = OriginID} ->
+%%      store_origin_id(LServer, LUser, StanzaID, OriginID);
+%%    _ ->
+%%      ok
+%%  end,
+%%  {ok, Pkt};
+%%receive_message_stored(Acc) ->
+%%  Acc.
 
 sent_message_stored({ok, Pkt}, LServer, JID, StanzaID, Request) ->
     case Request of
       #delivery_retry{to = To} ->
         case To of
           undefined ->
-            check_origin_id(Pkt, LServer, JID, StanzaID);
+            check_origin_id(Pkt, LServer, JID, StanzaID),
+            {ok, Pkt};
           _ ->
             Pkt2 = add_request(Pkt,Request),
             {ok, Pkt2}
@@ -148,19 +149,13 @@ add_request(Pkt,Request) ->
   NewEls = [Request|Els],
   xmpp:set_els(Pkt,NewEls).
 
-check_origin_id(Pkt, LServer, JID, StanzaID) ->
+check_origin_id(Pkt, _LServer, JID, _StanzaID) ->
   case xmpp:get_subtag(Pkt, #origin_id{}) of
     #origin_id{id = OriginID} ->
-      LUser = JID#jid.luser,
-      case store_origin_id(LServer, LUser, StanzaID, OriginID) of
-        ok ->
-          send_received(Pkt, JID, OriginID),
-          {ok, Pkt};
-        Err ->
-          Err
-      end;
+      send_received(Pkt, JID, OriginID),
+      ok;
     _ ->
-      {ok, Pkt}
+      ok
   end.
 
 send_received(
@@ -180,20 +175,20 @@ send_received(
         sub_els = [NewUniqueReceived]},
     ejabberd_router:route(jlib:make_jid(<<"">>, LServer, <<"">>), JID, Confirmation).
 
-store_origin_id(LServer, LUser, StanzaID, OriginID) ->
-    case ejabberd_sql:sql_query(
-           LServer,
-           ?SQL_INSERT(
-              "origin_id",
-              ["id=%(OriginID)s",
-                "username=%(LUser)s",
-                "server_host=%(LServer)s",
-               "stanza_id=%(StanzaID)d"])) of
-	{updated, _} ->
-	    ok;
-	Err ->
-	    Err
-    end.
+%%store_origin_id(LServer, LUser, StanzaID, OriginID) ->
+%%    case ejabberd_sql:sql_query(
+%%           LServer,
+%%           ?SQL_INSERT(
+%%              "origin_id",
+%%              ["id=%(OriginID)s",
+%%                "username=%(LUser)s",
+%%                "server_host=%(LServer)s",
+%%               "stanza_id=%(StanzaID)d"])) of
+%%	{updated, _} ->
+%%	    ok;
+%%	Err ->
+%%	    Err
+%%    end.
 
 get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
   OriginIDLike = <<"%<origin-id %",
@@ -203,7 +198,7 @@ get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select
-    max(@(timestamp)d)
+    coalesce(max(@(timestamp)d),0)
     from archive
     where username=%(LUser)s and timestamp > %(TS)d
     and xml like %(OriginIDLike)s

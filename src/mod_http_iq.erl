@@ -286,7 +286,7 @@ delete_session(Tab, ReqID) ->
   end.
 
 answer(Tab, ReqID, Pkt) ->
-  ?INFO_MSG("Pkt ~p~n",[Pkt]),
+  ?DEBUG("Pkt ~p~n",[Pkt]),
   case ets:lookup(Tab,ReqID) of
     [{ReqID, Pid, _ }] -> Pid ! {request_result, ReqID, Pkt};
     _ -> pass

@@ -48,12 +48,13 @@
   store_event/6, store_replace_event/6,
   notificate/6, notificate_replace/6,
   save_id_in_conversation/1,
+  offline_message/1,
   get_version/3,
   message_type/2
 ]).
 
 %% gen_iq_handler callback.
--export([process_iq/1, create_replace/0, pre_process_iq/1]).
+-export([process_iq/1, pre_process_iq/1]).
 
 %% gen_server callbacks.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -233,6 +234,8 @@ disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
 %%--------------------------------------------------------------------
 -spec register_hooks(binary()) -> ok.
 register_hooks(Host) ->
+  ejabberd_hooks:add(offline_message_hook, Host, ?MODULE,
+    offline_message, 100),
   ejabberd_hooks:add(receive_message_stored,
     Host, ?MODULE, save_id_in_conversation, 100),
   ejabberd_hooks:add(s2s_receive_packet, Host, ?MODULE,
@@ -281,6 +284,8 @@ register_hooks(Host) ->
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
+  ejabberd_hooks:delete(offline_message_hook, Host, ?MODULE,
+    offline_message, 100),
   ejabberd_hooks:delete(receive_message_stored,
     Host, ?MODULE, save_id_in_conversation, 100),
   ejabberd_hooks:delete(s2s_in_handle_call, Host, ?MODULE,
@@ -1079,6 +1084,11 @@ get_our_stanza_id(LServer,FUsername,FID) ->
       not_ok
   end.
 
+offline_message({archived,Pkt} = Acc) ->
+  save_id_in_conversation({ok, Pkt}),
+  Acc;
+offline_message(Acc) -> Acc.
+
 save_id_in_conversation({ok,#message{meta = #{sm_copy := true} } = Pkt}) ->
   {ok, Pkt};
 save_id_in_conversation({ok,#message{from = FJID, to = LJID, meta = #{stanza_id := LIDi} } = Pkt}) ->
@@ -1089,10 +1099,11 @@ save_id_in_conversation({ok,#message{from = FJID, to = LJID, meta = #{stanza_id 
     Reference == false andalso SystemMessage == false ->
       LJIDBare = jid:remove_resource(LJID),
       FJIDBare = jid:remove_resource(FJID),
-      FID = case xmpp:get_subtag(Pkt, #stanza_id{}) of
-              #stanza_id{id = ID, by = FJIDBare} -> ID;
-              _ -> undefined
-            end,
+      FID = lists:foldl(fun(Tag, _) ->
+        case Tag of
+          #stanza_id{id = ID, by = FJIDBare} -> ID;
+          _ -> undefined
+        end end, undefined, get_all_stanza_id(Pkt#message.sub_els)),
       LServer = LJID#jid.lserver,
       LID = integer_to_binary(LIDi),
       save_foreign_id_and_jid(LServer,jid:to_string(FJIDBare),FID,jid:to_string(LJIDBare),LID);
@@ -1102,8 +1113,8 @@ save_id_in_conversation({ok,#message{from = FJID, to = LJID, meta = #{stanza_id 
   {ok,Pkt};
 save_id_in_conversation(Val) -> Val.
 
-create_replace() ->
-  #replaced{stamp = erlang:timestamp()}.
+%%create_replace() ->
+%%  #replaced{stamp = erlang:timestamp()}.
 
 filter_els(Els) ->
   NewEls = lists:filter(
@@ -1192,3 +1203,16 @@ usec_to_now(Int) ->
   MSec = Secs div 1000000,
   Sec = Secs rem 1000000,
   {MSec, Sec, USec}.
+
+get_all_stanza_id(Els) ->
+  lists:filtermap(
+    fun(El) ->
+      case {xmpp:get_name(El), xmpp:get_ns(El)} of
+        {<<"stanza-id">>, ?NS_SID_0} ->
+          try
+            {true, xmpp:decode(El)}
+          catch _:{xmpp_codec, _} ->
+            false
+          end;
+        _ -> false
+      end end, Els).

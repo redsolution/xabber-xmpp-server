@@ -361,6 +361,7 @@ create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
       Desc = <<"Private chat">>,
       create_groupchat(LServer,Localpart,Creator,ChatName,Chat,
         <<"incognito">>,<<"none">>,<<"member-only">>,Desc,<<"0">>,<<"">>,<<"">>,OldChat),
+      xabber_groups_sm:activate(LServer,Localpart),
       {AvatarID1,AvatarType1} = add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
       {AvatarID2,AvatarType2} = add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
       Expires = <<"0">>,

@@ -36,7 +36,7 @@
 -export([start/2, stop/1, depends/2, mod_options/1]).
 -export([
   check_user_if_exist/3,
-  get_user_from_chat/3,
+%%  get_user_from_chat/3,
   get_user_from_chat/4,
   get_users_from_chat/5,
   form_user_card/2,
@@ -1535,111 +1535,65 @@ current_values(LServer,User,Chat) ->
 
 % New methods for user list
 
-get_user_from_chat(LServer,Chat,User) ->
-  Request = ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select
-  @(groupchat_users.username)s,
-  @(groupchat_users.id)s,
-  @(groupchat_users.badge)s,
-  @(groupchat_users.nickname)s,
-  @(groupchat_users_vcard.givenfamily)s,
-  @(groupchat_users_vcard.fn)s,
-  @(groupchat_users_vcard.nickname)s,
-  @(COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDThh24:mi:ssZ')))s
-  from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username where groupchat_users.chatgroup = %(Chat)s and groupchat_users.username = %(User)s
-   and subscription = 'both'")),
-  SubEls = case Request of
-             {selected,[]} ->
-               [];
-             {selected,[UserInfo]} ->
-               IsAnon = mod_groupchat_chats:is_anonim(LServer,Chat),
-               {Username,Id,Badge,NickChat,GF,FullName,NickVcard,LastSeen} = UserInfo,
-               Nick = case nick(GF,FullName,NickVcard,NickChat,IsAnon) of
-                        empty when IsAnon == no->
-                          Username;
-                        empty when IsAnon == yes ->
-                          insert_incognito_nickname(LServer,User,Chat);
-                        {ok,Value} ->
-                          Value;
-                        _ ->
-                          <<>>
-                      end,
-               Role = calculate_role(LServer,Username,Chat),
-               AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
-               BadgeF = validate_badge_and_nick(LServer,Chat,User,Nick,Badge),
-               S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
-               L = length(S),
-               Present = case L of
-                           0 ->
-                             LastSeen;
-                           _ ->
-                             undefined
-                         end,
-               [#xabbergroupchat_user_card{id = Id, jid = jid:from_string(Username), nickname = Nick, role = Role, avatar = AvatarEl, badge = BadgeF, present = Present}];
-             _ ->
-               []
-           end,
-  DateNew = get_chat_version(LServer,Chat),
-  VersionNew = convert_from_datetime_to_unix_time(DateNew),
-  #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls, version = VersionNew}.
-
 get_user_from_chat(LServer,Chat,User,ID) ->
   RequesterRole = calculate_role(LServer,User,Chat),
-  Request = ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select
-  @(groupchat_users.username)s,
-  @(groupchat_users.id)s,
-  @(groupchat_users.badge)s,
-  @(groupchat_users.nickname)s,
-  @(groupchat_users_vcard.givenfamily)s,
-  @(groupchat_users_vcard.fn)s,
-  @(groupchat_users_vcard.nickname)s,
-  @(COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDThh24:mi:ssZ')))s
-  from groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username where groupchat_users.chatgroup = %(Chat)s and groupchat_users.id = %(ID)s
-   and subscription = 'both'")),
-  SubEls = case Request of
-             {selected,[]} ->
-               [];
-             {selected,[UserInfo]} ->
-               IsAnon = mod_groupchat_chats:is_anonim(LServer,Chat),
-               {Username,Id,Badge,NickChat,GF,FullName,NickVcard,LastSeen} = UserInfo,
-               Nick = case nick(GF,FullName,NickVcard,NickChat,IsAnon) of
-                        empty when IsAnon == no->
-                          Username;
-                        empty when IsAnon == yes ->
-                          insert_incognito_nickname(LServer,Username,Chat);
-                        {ok,Value} ->
-                          Value;
-                        _ ->
-                          <<>>
-                      end,
-               Role = calculate_role(LServer,Username,Chat),
-               AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
-               BadgeF = validate_badge_and_nick(LServer,Chat,Username,Nick,Badge),
-               S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
-               L = length(S),
-               Present = case L of
-                           0 ->
-                             LastSeen;
-                           _ ->
-                             undefined
-                         end,
-               case RequesterRole of
-                 <<"owner">> ->
-                   [#xabbergroupchat_user_card{id = Id, jid = jid:from_string(Username), nickname = Nick, role = Role, avatar = AvatarEl, badge = BadgeF, present = Present}];
-                 _ when IsAnon == no ->
-                   [#xabbergroupchat_user_card{id = Id, jid = jid:from_string(Username), nickname = Nick, role = Role, avatar = AvatarEl, badge = BadgeF, present = Present}];
-                 _ ->
-                   [#xabbergroupchat_user_card{id = Id, nickname = Nick, role = Role, avatar = AvatarEl, badge = BadgeF, present = Present}]
-               end;
-             _ ->
-               []
+  Chat1 = ejabberd_sql:escape(Chat),
+  ID1 = ejabberd_sql:escape(Chat),
+  User1 = ejabberd_sql:escape(User),
+  Filter = if
+             ID == <<>> orelse ID == <<"0">> -> <<" and groupchat_users.username = '",User1/binary,"'">>;
+             true -> <<" and groupchat_users.id = '",ID1/binary,"'">>
            end,
-  DateNew = get_chat_version(LServer,Chat),
-  VersionNew = convert_from_datetime_to_unix_time(DateNew),
-  #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls, version = VersionNew}.
+
+  SQLQuery = [<<"
+  SELECT groupchat_users.username,
+  groupchat_users.id,
+  groupchat_users.badge,
+  groupchat_users.nickname,
+  groupchat_users.subscription,
+  groupchat_users_vcard.givenfamily,
+  groupchat_users_vcard.fn,
+  groupchat_users_vcard.nickname,
+  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDThh24:mi:ssZ'))
+  FROM groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username
+  WHERE groupchat_users.chatgroup = '",Chat1/binary,"' ">>,Filter],
+  {selected, _, Res} = ejabberd_sql:sql_query(LServer, SQLQuery),
+  case Res of
+    [] -> [];
+    [UserInfo] ->
+      IsAnon = mod_groupchat_chats:is_anonim(LServer,Chat),
+      [Username,Id,Badge,NickChat,Subscription,GF,FullName,NickVcard,LastSeen] = UserInfo,
+      Nick = case nick(GF,FullName,NickVcard,NickChat,IsAnon) of
+               empty when IsAnon == no->
+                 Username;
+               empty when IsAnon == yes ->
+                 insert_incognito_nickname(LServer,Username,Chat);
+               {ok,Value} ->
+                 Value;
+               _ ->
+                 <<>>
+             end,
+      Role = calculate_role(LServer,Username,Chat),
+      AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
+      BadgeF = validate_badge_and_nick(LServer,Chat,Username,Nick,Badge),
+      S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
+      L = length(S),
+      Present = case L of
+                  0 ->
+                    LastSeen;
+                  _ ->
+                    undefined
+                end,
+      UserCard = #xabbergroupchat_user_card{subscription = Subscription, id = Id, nickname = Nick,
+        role = Role, avatar = AvatarEl, badge = BadgeF, present = Present},
+      SubEls = if
+                 IsAnon == yes andalso RequesterRole /= <<"owner">> -> [UserCard] ;
+                 true -> [UserCard#xabbergroupchat_user_card{jid = jid:from_string(Username)}]
+               end,
+      #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls};
+    _ ->
+      []
+  end.
 
 get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
   {QueryChats, QueryCount} = make_sql_query(Chat,RSM,Version),

@@ -243,6 +243,8 @@ chat_created(LServer,User,Chat,Lang) ->
   NameEl = #xabbergroupchat_name{cdata = Name},
   XEl = #xabbergroupchat_x{
     xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,
+    type = <<"create">>,
+    version = <<"0">>,
     sub_els = [NameEl,Privacy,Membership,Description,Index]
   },
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},

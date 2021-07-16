@@ -855,7 +855,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Di
       User = jid:to_string(jid:make(LUser,LServer)),
       Chat = jid:to_string(jid:make(PUser,PServer)),
       Status = mod_channels_users:check_user_if_exist(LServer,User,Chat),
-      Count = get_count_groupchat_messages(PServer,PUser,binary_to_integer(LastRead),Conversation,Status),
+      Count = get_count_groupchat_messages(User,Chat,binary_to_integer(LastRead),Conversation,Status),
       LastMessage = get_last_groupchat_message(PServer,PUser,Status,LUser),
       LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #xabber_conversation_unread{count = Count, 'after' = LastRead},
@@ -873,7 +873,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,Read,Delivered,Di
       User = jid:to_string(jid:make(LUser,LServer)),
       Chat = jid:to_string(jid:make(PUser,PServer)),
       Status = mod_groupchat_users:check_user_if_exist(LServer,User,Chat),
-      Count = get_count_groupchat_messages(PServer,PUser,binary_to_integer(LastRead),Conversation,Status),
+      Count = get_count_groupchat_messages(User,Chat,binary_to_integer(LastRead),Conversation,Status),
       LastMessage = get_last_groupchat_message(PServer,PUser,Status,LUser),
       LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #xabber_conversation_unread{count = Count, 'after' = LastRead},
@@ -1743,18 +1743,22 @@ get_reject(LServer,LUser,Conversation) ->
       {0,[]}
   end.
 
-get_count_groupchat_messages(LServer,LUser,TS,Conversation,Status) ->
+
+get_count_groupchat_messages(BareUser,Chat,TS,Conversation,<<"both">>) ->
+  {ChatUser, ChatServer, _ } = jid:tolower(jid:from_string(Chat)),
   case ejabberd_sql:sql_query(
-    LServer,
+    ChatServer,
     ?SQL("select
     @(count(*))d
      from archive"
-    " where username=%(LUser)s  and txt notnull and txt !='' and timestamp > %(TS)d and timestamp not in (select timestamp from special_messages where conversation = %(Conversation)s and %(LServer)H ) and %(LServer)H")) of
-    {selected,[{Count}]} when Status == <<"both">> ->
+    " where username=%(ChatUser)s  and txt notnull and txt !='' and bare_peer not in (%(BareUser)s,%(Chat)s) and timestamp > %(TS)d and timestamp not in (select timestamp from special_messages where conversation = %(Conversation)s and %(ChatServer)H ) and %(ChatServer)H")) of
+    {selected,[{Count}]} ->
       Count;
     _ ->
       0
-  end.
+  end;
+get_count_groupchat_messages(_LServer,_LUser,_TS,_Conversation,_Status) ->
+  0.
 
 get_groupchat_last_readed(PServer,PUser,LServer,LUser) ->
   Conv = jid:to_string(jid:make(LUser,LServer)),

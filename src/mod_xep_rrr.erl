@@ -267,16 +267,6 @@ register_hooks(Host) ->
     store_event, 20),
   ejabberd_hooks:add(retract_all_messages, Host, ?MODULE,
     notificate, 25),
-  %% add retract all incoming messages hooks
-  ejabberd_hooks:add(retract_all_in_messages, Host, ?MODULE,
-    have_right_to_delete_all_incoming, 10),
-  ejabberd_hooks:add(retract_all_in_messages, Host, ?MODULE,
-    delete_all_incoming_messages, 15),
-  ejabberd_hooks:add(retract_all_in_messages, Host, ?MODULE,
-    store_event, 20),
-  ejabberd_hooks:add(retract_all_in_messages, Host, ?MODULE,
-    notificate, 25),
-  %% end retract
   ejabberd_hooks:add(disco_local_features, Host, ?MODULE,
     disco_sm_features, 50),
   ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
@@ -472,31 +462,7 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_all{
     _ ->
       xmpp:make_error(IQ, xmpp:err_bad_request())
   end;
-process_iq(#iq{
-  from = From,
-  to = To, type = set,
-  sub_els = [#xabber_retract_all{type = Type, conversation = RetractUserJID, symmetric = true}]} = IQ) ->
-  A = (To == jid:remove_resource(From)),
-  LServer = To#jid.lserver,
-  case From#jid.lresource of
-    <<>> when LServer =/= From#jid.lserver->
-      LUser = To#jid.luser,
-      Version = get_version(LServer,LUser,Type) + 1,
-      RetractAsk = #xabber_retract_all{type = Type, conversation = From, version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-      start_retract_all_incoming_message(LUser, LServer, IQ, RetractAsk, Version);
-    _ when A == true ->
-      case RetractUserJID#jid.lserver of
-        LServer ->
-          User1 = From#jid.luser,
-          User2 = RetractUserJID#jid.luser,
-          start_local_retract_all(User1,User2,LServer,IQ,Type);
-        _ ->
-          IQS = xmpp:set_from_to(IQ,To,RetractUserJID),
-          Proc = gen_mod:get_module_proc(LServer, ?MODULE),
-          gen_server:cast(Proc, {From,IQS}),
-          ignore
-      end
-  end;
+
 process_iq(#iq{
   from = From,
   to = To, type = set,
@@ -541,22 +507,6 @@ process_iq(#iq{
 process_iq(IQ) ->
   ?DEBUG("IQ ~p",[IQ]),
   xmpp:make_error(IQ, xmpp:err_not_allowed()).
-
-start_local_retract_all(User1,User2,LServer,IQ, Type) ->
-  User1JID = jid:make(User1,LServer),
-  User2JID = jid:make(User2,LServer),
-  Version2 = get_version(LServer,User2,Type) + 1,
-  RetractAsk2 = #xabber_retract_all{type = Type, conversation = User1JID, version = Version2, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-  Res = ejabberd_hooks:run_fold(retract_all_in_messages, LServer, [], [RetractAsk2, User2, LServer, <<>>, Version2]),
-  case Res of
-    ok ->
-      Version1 = get_version(LServer,User1,Type) + 1,
-      RetractAsk1 = #xabber_retract_all{type = Type, conversation = User2JID, version = Version1, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-      start_retract_all_message(User1, LServer, IQ, RetractAsk1, Version1);
-    _ ->
-      ?DEBUG("Smth wrong ~p",[Res]),
-      xmpp:make_error(IQ, xmpp:err_not_allowed())
-  end.
 
 start_local_replace(User1,User2,LServer,StanzaID,Message,IQ,Type) ->
   User1JID = jid:make(User1,LServer),
@@ -650,17 +600,6 @@ start_retract_message(LUser, LServer, StanzaID, IQ, RetractAsk, Version) ->
   case ejabberd_hooks:run_fold(retract_local_message, LServer, [], [RetractAsk,LUser, LServer, StanzaID, Version]) of
     ok ->
       ?DEBUG("SUCCESS RETRACT ~p~n IQ ~p ",[StanzaID,IQ]),
-      xmpp:make_iq_result(IQ);
-    not_found ->
-      xmpp:make_error(IQ, xmpp:err_item_not_found());
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_bad_request())
-  end.
-
-start_retract_all_incoming_message(LUser, LServer, IQ, RetractAsk, Version) ->
-  case ejabberd_hooks:run_fold(retract_all_in_messages, LServer, [], [RetractAsk, LUser, LServer, <<>>, Version]) of
-    ok ->
-      ?DEBUG("retract all incoming ~p",[RetractAsk]),
       xmpp:make_iq_result(IQ);
     not_found ->
       xmpp:make_error(IQ, xmpp:err_item_not_found());

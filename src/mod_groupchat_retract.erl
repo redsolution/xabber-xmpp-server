@@ -329,7 +329,6 @@ notificate(Server,Chat,Stanza) ->
   ).
 
 replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
-  ?INFO_MSG("WWWWWW ~p  ~p",[is_integer(ID), is_binary(ID)]),
   #xabber_replace{ xabber_replace_message = XabberReplaceMessage} = Replace,
   NewEls = XabberReplaceMessage#xabber_replace_message.sub_els,
   ChatJID = jid:from_string(Chat),

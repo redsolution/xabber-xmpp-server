@@ -329,6 +329,7 @@ notificate(Server,Chat,Stanza) ->
   ).
 
 replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
+  ?INFO_MSG("WWWWWW ~p  ~p",[is_integer(ID), is_binary(ID)]),
   #xabber_replace{ xabber_replace_message = XabberReplaceMessage} = Replace,
   NewEls = XabberReplaceMessage#xabber_replace_message.sub_els,
   ChatJID = jid:from_string(Chat),
@@ -373,7 +374,8 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
       "xml=%(XML)s",
       "txt=%(NewText)s",
       "server_host=%(Server)s"]),
-  NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{body = NewText, sub_els = Els2},
+  Time = #unique_time{by = ChatJID, stamp = misc:usec_to_now(binary_to_integer(ID))},
+  NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{body = NewText, sub_els = Els2 ++ [Time]},
   NewReplace = Replace#xabber_replace{xabber_replace_message = NewXabberReplaceMessage},
   NewReplace.
 
@@ -474,7 +476,7 @@ get_query(Server,Chat,Version) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(xml)s from groupchat_retract"
-		" where chatgroup=%(Chat)s and version > %(Version)d")) of
+		" where chatgroup=%(Chat)s and version > %(Version)d order by version")) of
     {selected,[<<>>]} ->
       [];
     {selected,Query} ->
@@ -484,11 +486,14 @@ get_query(Server,Chat,Version) ->
 get_version(Server,Chat) ->
   case ejabberd_sql:sql_query(
     Server,
-    [<<"select max(version) from groupchat_retract where chatgroup = '">>,Chat,<<"' ;">>]) of
-    {selected,_MAX,[[null]]} ->
-      <<"0">>;
-    {selected,_MAX,[[Version]]} ->
-      Version
+    ?SQL("select coalesce(max(@(version)d),0) from groupchat_retract where chatgroup = %(Chat)s")) of
+    {selected,[{Version}]} ->
+      Version;
+    {selected,_} ->
+      0;
+    Err ->
+      ?ERROR_MSG("failed to get retract version: ~p", [Err]),
+      0
   end.
 
 insert_event(Server,Chat,Txt,Version) ->

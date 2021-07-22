@@ -320,56 +320,32 @@ pre_process_iq(#iq{to = To} = IQ) ->
 process_iq(#iq{type = set, lang = Lang, sub_els = [#xabber_retract_query{}]} = IQ) ->
   Txt = <<"Value 'set' of 'type' attribute is not allowed">>,
   xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
-process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = undefined, 'less-than' = undefined, type = Type}]} = IQ) ->
+%% Query the current version
+process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = undefined, type = Type}]} = IQ) ->
   {LUser, LServer, LResource} = jid:tolower(From),
-  set_rewrite_notification(LServer,LUser,LResource),
-  RetractNotifications = get_query(LServer,LUser,0,Type),
-  MsgHead = lists:map(fun(El) ->
-    {Element} = El,
-    EventNotDecoded= fxml_stream:parse_element(Element),
-    Event = xmpp:decode(EventNotDecoded),
-    #message{from = jid:remove_resource(From), to = From,
-      type = headline, id= randoms:get_string(), sub_els = [Event]} end, RetractNotifications
-  ),
-  lists:foreach(fun(M) -> ejabberd_router:route(M) end, MsgHead),
-  xmpp:make_iq_result(IQ);
-process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = undefined, type = Type}]} = IQ) ->
+%%  set_rewrite_notification(LServer,LUser,LResource),
+  Version = get_version(LServer,LUser,Type),
+  xmpp:make_iq_result(IQ, #xabber_retract_query{version = Version});
+%%process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = undefined, type = Type}]} = IQ) ->
+%%  {LUser, LServer, LResource} = jid:tolower(From),
+%%  set_rewrite_notification(LServer,LUser,LResource),
+%%  send_retract_query_messages(From,Version,Type),
+%%  xmpp:make_iq_result(IQ);
+process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = Less0, type = Type}]} = IQ) ->
+  Less = if
+           Less0 > 250 orelse Less0 == undefined -> 250;
+           true -> Less0
+         end,
   {LUser, LServer, LResource} = jid:tolower(From),
-  set_rewrite_notification(LServer,LUser,LResource),
-  RetractNotifications = get_query(LServer,LUser,Version,Type),
-  MsgHead = lists:map(fun(El) ->
-    {Element} = El,
-    EventNotDecoded= fxml_stream:parse_element(Element),
-    Event = xmpp:decode(EventNotDecoded),
-    #message{from = jid:remove_resource(From), to = From,
-      type = headline, id= randoms:get_string(), sub_els = [Event]} end, RetractNotifications
-  ),
-  lists:foreach(fun(M) -> ejabberd_router:route(M) end, MsgHead),
-  xmpp:make_iq_result(IQ);
-process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = Less, type = Type}]} = IQ) ->
-  case Less of
-    _ when Less =/= undefined andalso Version =/= undefined ->
-      {LUser, LServer, LResource} = jid:tolower(From),
-      set_rewrite_notification(LServer,LUser,LResource),
-      Count = get_count_events(LServer,LUser,Version,Type),
-      case Count of
-        _ when Count >= Less ->
-          LastVersion = get_version(LServer,LUser,Type),
-          xmpp:make_iq_result(IQ, #xabber_retract_invalidate{version = LastVersion});
-        _ ->
-          RetractNotifications = get_query(LServer,LUser,Version,Type),
-          MsgHead = lists:map(fun(El) ->
-            {Element} = El,
-            EventNotDecoded= fxml_stream:parse_element(Element),
-            Event = xmpp:decode(EventNotDecoded),
-            #message{from = jid:remove_resource(From), to = From,
-              type = headline, id= randoms:get_string(), sub_els = [Event]} end, RetractNotifications
-          ),
-          lists:foreach(fun(M) -> ejabberd_router:route(M) end, MsgHead),
-          xmpp:make_iq_result(IQ)
-      end;
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_not_allowed())
+%%  set_rewrite_notification(LServer,LUser,LResource),
+  Count = get_count_events(LServer,LUser,Version,Type),
+  if
+    Count >= Less ->
+      LastVersion = get_version(LServer,LUser,Type),
+      xmpp:make_iq_result(IQ, #xabber_retract_invalidate{version = LastVersion});
+    true ->
+      send_retract_query_messages(From,Version,Type),
+      xmpp:make_iq_result(IQ)
   end;
 process_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_message{symmetric = false, id = StanzaID}]} = IQ) ->
   A = (To == jid:remove_resource(From)),
@@ -821,7 +797,8 @@ store_replace_event(Acc,_RewriteAsk,LUser,LServer,_StanzaID, Version) ->
 notificate_replace(Acc, _RewriteAsk,LUser,LServer,_StanzaID, _Version) ->
   BareJID = jid:make(LUser,LServer),
   Message = #message{id = randoms:get_string(), type = headline, from = BareJID, to = BareJID, sub_els = [Acc]},
-  send_notification(LUser,LServer,Message),
+  ejabberd_router:route(Message),
+%%  send_notification(LUser,LServer,Message),
   {stop,ok}.
 
 store_event(_Acc,RewriteAsk,LUser,LServer,_StanzaID, Version) ->
@@ -854,13 +831,26 @@ get_type(_Type) ->
 notificate(_Acc, RewriteAsk,LUser,LServer,_StanzaID, _Version) ->
   BareJID = jid:make(LUser,LServer),
   Message = #message{id = randoms:get_string(), type = headline, from = BareJID, to = BareJID, sub_els = [RewriteAsk]},
-  send_notification(LUser,LServer,Message),
+  ejabberd_router:route(Message),
+%%  send_notification(LUser,LServer,Message),
   {stop,ok}.
 
-send_notification(LUser,LServer,Message) ->
-    BareJID = jid:make(LUser,LServer),
-    NewMessage = Message#message{to = BareJID},
-    ejabberd_router:route(NewMessage).
+%%send_notification(LUser,LServer,Message) ->
+%%    BareJID = jid:make(LUser,LServer),
+%%    NewMessage = Message#message{to = BareJID},
+%%    ejabberd_router:route(NewMessage).
+
+send_retract_query_messages(User,Version,Type) ->
+  {LUser, LServer, _LResource} = jid:tolower(User),
+  RetractNotifications = get_query(LServer,LUser,Version,Type),
+  MsgHead = lists:map(fun(El) ->
+    {Element} = El,
+    EventNotDecoded= fxml_stream:parse_element(Element),
+    Event = xmpp:decode(EventNotDecoded),
+    #message{from = jid:remove_resource(User), to = User,
+      type = headline, id= randoms:get_string(), sub_els = [Event]} end, RetractNotifications
+  ),
+  lists:foreach(fun(M) -> ejabberd_router:route(M) end, MsgHead).
 
 %% sql functions
 
@@ -890,7 +880,7 @@ get_query(Server,Username,Version,Type) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(xml)s from message_retract"
-    " where username=%(Username)s and type=%(Type)s and version > %(Version)d and %(Server)H")) of
+    " where username=%(Username)s and type=%(Type)s and version > %(Version)d and %(Server)H order by version")) of
     {selected,[<<>>]} ->
       [];
     {selected,Query} ->
@@ -900,20 +890,15 @@ get_query(Server,Username,Version,Type) ->
 get_version(Server,Username,Type) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(version)d from message_retract where username = %(Username)s and type=%(Type)s and %(Server)H order by version desc limit 1")) of
-    {selected,[<<>>]} ->
-      0;
-    {selected,[{null}]} ->
-      0;
-    {selected,[null]} ->
-      0;
-    {selected,[]} ->
-      0;
+    ?SQL("select coalesce(max(@(version)d),0) from message_retract"
+     " where username = %(Username)s and type=%(Type)s and %(Server)H")) of
     {selected,[{Version}]} ->
       Version;
+    {selected,_} ->
+      0;
     Err ->
       ?ERROR_MSG("failed to get retract version: ~p", [Err]),
-      Err
+      0
   end.
 
 insert_event(LServer,Username,Txt,Version,Type) ->
@@ -1052,9 +1037,6 @@ save_id_in_conversation({ok,#message{from = FJID, to = LJID, meta = #{stanza_id 
   {ok,Pkt};
 save_id_in_conversation(Val) -> Val.
 
-%%create_replace() ->
-%%  #replaced{stamp = erlang:timestamp()}.
-
 filter_els(Els) ->
   NewEls = lists:filter(
     fun(El) ->
@@ -1128,20 +1110,12 @@ filter_all_exept_groupchat(Pkt) ->
 
 -spec set_stanza_id(list(), jid(), binary()) -> list().
 set_stanza_id(SubELS, JID, ID) ->
-  TimeStamp = usec_to_now(binary_to_integer(ID)),
+  TimeStamp = misc:usec_to_now(binary_to_integer(ID)),
   BareJID = jid:remove_resource(JID),
   Archived = #mam_archived{by = BareJID, id = ID},
   StanzaID = #stanza_id{by = BareJID, id = ID},
   Time = #unique_time{by = BareJID, stamp = TimeStamp},
   [Archived, StanzaID, Time|SubELS].
-
--spec usec_to_now(non_neg_integer()) -> erlang:timestamp().
-usec_to_now(Int) ->
-  Secs = Int div 1000000,
-  USec = Int rem 1000000,
-  MSec = Secs div 1000000,
-  Sec = Secs rem 1000000,
-  {MSec, Sec, USec}.
 
 get_all_stanza_id(Els) ->
   lists:filtermap(

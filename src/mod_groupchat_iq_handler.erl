@@ -392,8 +392,22 @@ make_action(IQ) ->
 
 process_groupchat_iq(#iq{type = set, sub_els = [#mam_query{}]} = Iq) ->
   process_mam_iq(Iq);
-process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = Less}]} = IQ) ->
-Chat = jid:to_string(jid:remove_resource(To)),
+process_groupchat_iq(#iq{from = From, to = To, type = get,
+  sub_els = [#xabber_retract_query{version = undefined, 'less-than' = undefined}]} = IQ) ->
+  Chat = jid:to_string(jid:remove_resource(To)),
+  Server = To#jid.lserver,
+  CheckUser = mod_groupchat_users:check_user(Server,jid:to_string(jid:remove_resource(From)),Chat),
+  case CheckUser of
+    not_exist ->
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()));
+    _ ->
+      Version = mod_groupchat_retract:get_version(Server,Chat),
+      ejabberd_router:route(xmpp:make_iq_result(IQ, #xabber_retract_query{version=Version}))
+  end,
+  ignore;
+process_groupchat_iq(#iq{from = From, to = To, type = get,
+  sub_els = [#xabber_retract_query{version = Version, 'less-than' = Less}]} = IQ) ->
+  Chat = jid:to_string(jid:remove_resource(To)),
   FromChat = jid:replace_resource(To,<<"Group">>),
   Server = To#jid.lserver,
   Result = ejabberd_hooks:run_fold(retract_query, Server, [], [{Server,From,Chat,Version,Less}]),
@@ -403,7 +417,7 @@ Chat = jid:to_string(jid:remove_resource(To)),
         ignore;
       too_much ->
         CurrentVersion = mod_groupchat_retract:get_version(Server,Chat),
-        Invalidate = #xabber_retract_invalidate{version = binary_to_integer(CurrentVersion)},
+        Invalidate = #xabber_retract_invalidate{version = CurrentVersion},
         ejabberd_router:route(#message{from = FromChat, to = From, id = randoms:get_string(), type = headline, sub_els = [Invalidate]}),
         ejabberd_router:route(xmpp:make_iq_result(IQ)),
         ignore;
@@ -539,7 +553,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Version = binary_to_integer(mod_groupchat_retract:get_version(Server,Chat)) + 1,
+  Version = mod_groupchat_retract:get_version(Server,Chat) + 1,
   Retract = #xabber_retract_message{
     symmetric = true,
     id = ID,
@@ -561,7 +575,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Version = binary_to_integer(mod_groupchat_retract:get_version(Server,Chat)) + 1,
+  Version = mod_groupchat_retract:get_version(Server,Chat) + 1,
   Retract = #xabber_retract_user{
     id = ID,
     symmetric = true,
@@ -583,7 +597,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Version = binary_to_integer(mod_groupchat_retract:get_version(Server,Chat)) + 1,
+  Version = mod_groupchat_retract:get_version(Server,Chat) + 1,
   Retract = #xabber_retract_all{
     symmetric = true,
     conversation = jid:remove_resource(To),
@@ -602,7 +616,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Version = binary_to_integer(mod_groupchat_retract:get_version(Server,Chat)) + 1,
+  Version = mod_groupchat_retract:get_version(Server,Chat) + 1,
   NewEls = filter_from_server_stanzas(SubEls),
   Replaced = #replaced{stamp = erlang:timestamp()},
   StanzaID = #stanza_id{id = ID, by = jid:remove_resource(To)},

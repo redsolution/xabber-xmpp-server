@@ -29,7 +29,7 @@
 -behavior(gen_mod).
 -behaviour(gen_server).
 -export([start/2, stop/1, depends/2, mod_options/1]).
--export([process_message/1,send_message/3]).
+-export([process_messages/0,send_message/3]).
 -export([init/1, handle_call/3, handle_cast/2,
   handle_info/2, terminate/2, code_change/3]).
 -export([
@@ -228,10 +228,6 @@ check_permissions(Media,User,Chat) ->
             end,
   Allowed.
 
-process_message(Message) ->
-  do_route(Message).
-
-
 send_received_and_message(Pkt, From, To, OriginID, Users) ->
   {Pkt2, _State2} = mod_mam:user_send_packet({Pkt,#{jid => To}}),
   send_received(Pkt2,From,OriginID,To),
@@ -258,6 +254,20 @@ send_service_message(To,Chat,Text) ->
   Els = [service_message(Chat,Text)],
   Meta = #{},
   send_message(construct_message(Id,Type,Body,Els,Meta),Users,FromChat).
+
+%%--------------------------------------------------------------------
+%% Sub process.
+%%--------------------------------------------------------------------
+process_messages() ->
+  receive
+    {message,Message} ->
+      do_route(Message),
+      process_messages();
+    _ ->
+      exit(normal)
+  after
+    300000 -> exit(normal)
+  end.
 
 %% Internal functions
 do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headline} = Message) ->

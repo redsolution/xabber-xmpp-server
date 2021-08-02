@@ -88,7 +88,17 @@ handle_info({route, #iq{} = Packet}, State = #xabber_sm_state{}) ->
   mod_groupchat_iq_handler:make_action(Packet),
   {noreply, State};
 handle_info({route, #message{} = Packet}, State = #xabber_sm_state{}) ->
-  mod_groupchat_messages:process_message(Packet),
+  {LUser, LServer, _} = jid:tolower(Packet#message.to),
+  ProcName = binary_to_atom(<<LUser/binary,$_,LServer/binary,"_messages">>, utf8),
+  Proc = case whereis(ProcName) of
+           undefined ->
+             PID = spawn(mod_groupchat_messages,process_messages,[]),
+             register(ProcName, PID),
+             PID;
+            PID ->
+              PID
+  end,
+  Proc ! {message, Packet},
   {noreply, State};
 handle_info(_Info, State = #xabber_sm_state{}) ->
   {noreply, State}.

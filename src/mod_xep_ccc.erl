@@ -46,7 +46,8 @@
   terminate/2, code_change/3]).
 
 %% hooks
--export([c2s_stream_features/2, sm_receive_packet/1, user_send_packet/1, groupchat_send_message/3, groupchat_got_displayed/3]).
+-export([c2s_stream_features/2, sm_receive_packet/1, user_send_packet/1, groupchat_send_message/3,
+  groupchat_got_displayed/3, process_messages/0]).
 
 %% iq
 -export([process_iq/1]).
@@ -346,84 +347,6 @@ handle_cast({sm, #presence{type = unsubscribe,from = #jid{lserver = PServer, lus
 handle_cast({sm, #presence{type = unsubscribed,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}}},State) ->
   maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
   {noreply, State};
-handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els = SubEls} = Pkt}, State) ->
-  check_voip_msg(Pkt),
-  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-  handle_sub_els(chat,DecSubEls,From,To),
-  {noreply, State};
-%%handle_cast({sm,#message{type = chat, body = [], from = From, to = To, sub_els = SubEls}}, State) ->
-%%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-%%  handle_sub_els(chat,DecSubEls,From,To),
-%%  {noreply, State};
-handle_cast({sm,#message{id = _ID, type = chat, from = Peer, to = To, meta = #{stanza_id := TS}} = Pkt}, State) ->
-  {LUser, LServer, _ } = jid:tolower(To),
-  {PUser, PServer, _} = jid:tolower(Peer),
-  PktRefGrp = filter_reference(Pkt,<<"groupchat">>),
-  Conversation = jid:to_string(jid:make(PUser,PServer)),
-  Type = get_conversation_type(LServer,LUser,Conversation),
-  Invite = xmpp:get_subtag(PktRefGrp, #xabbergroupchat_invite{}),
-  X = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
-  OriginIDElemnt = xmpp:get_subtag(Pkt, #origin_id{}),
-  OriginID = get_origin_id(OriginIDElemnt),
-  IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
-  if
-    Invite  =/= false ->
-      #xabbergroupchat_invite{jid = ChatJID} = Invite,
-      case ChatJID of
-        undefined ->
-          update_metainfo(message, LServer,LUser,Conversation,TS),
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-            #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}]);
-        _ ->
-          Chat = jid:to_string(jid:remove_resource(ChatJID)),
-          store_special_message_id(LServer,LUser,Chat,TS,OriginID,<<"invite">>),
-          store_invite_information(LUser,LServer,ChatJID#jid.luser,ChatJID#jid.lserver, TS),
-          update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat),
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-            #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}])
-      end;
-    Type == <<"groupchat">>; Type == <<"channel">> ->
-      FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
-      StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
-      case StanzaID of
-        false ->
-          %% Bad message
-          ok;
-        _ ->
-          TSGroupchat = StanzaID#stanza_id.id,
-          if
-            IsLocal andalso X ->
-              store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),OriginID,<<"service">>);
-            IsLocal ->
-              pass;
-            true ->
-              store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID)
-          end,
-          update_metainfo(message, LServer,LUser,Conversation,binary_to_integer(TSGroupchat)),
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer, StanzaID])
-      end;
-    true ->
-      case check_voip_msg(Pkt) of
-        false ->
-          case body_is_encrypted(Pkt) of
-            true ->
-              create_conversation(LServer,LUser,Conversation,<<"">>,true),
-              update_metainfo(message, LServer,LUser,Conversation,TS,true);
-            _ ->
-              ?INFO_MSG("PUSH8 ~p ~p~n",[Type, Pkt#message.meta]),
-              ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
-                #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}]),
-              update_metainfo(message, LServer,LUser,Conversation,TS,false)
-          end;
-        _ ->
-          ok
-      end
-  end,
-  {noreply, State};
-handle_cast({sm,#message{type = headline, body = [], from = From, to = To, sub_els = SubEls}}, State) ->
-  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-  handle_sub_els(headline,DecSubEls,From,To),
-  {noreply, State};
 handle_cast(_Msg, State) ->
   {noreply, State}.
 
@@ -588,9 +511,9 @@ groupchat_got_displayed(From,ChatJID,TS) ->
   update_metainfo(read, LServer,LUser,Conversation,TS).
 
 -spec sm_receive_packet(stanza()) -> stanza().
-sm_receive_packet(#message{to = #jid{lserver = LServer}} = Pkt) ->
-  Proc = gen_mod:get_module_proc(LServer, ?MODULE),
-  gen_server:cast(Proc, {sm,Pkt}),
+sm_receive_packet(#message{to = #jid{luser = LUser, lserver = LServer}} = Pkt) ->
+  Proc = get_subprocess(LUser,LServer),
+  Proc ! {in, Pkt},
   Pkt;
 sm_receive_packet(#presence{to = #jid{lserver = LServer}} = Pkt) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
@@ -601,9 +524,9 @@ sm_receive_packet(Acc) ->
 
 -spec user_send_packet({stanza(), c2s_state()})
       -> {stanza(), c2s_state()}.
-user_send_packet({#message{} = Pkt, #{lserver := LServer}} = Acc) ->
-  Proc = gen_mod:get_module_proc(LServer, ?MODULE),
-  gen_server:cast(Proc, {user_send,Pkt}),
+user_send_packet({#message{} = Pkt, #{user := LUser, lserver := LServer}} = Acc) ->
+  Proc = get_subprocess(LUser,LServer),
+  Proc ! {out, Pkt},
   Acc;
 user_send_packet({#presence{} = Pkt, #{lserver := LServer}} = Acc) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
@@ -761,6 +684,180 @@ parse_query(#xabber_synchronization_query{xdata = #xdata{}} = Query, Lang) ->
   end;
 parse_query(#xabber_synchronization_query{}, _Lang) ->
   {ok, []}.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
+%% Sub process.
+%%--------------------------------------------------------------------
+
+-spec get_subprocess(binary(), binary())-> pid().
+get_subprocess(User,Server)->
+  ProcName = binary_to_atom(<<"mod_sync_msg_heandler_",User/binary,$_,Server/binary>>, utf8),
+  case whereis(ProcName) of
+    undefined ->
+      PID = spawn(?MODULE,process_messages,[]),
+      register(ProcName, PID),
+      PID;
+    PID ->
+      PID
+  end.
+
+process_messages() ->
+  receive
+    {Direction,#message{} = Pkt } ->
+      process_message(Direction, Pkt),
+      process_messages();
+    _ ->
+      exit(normal)
+  after
+    300000 -> exit(normal)
+  end.
+
+-spec process_message(atom(), stanza()) -> any().
+process_message(in,#message{type = chat, body = [], from = From, to = To, sub_els = SubEls} = Pkt)->
+  check_voip_msg(Pkt),
+  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
+  handle_sub_els(chat,DecSubEls,From,To);
+process_message(in,#message{id = _ID, type = chat, from = Peer, to = To, meta = #{stanza_id := TS}} = Pkt)->
+  {LUser, LServer, _ } = jid:tolower(To),
+  {PUser, PServer, _} = jid:tolower(Peer),
+  PktRefGrp = filter_reference(Pkt,<<"groupchat">>),
+  Conversation = jid:to_string(jid:make(PUser,PServer)),
+  Type = get_conversation_type(LServer,LUser,Conversation),
+  Invite = xmpp:get_subtag(PktRefGrp, #xabbergroupchat_invite{}),
+  X = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
+  OriginIDElemnt = xmpp:get_subtag(Pkt, #origin_id{}),
+  OriginID = get_origin_id(OriginIDElemnt),
+  IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
+  if
+    Invite  =/= false ->
+      #xabbergroupchat_invite{jid = ChatJID} = Invite,
+      case ChatJID of
+        undefined ->
+          update_metainfo(message, LServer,LUser,Conversation,TS),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+            #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}]);
+        _ ->
+          Chat = jid:to_string(jid:remove_resource(ChatJID)),
+          store_special_message_id(LServer,LUser,Chat,TS,OriginID,<<"invite">>),
+          store_invite_information(LUser,LServer,ChatJID#jid.luser,ChatJID#jid.lserver, TS),
+          update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+            #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}])
+      end;
+    Type == <<"groupchat">>; Type == <<"channel">> ->
+      FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
+      StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
+      case StanzaID of
+        false ->
+          %% Bad message
+          ok;
+        _ ->
+          TSGroupchat = StanzaID#stanza_id.id,
+          if
+            IsLocal andalso X ->
+              store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),OriginID,<<"service">>);
+            IsLocal ->
+              pass;
+            true ->
+              store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID)
+          end,
+          update_metainfo(message, LServer,LUser,Conversation,binary_to_integer(TSGroupchat)),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer, StanzaID])
+      end;
+    true ->
+      case check_voip_msg(Pkt) of
+        false ->
+          case body_is_encrypted(Pkt) of
+            true ->
+              create_conversation(LServer,LUser,Conversation,<<"">>,true),
+              update_metainfo(message, LServer,LUser,Conversation,TS,true);
+            _ ->
+              ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
+                #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}]),
+              update_metainfo(message, LServer,LUser,Conversation,TS,false)
+          end;
+        _ ->
+          ok
+      end
+  end;
+process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
+  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
+  handle_sub_els(headline,DecSubEls,From,To);
+process_message(out, #message{id = ID, type = chat, from = #jid{luser =  LUser,lserver = LServer},
+  to = #jid{lserver = PServer, luser = PUser} = To,
+  meta = #{stanza_id := TS, mam_archived := true}} = Pkt)->
+  Invite = xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}),
+  Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
+  Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
+  Conversation = jid:to_string(jid:make(PUser,PServer)),
+  case Accept of
+    #jingle_accept{} ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Accept]),
+      delete_last_call(To, LUser, LServer);
+    _ ->
+      ok
+  end,
+  case Reject of
+    #jingle_reject{} ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Reject]),
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
+      delete_last_call(To, LUser, LServer);
+    _ ->
+      ok
+  end,
+  case Invite of
+    false ->
+      Encrypted = xmpp:get_subtag(Pkt,#encrypted_message{}),
+      case Encrypted of
+        #encrypted_message{} ->
+          create_conversation(LServer,LUser,Conversation,<<"">>,true),
+          update_metainfo(read, LServer,LUser,Conversation,TS,true);
+        _ ->
+          update_metainfo(message, LServer,LUser,Conversation,TS,false),
+          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"outgoing">>, LUser, LServer,
+            #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
+          update_metainfo(read, LServer,LUser,Conversation,TS,false)
+      end;
+    _ ->
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"outgoing">>, LUser, LServer,
+        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
+      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"invite">>)
+  end;
+process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
+  to = #jid{luser =  PUser,lserver = PServer}} = Pkt)->
+  Displayed = xmpp:get_subtag(Pkt, #message_displayed{}),
+  IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
+  Conversation = jid:to_string(jid:make(PUser,PServer)),
+  Type = get_conversation_type(LServer,LUser,Conversation),
+  case Displayed of
+    #message_displayed{id = OriginID} when Type == <<"groupchat">> ->
+      FilPacket = filter_packet(Displayed,jid:make(PUser,PServer)),
+      StanzaID = case xmpp:get_subtag(FilPacket, #stanza_id{}) of
+                   #stanza_id{id = SID} ->
+                     SID;
+                   _ ->
+                     get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID)
+                 end,
+      update_metainfo(read, LServer,LUser,Conversation,StanzaID),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]),
+      if
+        IsLocal -> pass;
+        true ->
+          delete_msg(LUser, LServer, PUser, PServer, StanzaID)
+      end;
+    #message_displayed{id = OriginID} ->
+      BareJID = jid:make(LUser,LServer),
+      Displayed2 = filter_packet(Displayed,BareJID),
+      StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
+      IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID),
+      update_metainfo(read, LServer,LUser,Conversation,StanzaID,IsEncrypted),
+      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]);
+    _ ->
+      ok
+  end;
+process_message(_Direction,_Pkt) ->
+  ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

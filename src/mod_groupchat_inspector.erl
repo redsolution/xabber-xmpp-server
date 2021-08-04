@@ -36,6 +36,7 @@
 
   avatar/2,
   add_user/5,
+  add_user/6,
   set_value/2,
   add_to_log/4,
   badge/2,
@@ -48,7 +49,9 @@
   user_exist/2,
   send_invite/2,
   get_invited_users/2,
+  get_invited_users/3,
   revoke/3,
+  revoke/4,
   get_permissions/1,
   get_users_chats/2,
   block_parse_chats/2,
@@ -175,19 +178,34 @@ item_chat(ChatJidQ,NameQ,AnonymousQ,ModelQ,DescQ,ContactListQ,DomainListQ,Count)
 
 revoke(Server,User,Chat) ->
   remove_invite(Server,User,Chat).
-
-get_invited_users(Server,Chat) ->
-  List = select(Server,Chat),
-  case List of
-    no_users ->
-      #xabbergroupchat_invite_query{};
+revoke(Server, User, Chat, Admin) ->
+  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,Admin,Chat) of
+    true ->
+      remove_invite(Server,User,Chat);
     _ ->
-      UserList = lists:map(fun(N) ->
-        {User} = N,
-        #xabbergroup_invite_user{jid = User}
-                           end, List),
-      #xabbergroupchat_invite_query{user = UserList}
+      remove_invite(Server,User,Chat, Admin)
   end.
+
+
+-spec get_invited_users(binary(),binary()) -> xabbergroupchat_invite_query().
+get_invited_users(Server,Chat) ->
+  List = sql_get_invited(Server,Chat),
+  make_invite_query(List).
+
+-spec get_invited_users(binary(),binary(),binary()) -> xabbergroupchat_invite_query().
+get_invited_users(Server, Chat, User) ->
+  List = sql_get_invited(Server, Chat, User),
+  make_invite_query(List).
+
+-spec make_invite_query(list()) -> xabbergroupchat_invite_query().
+make_invite_query([]) ->
+  #xabbergroupchat_invite_query{};
+make_invite_query(List) ->
+  UserList = lists:map(fun({User})->
+    #xabbergroup_invite_user{jid = User}
+                       end, List),
+  #xabbergroupchat_invite_query{user = UserList}.
+
 
 is_anonim(Server,Chat) ->
   case ejabberd_sql:sql_query(
@@ -205,19 +223,29 @@ is_anonim(Server,Chat) ->
       yes
   end.
 
-select(Server,Chat) ->
- case ejabberd_sql:sql_query(
+sql_get_invited(Server,Chat) ->
+  case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(username)s from groupchat_users
     where chatgroup = %(Chat)s
     and subscription = 'wait'")) of
-   {selected,[{null}]} ->
-     no_users;
-   {selected,[]} ->
-     no_users;
-   {selected,Users} ->
-     Users
- end.
+    {selected,Users} ->
+      Users;
+    _->
+      []
+  end.
+
+sql_get_invited(Server,Chat, User) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s from groupchat_users
+    where chatgroup = %(Chat)s
+    and subscription = 'wait' and invited_by = %(User)s")) of
+    {selected,Users} ->
+      Users;
+    _->
+      []
+  end.
 
 invite_right(_Acc, {Admin,Chat,_Server,
   #xabbergroupchat_invite{jid = _Jid, reason = _Reason, send = _Send}}) ->
@@ -240,18 +268,18 @@ user_exist(_Acc, {_Admin,Chat,Server,
       ok
   end.
 
-add_user_in_chat(_Acc, {_Admin,Chat,Server,
+add_user_in_chat(_Acc, {Admin,Chat,Server,
   #xabbergroupchat_invite{invite_jid =  User, reason = _Reason, send = _Send}}) ->
   Role = <<"member">>,
   Subscription = <<"wait">>,
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchat_users set subscription = %(Subscription)s where chatgroup=%(Chat)s
+    ?SQL("update groupchat_users set subscription = %(Subscription)s, invited_by = %(Admin)s where chatgroup=%(Chat)s
               and username=%(User)s and subscription='none'")) of
     {updated,N} when N > 0 ->
       ok;
     _ ->
-      add_user(Server,User,Role,Chat,Subscription)
+      add_user(Server,User,Role,Chat,Subscription, Admin)
   end.
 
 send_invite(_Acc, {Admin,Chat,_Server,
@@ -318,7 +346,7 @@ create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,ModelR
       CreatorJid = jid:to_string(jid:make(Creator,Host,<<>>)),
       mod_groupchat_inspector_sql:create_groupchat(Server,Localpart,CreatorJid,Name,ChatJid,
         Anonymous,Search,Model,Desc,Message,ContactList,DomainList),
-      add_user(Server,CreatorJid,<<"owner">>,ChatJid,<<"wait">>),
+      add_user(Server,CreatorJid,<<"owner">>,ChatJid,<<"wait">>,<<>>),
       mod_admin_extra:set_nickname(Localpart,Host,Name),
       Expires = <<"0">>,
       IssuedBy = <<"server">>,
@@ -386,19 +414,29 @@ add_to_log(Server,Username,Chatgroup,LogEvent) ->
 
 %% internal functions
 remove_invite(Server,User,Chat) ->
-  From = jid:from_string(Chat),
-  case ejabberd_sql:sql_query(
+  R = ejabberd_sql:sql_query(
     Server,
     ?SQL("delete from groupchat_users where
-         username=%(User)s and chatgroup=%(Chat)s and subscription='wait'")) of
+         username=%(User)s and chatgroup=%(Chat)s and subscription='wait'")),
+  remove_invite_result(R, User, Chat).
+remove_invite(Server, User, Chat, InvitedBy) ->
+  R = ejabberd_sql:sql_query(
+    Server,
+    ?SQL("delete from groupchat_users where
+         username=%(User)s and chatgroup=%(Chat)s and subscription='wait' and invited_by=%(InvitedBy)s")),
+  remove_invite_result(R, User, Chat).
+
+remove_invite_result(Result, User, Chat) ->
+  case Result of
     {updated,1} ->
+      From = jid:from_string(Chat),
       Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
       Unavailable = mod_groupchat_presence:form_presence_unavailable(),
       mod_groupchat_presence:send_presence(Unsubscribe,[{User}],From),
       mod_groupchat_presence:send_presence(Unavailable,[{User}],From),
       ok;
     _ ->
-      nothing
+      {error, not_found}
   end.
 
 kick_user(Server,User,Chat) ->
@@ -425,11 +463,14 @@ case ejabberd_sql:sql_query(
 end.
 
 add_user(Server,Member,Role,Groupchat,Subscription) ->
+  add_user(Server,Member,Role,Groupchat,Subscription,<<>>).
+
+add_user(Server,Member,Role,Groupchat,Subscription,InvitedBy) ->
   case mod_groupchat_sql:search_for_chat(Server,Member) of
     {selected,[]} ->
       case mod_groupchat_users:check_user_if_exist(Server,Member,Groupchat) of
         not_exist ->
-          mod_groupchat_inspector_sql:add_user(Server,Member,Role,Groupchat,Subscription);
+          mod_groupchat_inspector_sql:add_user(Server,Member,Role,Groupchat,Subscription,InvitedBy);
         _ ->
           ok
       end;

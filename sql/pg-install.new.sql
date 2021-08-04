@@ -91,6 +91,14 @@ CREATE TABLE archive (
     id SERIAL,
     kind text,
     nick text,
+    image boolean NOT NULL DEFAULT false,
+    document boolean NOT NULL DEFAULT false,
+    audio boolean NOT NULL DEFAULT false,
+    video boolean NOT NULL DEFAULT false,
+    geo boolean NOT NULL DEFAULT false,
+    sticker boolean NOT NULL DEFAULT false,
+    voice boolean NOT NULL DEFAULT false,
+    encrypted boolean NOT NULL DEFAULT false,
     created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
@@ -261,72 +269,6 @@ CREATE TABLE pubsub_subscription_opt (
 );
 CREATE UNIQUE INDEX i_pubsub_subscription_opt ON pubsub_subscription_opt USING btree (subid, opt_name);
 
-CREATE TABLE muc_room (
-    name text NOT NULL,
-    host text NOT NULL,
-    server_host text NOT NULL,
-    opts text NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT now()
-);
-
-CREATE UNIQUE INDEX i_muc_room_name_host ON muc_room USING btree (name, host);
-
-CREATE TABLE muc_registered (
-    jid text NOT NULL,
-    host text NOT NULL,
-    server_host text NOT NULL,
-    nick text NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT now()
-);
-
-CREATE INDEX i_muc_registered_nick ON muc_registered USING btree (nick);
-CREATE UNIQUE INDEX i_muc_registered_jid_host ON muc_registered USING btree (jid, host);
-
-CREATE TABLE muc_online_room (
-    name text NOT NULL,
-    host text NOT NULL,
-    server_host text NOT NULL,
-    node text NOT NULL,
-    pid text NOT NULL
-);
-
-CREATE UNIQUE INDEX i_muc_online_room_name_host ON muc_online_room USING btree (name, host);
-
-CREATE TABLE muc_online_users (
-    username text NOT NULL,
-    server text NOT NULL,
-    resource text NOT NULL,
-    name text NOT NULL,
-    host text NOT NULL,
-    server_host text NOT NULL,
-    node text NOT NULL
-);
-
-CREATE UNIQUE INDEX i_muc_online_users ON muc_online_users USING btree (username, server, resource, name, host);
-CREATE INDEX i_muc_online_users_us ON muc_online_users USING btree (username, server);
-
-CREATE TABLE muc_room_subscribers (
-   room text NOT NULL,
-   host text NOT NULL,
-   jid text NOT NULL,
-   nick text NOT NULL,
-   nodes text NOT NULL,
-   created_at TIMESTAMP NOT NULL DEFAULT now()
-);
-
-CREATE INDEX i_muc_room_subscribers_host_jid ON muc_room_subscribers USING btree (host, jid);
-CREATE UNIQUE INDEX i_muc_room_subscribers_host_room_jid ON muc_room_subscribers USING btree (host, room, jid);
-
-CREATE TABLE irc_custom (
-    jid text NOT NULL,
-    host text NOT NULL,
-    server_host text NOT NULL,
-    data text NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT now()
-);
-
-CREATE UNIQUE INDEX i_irc_custom_jid_host ON irc_custom USING btree (jid, host);
-
 CREATE TABLE motd (
     username text NOT NULL,
     server_host text NOT NULL,
@@ -420,20 +362,8 @@ CREATE TABLE push_session (
     PRIMARY KEY (server_host, username, timestamp)
 );
 
-CREATE TABLE xabber_push_session (
-    username text NOT NULL,
-    server_host text NOT NULL,
-    timestamp bigint NOT NULL,
-    service text NOT NULL,
-    node text NOT NULL,
-    xml text NOT NULL,
-    cipher text NOT NULL,
-    key text NOT NULL,
-    PRIMARY KEY (server_host, username, timestamp)
-);
-
 CREATE UNIQUE INDEX i_push_session_susn ON push_session USING btree (server_host, username, service, node);
-CREATE UNIQUE INDEX i_xabber_push_session_susn ON xabber_push_session USING btree (server_host, username, service, node);
+
 
 CREATE TABLE groupchats (
     name text NOT NULL,
@@ -449,8 +379,9 @@ CREATE TABLE groupchats (
     message bigint DEFAULT 0,
     contacts text,
     domains text,
-    status text NOT NULL DEFAULT 'active',
+    status text NOT NULL DEFAULT 'discussion',
     parent_chat text DEFAULT '0',
+    created_at timestamp without time zone not null default now(),
     PRIMARY KEY (server_host, localpart)
 );
 
@@ -464,14 +395,15 @@ CREATE TABLE groupchat_users (
     avatar_url text,
     avatar_size integer not null default 0,
     nickname text default '',
-    parse_vcard timestamp NOT NULL default now(),
+    parse_vcard timestamp NOT NULL default timezone('utc'::text, now()),
     parse_avatar text NOT NULL default 'yes',
-    badge text,
+    badge text NOT NULL default '',
     chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
     subscription text NOT NULL,
     p2p_state text DEFAULT 'true',
-    last_seen timestamp NOT NULL default now(),
-    user_updated_at timestamp NOT NULL default now(),
+    last_seen timestamp NOT NULL default timezone('utc'::text, now()),
+    user_updated_at timestamp NOT NULL default timezone('utc'::text, now()),
+    invited_by text,
     CONSTRAINT UC_groupchat_users UNIQUE (username,chatgroup),
     CONSTRAINT UC_groupchat_users_id UNIQUE (id)
 );
@@ -488,6 +420,7 @@ CREATE TABLE groupchat_users_vcard (
     fn text,
     nickname text,
     image text,
+    image_type text,
     hash text,
     fullupdate text
 );
@@ -503,8 +436,7 @@ CREATE TABLE groupchat_policy (
     username text NOT NULL,
     chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
     right_name text NOT NULL REFERENCES groupchat_rights(name),
-    valid_from timestamp NOT NULL,
-    valid_until timestamp NOT NULL,
+    valid_until bigint NOT NULL default 0,
     issued_by text NOT NULL,
     issued_at timestamp NOT NULL,
     CONSTRAINT UC_groupchat_policy UNIQUE (username,chatgroup,right_name)
@@ -512,15 +444,15 @@ CREATE TABLE groupchat_policy (
 
 INSERT INTO groupchat_rights (name,description,type) values
 ('send-messages','Send messages','restriction'),
+('send-stickers','Send stickers','restriction'),
+('send-voice','Send voice messages','restriction'),
+('send-invitations','Send invitations', 'restriction'),
 ('read-messages','Read messages','restriction'),
 ('owner','Owner','permission'),
-('restrict-participants','Restrict participants','permission'),
-('block-participants','Block participants','permission'),
-('send-invitations','Send invitations','restriction'),
-('administrator','Administrator','permission'),
-('change-badges','Change badges','permission'),
-('change-nicknames','Change nicknames','permission'),
-('delete-messages','Delete messages','permission')
+('change-group','Change group','permission'),
+('change-users','Change users','permission'),
+('set-restrictions','Set restrictions','permission'),
+('set-permissions','Set permissions','permission')
 ;
 
 CREATE TABLE groupchat_block (
@@ -579,7 +511,14 @@ CREATE TABLE conversation_metadata(
     updated_at bigint NOT NULL DEFAULT 0,
     metadata_updated_at bigint NOT NULL DEFAULT 0,
     status text NOT NULL DEFAULT 'active',
-    CONSTRAINT uc_conversation_metadata UNIQUE (username,server_host,conversation,conversation_thread)
+    incognito boolean NOT NULL DEFAULT false,
+    p2p boolean NOT NULL DEFAULT false,
+    pinned boolean NOT NULL DEFAULT false,
+    pinned_at bigint NOT NULL DEFAULT 0,
+    archived boolean NOT NULL DEFAULT false,
+    archived_at bigint NOT NULL DEFAULT 0,
+    encrypted boolean NOT NULL DEFAULT false,
+    CONSTRAINT uc_conversation_metadata UNIQUE (username, server_host, conversation, conversation_thread, encrypted)
     );
 
 ALTER TABLE archive ADD CONSTRAINT unique_timestamp UNIQUE (timestamp, server_host);
@@ -608,9 +547,9 @@ CREATE TABLE previous_id (
 CREATE TABLE message_retract(
     username text,
     server_host text NOT NULL,
-    type text NOT NULL DEFAULT '',
     xml text,
     version bigint,
+    type text not null default '',
     CONSTRAINT uc_retract_message_versions UNIQUE (username,server_host,type,version)
     );
 
@@ -647,5 +586,74 @@ CREATE TABLE special_messages(
 	    conversation text NOT NULL,
 	    timestamp BIGINT NOT NULL,
 	    type text NOT NULL DEFAULT 'chat',
+	    origin_id text,
 	    CONSTRAINT uc_special_message UNIQUE (username,server_host,timestamp)
 	    );
+
+CREATE TABLE channels (
+  name text NOT NULL,
+  localpart text NOT NULL,
+  server_host text NOT NULL,
+  jid text NOT NULL UNIQUE,
+  index text NOT NULL,
+  membership text NOT NULL,
+  description text,
+  owner text NOT NULL,
+  avatar_id text DEFAULT '',
+  message bigint DEFAULT 0,
+  contacts text,
+  domains text,
+  status text NOT NULL DEFAULT 'active',
+  PRIMARY KEY (server_host, localpart)
+);
+
+CREATE TABLE channel_users (
+  username text NOT NULL,
+  id text NOT NULL,
+  avatar_id text,
+  avatar_type text,
+  avatar_url text,
+  avatar_size integer not null default 0,
+  nickname text default '',
+  parse_vcard timestamp NOT NULL default now(),
+  parse_avatar text NOT NULL default 'yes',
+  badge text NOT NULL default '',
+  channel text NOT NULL REFERENCES channels (jid) ON DELETE CASCADE,
+  subscription text NOT NULL,
+  last_seen timestamp NOT NULL default now(),
+  user_updated_at timestamp NOT NULL default now(),
+  CONSTRAINT UC_channel_users UNIQUE (username,channel),
+  CONSTRAINT UC_channel_users_id UNIQUE (id)
+);
+
+CREATE TABLE channel_rights (
+  name text NOT NULL UNIQUE,
+  type text NOT NULL,
+  description text NOT NULL
+);
+CREATE TABLE channel_policy (
+  username text NOT NULL,
+  channel text NOT NULL REFERENCES channels (jid) ON DELETE CASCADE,
+  right_name text NOT NULL REFERENCES channel_rights(name),
+  valid_until bigint NOT NULL DEFAULT 0,
+  issued_by text NOT NULL,
+  issued_at timestamp NOT NULL DEFAULT now(),
+  CONSTRAINT UC_channel_policy UNIQUE (username,channel,right_name)
+);
+
+INSERT INTO channel_rights (name,description,type) values
+  ('owner','Owner','permission')
+;
+
+CREATE TABLE xabber_push_session (
+    username text NOT NULL,
+    server_host text NOT NULL,
+    timestamp bigint NOT NULL,
+    service text NOT NULL,
+    node text NOT NULL,
+    xml text NOT NULL,
+    cipher text NOT NULL,
+    key text NOT NULL,
+    PRIMARY KEY (server_host, username, timestamp)
+);
+CREATE UNIQUE INDEX i_xabber_push_session_susn ON xabber_push_session USING btree (server_host, username, service, node);

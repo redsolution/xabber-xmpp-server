@@ -176,7 +176,7 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
         "owner=%(Creator)s"])) of
     {updated,_N} ->
       xabber_groups_sm:activate(Server,LocalPart),
-      mod_groupchat_inspector:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>),
+      mod_groupchat_inspector:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
       Expires = <<"0">>,
       IssuedBy = <<"server">>,
       Permissions = get_permissions(Server),
@@ -915,14 +915,8 @@ count_users(LServer,Chat) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(count(username))d from groupchat_users where chatgroup = %(Chat)s and subscription = 'both'")) of
-    {selected,[]} ->
-      [];
-    {selected,[{}]} ->
-      [];
-    {selected,[{Count}]} ->
-      Count;
-    Other ->
-    Other
+    {selected,[{Num}]} -> Num;
+    _ -> 0
   end.
 
 create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,Contacts,Domains) ->

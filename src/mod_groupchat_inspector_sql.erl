@@ -29,7 +29,7 @@
 
 
 -export([
-          add_user/5,
+          add_user/6,
          update_user_role/4,
   update_user_subscription/4,
          users_from_chat/2,
@@ -121,7 +121,7 @@ create_groupchat(LServer,Localpart,CreatorJid,Name,ChatJid,Anon,Search,Model,Des
         "owner=%(CreatorJid)s"])).
 
 
-add_user(Server,User,Role,Chatgroup,Subscription) ->
+add_user(Server,User,Role,Chatgroup,Subscription,InvitedBy) ->
   R = randoms:get_alphanum_string(16),
   R_s = binary_to_list(R),
   R_sl = string:to_lower(R_s),
@@ -134,7 +134,8 @@ add_user(Server,User,Role,Chatgroup,Subscription) ->
         "role=%(Role)s",
         "chatgroup=%(Chatgroup)s",
          "id=%(Id)s",
-        "subscription=%(Subscription)s"
+        "subscription=%(Subscription)s",
+        "invited_by=%(InvitedBy)s"
        ])).
 
 update_user_role(Server,User,Chat,Role) ->

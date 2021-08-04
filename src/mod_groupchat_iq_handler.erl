@@ -279,20 +279,20 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"invite">>,
               end,
       ejabberd_router:route(ResIq)
   end;
-make_action(#iq{type = get, lang = Lang, sub_els = [#xmlel{name = <<"query">>,
+make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"https://xabber.com/protocol/groups#invite">>}]}]} = Iq) ->
   #iq{from = From, to = To} = Iq,
   Server = To#jid.lserver,
-  Admin = jid:to_string(jid:remove_resource(From)),
+  User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
-  case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
-    true ->
-      Query = mod_groupchat_inspector:get_invited_users(Server,Chat),
-      ResIq = xmpp:make_iq_result(Iq,Query),
-      ejabberd_router:route(ResIq);
-    _ ->
-      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You do not have permission to see the list of invitations.">>,Lang)))
-  end;
+  Query = case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>, User, Chat) of
+            true ->
+              mod_groupchat_inspector:get_invited_users(Server, Chat);
+            _ ->
+              mod_groupchat_inspector:get_invited_users(Server, Chat, User)
+          end,
+  ResIq = xmpp:make_iq_result(Iq,Query),
+  ejabberd_router:route(ResIq);
 make_action(#iq{to = To, type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/disco#items">>}]}]} = Iq) ->
   Chat = jid:to_string(jid:remove_resource(To)),
@@ -311,19 +311,14 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"revoke">>,
   DecEls = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
   Revoke = lists:keyfind(xabbergroupchat_revoke,1,DecEls),
   #xabbergroupchat_revoke{jid = User} = Revoke,
-  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,Admin,Chat) of
-    true ->
-      case mod_groupchat_inspector:revoke(Server,User,Chat) of
-        ok ->
-          ejabberd_hooks:run(revoke_invite, Server, [Chat, User]),
-          ResIq = xmpp:make_iq_result(Iq),
-          ejabberd_router:route(ResIq);
-        _ ->
-          Err = xmpp:err_item_not_found(),
-          ejabberd_router:route(xmpp:make_error(Iq,Err))
-      end;
-    no ->
-      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You do not have permission to see the list of invitations.">>,<<"en">>)))
+  case mod_groupchat_inspector:revoke(Server,User,Chat,Admin) of
+    ok ->
+      ejabberd_hooks:run(revoke_invite, Server, [Chat, User]),
+      ResIq = xmpp:make_iq_result(Iq),
+      ejabberd_router:route(ResIq);
+    _ ->
+      Err = xmpp:err_item_not_found(),
+      ejabberd_router:route(xmpp:make_error(Iq,Err))
   end;
 make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/disco#info">>}]}]} = Iq) ->

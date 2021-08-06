@@ -48,8 +48,8 @@
   get_all_restrictions/1,
   get_all_rights/1,
   set_rule/6,
-  get_rights/3
-]).
+  get_rights/3,
+  get_owners/2]).
 
 is_restricted(Action,User,Chat)->
   ChatJid = jid:from_string(Chat),
@@ -137,6 +137,19 @@ is_owner(Server,Chat,Username) ->
    _ ->
      yes
  end.
+
+get_owners(LServer, Chat) ->
+  TS = now_to_timestamp(now()),
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(username)s,@(id)s from groupchat_users where username in
+     (select username from groupchat_policy where
+      chatgroup=%(Chat)s and right_name = 'owner' and (valid_until = 0 or valid_until > %(TS)d))
+     and chatgroup = %(Chat)s and subscription = 'both'") ) of
+    {selected, List} -> List;
+    _ ->
+      []
+  end.
 
 get_rules(Server,User,Chat,Action) ->
   TS = now_to_timestamp(now()),

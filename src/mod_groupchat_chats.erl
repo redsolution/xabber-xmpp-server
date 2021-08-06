@@ -439,17 +439,22 @@ send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
     sub_els = [Invite,ChatInfo]},
   ejabberd_router:route(Message).
 
-delete_chat(_Acc,{LServer,_User,Chat,_UserCard,_Lang})->
-  DeleteChat = gen_mod:get_module_opt(LServer, ?MODULE, annihilation),
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(username)s from groupchat_users where chatgroup = %(Chat)s and subscription = 'both'")) of
-    {selected,[]} when DeleteChat == true->
+delete_chat(_Acc,{LServer,User,Chat,_UserCard,_Lang})->
+  DeleteIfEmpty = gen_mod:get_module_opt(LServer, ?MODULE, annihilation),
+  if
+    DeleteIfEmpty ->
+      case count_users(LServer,Chat) of
+        0 -> delete(Chat);
+        _ -> pass
+      end;
+    true ->
+      pass
+  end,
+  case mod_groupchat_restrictions:get_owners(LServer,Chat) of
+    [] ->
+      mod_groupchat_users:unsubscribe_all_participants([],LServer,User,Chat),
       delete(Chat);
-    {selected,[{}]} when DeleteChat == true ->
-      delete(Chat);
-    _ ->
-      ok
+    _ -> pass
   end,
   {stop,ok}.
 
@@ -624,6 +629,7 @@ delete(Chat) ->
   mod_groupchat_vcard:check_old_meta(LServer,AllUserMeta),
   delete_groupchat(LServer, Chat),
   delete_depended_chats(Chat, LServer),
+  xabber_groups_sm:deactivate(LServer,Localpart),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL("delete from archive where username=%(Localpart)s and %(LServer)H")).

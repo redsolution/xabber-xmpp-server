@@ -96,13 +96,19 @@ handle_cast(#presence{to = To} = Presence, State) ->
 handle_cast(_Request, State) ->
   {noreply, State}.
 
-delete_session_from_counter_after(To, From, Timeout) ->
+delete_session_from_counter_after(GroupJID, UserJID, Timeout) ->
   timer:sleep(Timeout),
-  User = [{jid:to_string(From)}],
-  Chat = jid:to_string(jid:remove_resource(To)),
-  FromChat = jid:replace_resource(To,<<"Group">>),
-  change_present_state(To,From),
-  send_presence(form_presence(Chat),User,FromChat).
+%%  checking if the group was deleted
+  case ejabberd_sm:get_session_sid(GroupJID#jid.luser, GroupJID#jid.lserver, <<"Group">>) of
+    none ->
+      ok;
+    _ ->
+      User = [{jid:to_string(UserJID)}],
+      Chat = jid:to_string(jid:remove_resource(GroupJID)),
+      FromChat = jid:replace_resource(GroupJID,<<"Group">>),
+      change_present_state(GroupJID, UserJID),
+      send_presence(form_presence(Chat),User,FromChat)
+  end.
 
 revoke_invite(Chat,User) ->
   ChatJID = jid:from_string(Chat),

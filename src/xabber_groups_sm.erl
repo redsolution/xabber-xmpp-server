@@ -17,7 +17,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
   code_change/3]).
--export([activate/2]).
+-export([activate/2, deactivate/2]).
 -define(SERVER, ?MODULE).
 -define(MYHOSTS, ejabberd_config:get_myhosts()).
 -record(xabber_sm_state, {pid = <<>>}).
@@ -68,9 +68,13 @@ handle_call(_Request, _From, State = #xabber_sm_state{}) ->
   {noreply, NewState :: #xabber_sm_state{}} |
   {noreply, NewState :: #xabber_sm_state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #xabber_sm_state{}}).
-handle_cast({group_created,Server,Group}, #xabber_sm_state{pid = PID} = State) ->
+handle_cast({group_created,Server, GroupLocalPart}, #xabber_sm_state{pid = PID} = State) ->
   SID = {p1_time_compat:unique_timestamp(), PID},
-  ejabberd_sm:open_session(SID, Group, Server, <<"Group">>, 50, [{group, true}]),
+  ejabberd_sm:open_session(SID, GroupLocalPart, Server, <<"Group">>, 50, [{group, true}]),
+  {noreply, State};
+handle_cast({group_deleted,Server, GroupLocalPart},State) ->
+  SID = ejabberd_sm:get_session_sid(GroupLocalPart, Server, <<"Group">>),
+  ejabberd_sm:close_session(SID, GroupLocalPart, Server, <<"Group">>),
   {noreply, State};
 handle_cast(_Request, State = #xabber_sm_state{}) ->
   {noreply, State}.
@@ -138,5 +142,8 @@ start_entities(Chats,Server,Pid,Resource) ->
     SID = {p1_time_compat:unique_timestamp(), Pid},
     ejabberd_sm:open_session(SID, Chat, Server, Resource, 50, [{group, true}]) end, Chats).
 
-activate(Server, Chat) ->
-  gen_server:cast(?MODULE, {group_created,Server,Chat}).
+activate(Server, GroupLocalPart) ->
+  gen_server:cast(?MODULE, {group_created,Server,GroupLocalPart}).
+
+deactivate(Server, GroupLocalPart) ->
+  gen_server:cast(?MODULE, {group_deleted,Server,GroupLocalPart}).

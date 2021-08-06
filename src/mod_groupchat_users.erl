@@ -43,7 +43,6 @@
   form_user_updated/2,
   user_list_to_send/2,
   form_kicked/2,
-  is_lonely_owner/2,
   delete_user/2,
   is_in_chat/3, is_duplicated_nick/4,
   check_if_exist/3,
@@ -102,7 +101,6 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 25),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, pre_approval, 30),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, is_owner, 35),
-  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, is_lonely_owner, 15),
   ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 25),
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
 
@@ -130,7 +128,6 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, pre_approval, 30),
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, is_owner, 35),
   ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 25),
-  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, is_lonely_owner, 15),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20),
   ejabberd_hooks:delete(groupchat_presence_hook, Host, ?MODULE, subscribe_user, 60).
 
@@ -420,18 +417,6 @@ pre_approval(_Acc,{Server,To,Chat,_Lang}) ->
       {stop,both}
   end.
 
-is_lonely_owner(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
-  Alone = is_user_alone(Server,Chat),
-  OwnerAlone = is_owner_alone(Server,Chat),
-  case mod_groupchat_restrictions:is_owner(Server,Chat,User) of
-    no ->
-      ok;
-    yes when Alone == yes orelse OwnerAlone == no ->
-      ok;
-    yes ->
-      {stop,alone}
-  end.
-
 delete_user(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
   Subscription = check_user(Server,User,Chat),
   case ejabberd_sql:sql_query(
@@ -539,30 +524,6 @@ user_list_to_send(Server, Groupchat) ->
    {selected,Users} ->
      Users
  end.
-
-is_user_alone(Server,Chat) ->
-  {selected,Users} = ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(username)s from groupchat_users where chatgroup=%(Chat)s and subscription = 'both' ")),
-  case length(Users) of
-    _ when length(Users) > 1 ->
-      no;
-    _  ->
-      yes
-  end.
-
-is_owner_alone(Server,Chat) ->
-  {selected,Users} = ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(username)s from groupchat_policy where chatgroup=%(Chat)s and right_name = 'owner'")),
-  case length(Users) of
-    _ when length(Users) > 1 ->
-      no;
-    _ when length(Users) == 1 ->
-      yes;
-    _ when length(Users) == 0 ->
-      p2p
-  end.
 
 change_subscription(Server,Chat,Username,State) ->
   case ?SQL_UPSERT(Server, "groupchat_users",

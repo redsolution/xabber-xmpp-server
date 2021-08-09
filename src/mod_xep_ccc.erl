@@ -60,7 +60,7 @@
 
 %%
 -export([get_stanza_id/2, check_user_for_sync/5, try_to_sync/5, make_responce_to_sync/5, iq_result_from_remote_server/1]).
--export([get_last_sync/4, get_stanza_id_from_counter/5, get_last_card/4]).
+-export([get_last_sync/4, get_stanza_id_from_counter/5, get_last_card/4,update_mam_prefs/3]).
 
 % syncronization_query hook
 -export([create_synchronization_metadata/11, check_conversation_type/11, get_invite_information/4]).
@@ -243,77 +243,6 @@ handle_cast({user_send, #presence{type = Type, from = #jid{luser = LUser, lserve
   to = #jid{luser = PUser, lserver = PServer}}}, State) when Type == unsubscribe orelse Type == unsubscribed  ->
   maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
   {noreply, State};
-handle_cast({user_send,#message{id = ID, type = chat, from = #jid{luser =  LUser,lserver = LServer}, to = #jid{lserver = PServer, luser = PUser} = To, meta = #{stanza_id := TS, mam_archived := true}} = Pkt}, State) ->
-  Invite = xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}),
-  Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
-  Reject = xmpp:get_subtag(Pkt, #jingle_reject{}),
-  Conversation = jid:to_string(jid:make(PUser,PServer)),
-  case Accept of
-    #jingle_accept{} ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Accept]),
-      delete_last_call(To, LUser, LServer);
-    _ ->
-      ok
-  end,
-  case Reject of
-    #jingle_reject{} ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"data">>, LUser, LServer, Reject]),
-      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
-      delete_last_call(To, LUser, LServer);
-    _ ->
-      ok
-  end,
-  case Invite of
-    false ->
-      Encrypted = xmpp:get_subtag(Pkt,#encrypted_message{}),
-      case Encrypted of
-        #encrypted_message{} ->
-          create_conversation(LServer,LUser,Conversation,<<"">>,true),
-          update_metainfo(read, LServer,LUser,Conversation,TS,true);
-        _ ->
-          update_metainfo(message, LServer,LUser,Conversation,TS,false),
-          ejabberd_hooks:run(xabber_push_notification, LServer, [<<"outgoing">>, LUser, LServer,
-            #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-          update_metainfo(read, LServer,LUser,Conversation,TS,false)
-      end;
-    _ ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"outgoing">>, LUser, LServer,
-        #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}]),
-      store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"invite">>)
-  end,
-  {noreply, State};
-handle_cast({user_send,#message{type = chat, from = #jid{luser =  LUser,lserver = LServer}, to = #jid{luser =  PUser,lserver = PServer}} = Pkt}, State) ->
-  Displayed = xmpp:get_subtag(Pkt, #message_displayed{}),
-  IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
-  Conversation = jid:to_string(jid:make(PUser,PServer)),
-  Type = get_conversation_type(LServer,LUser,Conversation),
-  case Displayed of
-    #message_displayed{id = OriginID} when Type == <<"groupchat">> ->
-      FilPacket = filter_packet(Displayed,jid:make(PUser,PServer)),
-      StanzaID = case xmpp:get_subtag(FilPacket, #stanza_id{}) of
-                   #stanza_id{id = SID} ->
-                     SID;
-                   _ ->
-                     get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID)
-                 end,
-      update_metainfo(read, LServer,LUser,Conversation,StanzaID),
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]),
-      if
-        IsLocal -> pass;
-        true ->
-          delete_msg(LUser, LServer, PUser, PServer, StanzaID)
-      end;
-    #message_displayed{id = OriginID} ->
-      BareJID = jid:make(LUser,LServer),
-      Displayed2 = filter_packet(Displayed,BareJID),
-      StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
-      IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID),
-      update_metainfo(read, LServer,LUser,Conversation,StanzaID,IsEncrypted),
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"displayed">>, LUser, LServer, Displayed]);
-    _ ->
-      ok
-  end,
-  {noreply, State};
 handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
   PktNew = xmpp:decode_els(Presence),
   IsChat = xmpp:get_subtag(PktNew, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
@@ -326,20 +255,30 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
                 end,
   CurrentType = get_conversation_type(LServer,LUser,Conversation),
   if
-    NewType =/= CurrentType -> update_metainfo(NewType, LServer,LUser,Conversation,X);
-    true -> ok
+    NewType == CurrentType ->
+      pass;
+    NewType == <<"groupchat">> orelse NewType == <<"channel">> ->
+      update_mam_prefs(add,jid:make(LUser,LServer),jid:make(PUser,PServer)),
+      update_metainfo(NewType, LServer,LUser,Conversation,X);
+    NewType == <<"chat">> ->
+      update_mam_prefs(remove,jid:make(LUser,LServer),jid:make(PUser,PServer)),
+      update_metainfo(NewType, LServer,LUser,Conversation,X);
+    true ->
+      pass
   end,
   {noreply, State};
 handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
   X = xmpp:get_subtag(Presence, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-  case X of
-    false ->
-      ejabberd_hooks:run(xabber_push_notification, LServer, [<<"subscribe">>, LUser, LServer, #presence{type = subscribe, from = From}]);
-    _ ->
-      ok
-  end,
+  Type = case X of
+           false ->
+             ejabberd_hooks:run(xabber_push_notification,
+               LServer, [<<"subscribe">>, LUser, LServer, #presence{type = subscribe, from = From}]),
+             <<"chat">>;
+           _ ->
+             <<"groupchat">>
+         end,
   Conversation = jid:to_string(jid:remove_resource(From)),
-  create_conversation(LServer,LUser,Conversation,<<"">>,false),
+  create_conversation(LServer,LUser,Conversation,<<"">>,false,Type),
   {noreply, State};
 handle_cast({sm, #presence{type = unsubscribe,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}}},State) ->
   maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
@@ -742,6 +681,7 @@ process_message(in,#message{id = _ID, type = chat, from = Peer, to = To, meta = 
           store_special_message_id(LServer,LUser,Chat,TS,OriginID,<<"invite">>),
           store_invite_information(LUser,LServer,ChatJID#jid.luser,ChatJID#jid.lserver, TS),
           update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat),
+          update_mam_prefs(add,To,ChatJID),
           ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
             #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}])
       end;
@@ -2546,6 +2486,9 @@ make_ccc_push(LServer,LUser,Conversation, TS, Type, Thread, PushType) ->
                 end, UserResources).
 
 create_conversation(LServer,LUser,Conversation,Thread,Encrypted) ->
+  create_conversation(LServer,LUser,Conversation,Thread,Encrypted,<<"chat">>).
+
+create_conversation(LServer,LUser,Conversation,Thread,Encrypted,Type) ->
   TS = time_now(),
   Status = <<"active">>,
   ?SQL_UPSERT(
@@ -2554,6 +2497,7 @@ create_conversation(LServer,LUser,Conversation,Thread,Encrypted) ->
     ["!username=%(LUser)s",
       "!conversation=%(Conversation)s",
       "!encrypted=%(Encrypted)b",
+      "type=%(Type)s",
       "updated_at=%(TS)d",
       "conversation_thread=%(Thread)s",
       "metadata_updated_at=%(TS)d",
@@ -2768,3 +2712,40 @@ update_table(unread_msg_counter) ->
       unread_msg_counter);
 update_table(_) ->
   ok.
+
+-spec update_mam_prefs(atom(), jid(), jid()) -> stanza() | error.
+update_mam_prefs(_Action, User, User) ->
+%%  skip for myself
+  ok;
+update_mam_prefs(Action, User, Contact) ->
+  case get_mam_prefs(User) of
+    #mam_prefs{never=Never0} = Prefs ->
+      Never1 = case Action of
+                 add -> Never0 ++ [Contact];
+                 _ ->
+                   L1 = lists:usort([jid:tolower(jid:remove_resource(J)) || J <- Never0]),
+                   L2 = L1 -- [jid:tolower(Contact)],
+                   [jid:make(LJ) || LJ <- L2]
+               end,
+      set_mam_prefs(User, Prefs#mam_prefs{never = Never1});
+    _ ->
+      error
+  end.
+
+set_mam_prefs(#jid{lserver = LServer} = User, Prefs) ->
+  IQ = #iq{from = User,
+    to = #jid{lserver = LServer},
+    type = set,
+    sub_els = [Prefs]},
+  mod_mam:pre_process_iq_v0_3(IQ).
+
+get_mam_prefs(#jid{lserver = LServer} = User) ->
+  IQ = #iq{from = User,
+    to = #jid{lserver = LServer},
+    type = get, sub_els = [#mam_prefs{xmlns = ?NS_MAM_2}]},
+  case mod_mam:pre_process_iq_v0_3(IQ) of
+    #iq{type = result, sub_els = [#mam_prefs{} = Prefs]} ->
+      Prefs;
+    _ ->
+      error
+  end.

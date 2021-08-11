@@ -39,7 +39,6 @@
 	 is_carbon_copy/1, mod_opt_type/1, depends/2, clean_cache/1,
 	 mod_options/1]).
 
--include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("mod_carboncopy.hrl").
@@ -183,8 +182,11 @@ check_and_forward(JID, To, Packet, Direction)->
 
 -spec remove_connection(binary(), binary(), binary(), binary()) -> ok.
 remove_connection(User, Server, Resource, _Status)->
-    disable(Server, User, Resource),
-    ok.
+	case lists:keyfind(Resource,1,ejabberd_sm:get_user_info(User, Server)) of
+		false -> disable(Server, User, Resource);
+		_ -> pass %% it was reconnect
+	end,
+	ok.
 
 
 %%% Internal
@@ -350,7 +352,7 @@ cache_nodes(Mod, Host) ->
 	false -> ejabberd_cluster:get_nodes()
     end.
 
--spec clean_cache(node()) -> ok.
+-spec clean_cache(node()) -> non_neg_integer().
 clean_cache(Node) ->
     ets_cache:filter(
       ?CARBONCOPY_CACHE,

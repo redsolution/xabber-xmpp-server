@@ -44,7 +44,7 @@
 -include("logger.hrl").
 -include("xmpp.hrl").
 
--define(CSI_QUEUE_MAX, 100).
+-define(CSI_QUEUE_MAX, 500).
 
 -type csi_type() :: presence | chatstate | {pep, binary()}.
 -type csi_queue() :: {non_neg_integer(), map()}.
@@ -227,7 +227,7 @@ filter_presence({#presence{meta = #{csi_resend := true}}, _} = Acc) ->
     Acc;
 filter_presence({#presence{to = To, type = Type} = Pres,
 		 #{csi_state := inactive} = C2SState})
-  when Type == available; Type == unavailable ->
+  when Type == available; Type == unavailable; Type == error ->
     ?DEBUG("Got availability presence stanza for ~s", [jid:encode(To)]),
     enqueue_stanza(presence, Pres, C2SState);
 filter_presence(Acc) ->

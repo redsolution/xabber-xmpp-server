@@ -208,7 +208,7 @@ send_copies(JID, To, Packet, Direction)->
     %% unavailable resources are handled like bare JIDs
     IsBareTo = case {Direction, To} of
 	{received, #jid{lresource = <<>>}} -> true;
-	{received, #jid{lresource = LRes}} -> not lists:member(LRes, AvailRs);
+%%	{received, #jid{lresource = LRes}} -> not lists:member(LRes, AvailRs);
 	_ -> false
     end,
     %% list of JIDs that should receive a carbon copy of this message (excluding the

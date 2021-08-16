@@ -60,7 +60,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
   terminate/2, code_change/3]).
 
--export([check_iq/1,get_rewrite_job/6, get_rewrite_session/2]).
+-export([check_iq/1,get_rewrite_job/6]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -68,11 +68,6 @@
 -include("ejabberd_sql_pt.hrl").
 
 -record(state, {host = <<"">> :: binary()}).
--record(rewrite_session,
-{
-  us = {<<"">>, <<"">>}                  :: {binary(), binary()},
-  resource = <<"">>                      :: binary()
-}).
 
 -record(rewrite_job,
 {
@@ -121,10 +116,6 @@ init([Host, _Opts]) ->
   ejabberd_mnesia:create(?MODULE, rewrite_job,
     [{disc_only_copies, [node()]},
       {attributes, record_info(fields, rewrite_job)}]),
-  ejabberd_mnesia:create(?MODULE, rewrite_session,
-    [{disc_only_copies, [node()]},
-      {type, bag},
-      {attributes, record_info(fields, rewrite_session)}]),
   clean_tables(),
   register_iq_handlers(Host),
   register_hooks(Host),
@@ -177,14 +168,9 @@ handle_cast(#iq{type = error, id = ID} = IQ, State) ->
       ejabberd_router:route(NewIQ)
   end,
   {noreply, State};
-handle_cast(#iq{from = From, to = To, type = result, id = ID} = IQ, State) ->
+handle_cast(#iq{from = From, type = result, id = ID}, State) ->
   ?DEBUG("Got result ~p",[ID]),
   case get_rewrite_job(ID,'_','_',{'_','_','_'},'_','_') of
-    [] ->
-      LServer = To#jid.lserver,
-      ?DEBUG("Start hook",[]),
-      ejabberd_hooks:run(iq_result_from_remote_server, LServer, [IQ]),
-      ok;
     [#rewrite_job{rewrite_ask = retractall, usr = {LUser, LServer, LResource}, iq_id = IQID,
       rewrite_message = [{type, Type}]} = Job] when From#jid.lresource == <<>> ->
       delete_job(Job),
@@ -322,22 +308,15 @@ process_iq(#iq{type = set, lang = Lang, sub_els = [#xabber_retract_query{}]} = I
   xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
 %% Query the current version
 process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = undefined, type = Type}]} = IQ) ->
-  {LUser, LServer, LResource} = jid:tolower(From),
-%%  set_rewrite_notification(LServer,LUser,LResource),
+  {LUser, LServer, _LResource} = jid:tolower(From),
   Version = get_version(LServer,LUser,Type),
   xmpp:make_iq_result(IQ, #xabber_retract_query{version = Version});
-%%process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = undefined, type = Type}]} = IQ) ->
-%%  {LUser, LServer, LResource} = jid:tolower(From),
-%%  set_rewrite_notification(LServer,LUser,LResource),
-%%  send_retract_query_messages(From,Version,Type),
-%%  xmpp:make_iq_result(IQ);
 process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = Version, 'less-than' = Less0, type = Type}]} = IQ) ->
   Less = if
            Less0 > 250 orelse Less0 == undefined -> 250;
            true -> Less0
          end,
-  {LUser, LServer, LResource} = jid:tolower(From),
-%%  set_rewrite_notification(LServer,LUser,LResource),
+  {LUser, LServer, _LResource} = jid:tolower(From),
   Count = get_count_events(LServer,LUser,Version,Type),
   if
     Count >= Less ->
@@ -955,25 +934,11 @@ get_rewrite_job(ServerID,IQID,Type,{LUser,LServer,LResource},StanzaIDBinary,Rewr
 delete_job(#rewrite_job{} = J) ->
   mnesia:dirty_delete_object(J).
 
-%% active users
-
-set_rewrite_notification(LServer,LUser,LResource) ->
-  Session = #rewrite_session{resource = LResource, us = {LUser,LServer}},
-  mnesia:dirty_write(Session).
-
-get_rewrite_session(LServer,LUser) ->
-  mnesia:dirty_read(rewrite_session, {LUser, LServer}).
-
 %% clean mnesia
 
 clean_tables() ->
   Jobs =
     get_rewrite_job('_','_','_',{'_','_','_'},'_','_'),
-  Sessions = get_rewrite_session('_','_'),
-  lists:foreach(
-    fun(S) ->
-      mnesia:dirty_delete_object(S)
-    end, Sessions),
   lists:foreach(
     fun(J) ->
       mnesia:dirty_delete_object(J)

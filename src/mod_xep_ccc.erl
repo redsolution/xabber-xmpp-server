@@ -59,8 +59,8 @@
 -export([get_last_message/3, get_count_messages/4, get_last_groupchat_message/4, get_last_previous_message/4]).
 
 %%
--export([get_stanza_id/2, check_user_for_sync/5, try_to_sync/5, make_responce_to_sync/5, iq_result_from_remote_server/1]).
--export([get_last_sync/4, get_stanza_id_from_counter/5, get_last_card/4,update_mam_prefs/3]).
+-export([get_stanza_id/2, check_user_for_sync/5, try_to_sync/5, make_responce_to_sync/5]).
+-export([get_stanza_id_from_counter/5, get_user_cards/4,update_mam_prefs/3]).
 
 % syncronization_query hook
 -export([create_synchronization_metadata/11, check_conversation_type/11, get_invite_information/4]).
@@ -105,15 +105,6 @@
   id = <<>>                            :: binary() | '_',
   user_id = <<>>                       :: binary() | '_',
   packet = #xmlel{}                    :: xmlel() | message() | '_'
-}
-).
-
--record(last_sync,
-{
-  us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
-  bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_',
-  packet = #xmlel{}                    :: xmlel() | '_',
-  id = <<>>                            :: binary() | '_'
 }
 ).
 
@@ -188,10 +179,6 @@ init([Host, _Opts]) ->
     [{disc_only_copies, [node()]},
       {type, bag},
       {attributes, record_info(fields, last_msg)}]),
-  ejabberd_mnesia:create(?MODULE, last_sync,
-    [{disc_only_copies, [node()]},
-      {type, bag},
-      {attributes, record_info(fields, last_sync)}]),
   ejabberd_mnesia:create(?MODULE, last_call,
     [{disc_only_copies, [node()]},
       {type, bag},
@@ -217,15 +204,6 @@ handle_call(_Request, _From, State) ->
   Reply = ok,
   {reply, Reply, State}.
 
-handle_cast({request,User,Chat}, State) ->
-  {LUser,LServer,LResource} = jid:tolower(User),
-  From = jid:remove_resource(User),
-  {PUser,PServer,_R} = jid:tolower(Chat),
-  NewID = randoms:get_alphanum_string(32),
-  NewIQ = #iq{type = get, id = NewID, from = From, to = Chat, sub_els = [#xabber_synchronization_query{stamp = <<"0">>}]},
-  set_request_job(NewID,{LUser,LServer,LResource},{PUser,PServer}),
-  ejabberd_router:route(NewIQ),
-  {noreply, State};
 handle_cast({user_send, #iq{from = #jid{luser = LUser, lserver = LServer}, to = #jid{luser = PUser, lserver = PServer}} = IQ}, State) ->
   Decline = xmpp:get_subtag(IQ,#xabbergroup_decline{}),
   case Decline of
@@ -275,7 +253,8 @@ handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LSe
                LServer, [<<"subscribe">>, LUser, LServer, #presence{type = subscribe, from = From}]),
              <<"chat">>;
            _ ->
-             <<"groupchat">>
+             Privacy = get_privacy(xmpp:get_subtag(X, #xabbergroupchat_privacy{})),
+             erlang:iolist_to_binary([?NS_GROUPCHAT,<<"#">>,Privacy])
          end,
   Conversation = jid:to_string(jid:remove_resource(From)),
   create_conversation(LServer,LUser,Conversation,<<"">>,false,Type),
@@ -303,8 +282,6 @@ register_hooks(Host) ->
     check_conversation_type, 50),
   ejabberd_hooks:add(syncronization_query, Host, ?MODULE,
     create_synchronization_metadata, 60),
-  ejabberd_hooks:add(iq_result_from_remote_server, Host, ?MODULE,
-    iq_result_from_remote_server, 10),
   ejabberd_hooks:add(synchronization_event, Host, ?MODULE,
     get_last_ccc_state, 10),
   ejabberd_hooks:add(synchronization_event, Host, ?MODULE,
@@ -331,8 +308,6 @@ unregister_hooks(Host) ->
     check_conversation_type, 50),
   ejabberd_hooks:delete(syncronization_query, Host, ?MODULE,
     create_synchronization_metadata, 60),
-  ejabberd_hooks:delete(iq_result_from_remote_server, Host, ?MODULE,
-    iq_result_from_remote_server, 10),
   ejabberd_hooks:delete(synchronization_event, Host, ?MODULE,
     get_last_ccc_state, 10),
   ejabberd_hooks:delete(synchronization_event, Host, ?MODULE,
@@ -353,31 +328,6 @@ unregister_hooks(Host) ->
     sm_receive_packet, 55),
   ejabberd_hooks:delete(c2s_post_auth_features, Host, ?MODULE,
     c2s_stream_features, 50).
-
-iq_result_from_remote_server(#iq{
-  from = #jid{luser = ChatName, lserver = ChatServer},
-  to = #jid{luser = LUser, lserver = LServer},
-  type = result, id = ID} =IQ) ->
-  case get_request_job(ID,{'_','_'},{'_','_','_'}) of
-    [] ->
-      ?DEBUG("Not our id ~p",[ID]);
-    [#request_job{server_id = ID, usr = {LUser,LServer,_R}, cs = {ChatName,ChatServer}} = Job] ->
-      Els = xmpp:get_els(IQ),
-      Sync = case Els of
-               [] ->
-                 [];
-               [F|_Rest] ->
-                 F;
-               _ ->
-                 []
-             end,
-      SyncD = xmpp:decode(Sync),
-      #xabber_synchronization{conversation = [Conv],stamp = Stamp} = SyncD,
-      store_last_sync(Conv, ChatName, ChatServer, LUser,LServer, Stamp),
-      delete_job(Job);
-    _ ->
-      ok
-  end.
 
 check_user_for_sync(_Acc,LServer,User,Chat,_Stamp) ->
   UserSubscription = mod_groupchat_users:check_user_if_exist(LServer,User,Chat),
@@ -680,7 +630,7 @@ process_message(in,#message{id = _ID, type = chat, from = Peer, to = To, meta = 
           Chat = jid:to_string(jid:remove_resource(ChatJID)),
           store_special_message_id(LServer,LUser,Chat,TS,OriginID,<<"invite">>),
           store_invite_information(LUser,LServer,ChatJID#jid.luser,ChatJID#jid.lserver, TS),
-          update_metadata(invite,<<"groupchat">>, LServer,LUser,Chat),
+          create_conversation(LServer,LUser,Chat,<<>>,false,?NS_GROUPCHAT),
           update_mam_prefs(add,To,ChatJID),
           ejabberd_hooks:run(xabber_push_notification, LServer, [<<"message">>, LUser, LServer,
             #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)}])
@@ -830,16 +780,7 @@ make_result(LServer, LUser, Stamp, RSM, Form) ->
 convert_result(Result) ->
   lists:map(fun(El) ->
     [Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,Status,Encrypted,Incognito,P2P] = El,
-    {Conversation,binary_to_integer(Retract),Type,Thread,Read,Delivered,Display,binary_to_integer(UpdateAt),Status, to_atom_t_f(Encrypted), to_atom_t_f(Incognito), to_atom_t_f(P2P)} end, Result
-  ).
-
-to_atom_t_f(Binary) ->
-  case Binary of
-    <<"t">> ->
-      true;
-    _ ->
-      false
-  end.
+    {Conversation,binary_to_integer(Retract),Type,Thread,Read,Delivered,Display,binary_to_integer(UpdateAt),Status,ejabberd_sql:to_bool(Encrypted),ejabberd_sql:to_bool(Incognito), ejabberd_sql:to_bool(P2P)} end, Result).
 
 make_result_el(LServer, LUser, El) ->
   {Conversation,Retract,Type,Thread,Read,Delivered,Display,UpdateAt,ConversationStatus,Encrypted,Incognito,P2P} = El,
@@ -1341,8 +1282,6 @@ get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
 get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID) ->
   Msgs = get_count(LUser, LServer, PUser, PServer),
   Msg = [X || X <- Msgs, X#unread_msg_counter.origin_id == OriginID],
-%%  SortFun = fun(E1,E2) -> TS1 = binary_to_integer(E1#unread_msg_counter.ts), TS2 = binary_to_integer(E2#unread_msg_counter.ts), TS1 > TS2 end,
-%%  SortMsg = lists:sort(SortFun,Msg),
   SortMsg = lists:reverse(lists:keysort(#unread_msg_counter.ts,Msg)),
   case SortMsg of
     [#unread_msg_counter{id = StanzaID}| _Rest] ->
@@ -1350,87 +1289,6 @@ get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID) ->
     _ ->
       undefined
   end.
-
-%%get_id_from_special_messages(LUser,LServer,PUser,PServer,OriginID) ->
-%%  Conv = jid:to_string(jid:make(PUser,PServer)),
-%%  case ejabberd_sql:sql_query(
-%%    LServer,
-%%    ?SQL("select
-%%    @(timestamp)s
-%%     from special_messages"
-%%    " where username=%(LUser)s and conversation=%(Conv)s and origin_id=%(OriginID)s and %(LServer)H order by timestamp desc")) of
-%%    {selected,[<<>>]} ->
-%%      empty;
-%%    {selected,[]} ->
-%%      empty;
-%%    {selected,[{}]} ->
-%%      empty;
-%%    {selected,[{ID}]} ->
-%%      ID;
-%%    _ ->
-%%      empty
-%%  end.
-
-store_last_sync(Sync, ChatName, ChatServer, PUser, PServer, TS) ->
-  case {mnesia:table_info(last_sync, disc_only_copies),
-    mnesia:table_info(last_sync, memory)} of
-    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
-      ?ERROR_MSG("Last sync too large, won't store message id for ~s@~s",
-        [PUser, PServer]),
-      {error, overflow};
-    _ ->
-      F1 = fun() ->
-        mnesia:write(
-          #last_sync{us = {ChatName, ChatServer},
-            id = TS,
-            bare_peer = {PUser, PServer, <<>>},
-            packet = Sync
-          })
-           end,
-      delete_last_sync(ChatName, ChatServer, PUser, PServer),
-      case mnesia:transaction(F1) of
-        {atomic, ok} ->
-          ok;
-        {aborted, Err1} ->
-          ?DEBUG("Cannot add message id to last sync of ~s@~s: ~s",
-            [PUser, PServer, Err1]),
-          Err1
-      end
-  end.
-
-delete_last_sync(ChatName, ChatServer, PUser, PServer) ->
-  F1 = get_last_sync(ChatName, ChatServer, PUser, PServer),
-
-  lists:foreach(
-    fun(Msg) ->
-      mnesia:dirty_delete_object(Msg)
-    end, F1).
-
-get_last_sync(ChatName, ChatServer, PUser, PServer) ->
-  FN = fun()->
-    mnesia:match_object(last_sync,
-      {last_sync, {ChatName, ChatServer}, {PUser, PServer,<<>>}, '_','_'},
-      read)
-       end,
-  {atomic,MsgRec} = mnesia:transaction(FN),
-  MsgRec.
-
-update_metadata(invite,<<"groupchat">>, LServer,LUser,Conversation) ->
-  Type = <<"groupchat">>,
-  Status = <<"active">>,
-  ?DEBUG("save groupchat ~p ~p",[LUser,Conversation]),
-  TS = time_now(),
-  ?SQL_UPSERT(
-    LServer,
-    "conversation_metadata",
-    ["!username=%(LUser)s",
-      "!conversation=%(Conversation)s",
-      "type=%(Type)s",
-      "updated_at=%(TS)d",
-      "status=%(Status)s",
-      "metadata_updated_at=%(TS)d",
-      "server_host=%(LServer)s"]).
-
 
 get_privacy(#xabbergroupchat_privacy{cdata = Privacy}) ->
   Privacy;
@@ -2432,24 +2290,6 @@ delete_old_invites(LUser,LServer,PUser,PServer) ->
 delete_invite(#invite_msg{us = {LUser,LServer}, id = ID} = Invite) ->
   mod_xep_rrr:delete_message(LServer, LUser, ID),
   mnesia:dirty_delete_object(Invite).
-%% request jobs
-
-set_request_job(ServerID, {LUser,LServer,LResource}, {PUser,PServer}) ->
-  RequestJob = #request_job{server_id = ServerID, usr = {LUser,LServer,LResource}, cs = {PUser,PServer}},
-  mnesia:dirty_write(RequestJob).
-
-get_request_job(ServerID,{PUser,PServer},{LUser,LServer,LResource}) ->
-  FN = fun()->
-    mnesia:match_object(request_job,
-      {request_job, ServerID,{PUser,PServer},{LUser,LServer,LResource}},
-      read)
-       end,
-  {atomic,Jobs} = mnesia:transaction(FN),
-  Jobs.
-
--spec delete_job(#request_job{}) -> ok.
-delete_job(#request_job{} = J) ->
-  mnesia:dirty_delete_object(J).
 
 make_ccc_push(LServer,LUser,Conversation, TS, deleted) ->
   UserResources = ejabberd_sm:user_resources(LUser,LServer),
@@ -2488,7 +2328,13 @@ make_ccc_push(LServer,LUser,Conversation, TS, Type, Thread, PushType) ->
 create_conversation(LServer,LUser,Conversation,Thread,Encrypted) ->
   create_conversation(LServer,LUser,Conversation,Thread,Encrypted,<<"chat">>).
 
-create_conversation(LServer,LUser,Conversation,Thread,Encrypted,Type) ->
+create_conversation(LServer,LUser,Conversation,Thread,Encrypted,Type0) ->
+  {Type, Incognito} = case binary:split(Type0, <<$#>>) of
+                        [?NS_GROUPCHAT] -> {<<"groupchat">>, false};
+                        [?NS_GROUPCHAT,<<"public">>] -> {<<"groupchat">>,false};
+                        [?NS_GROUPCHAT,<<"incognito">>] -> {<<"groupchat">>, true};
+                        [Val] -> {Val, false}
+                      end,
   TS = time_now(),
   Status = <<"active">>,
   ?SQL_UPSERT(
@@ -2502,34 +2348,23 @@ create_conversation(LServer,LUser,Conversation,Thread,Encrypted,Type) ->
       "conversation_thread=%(Thread)s",
       "metadata_updated_at=%(TS)d",
       "status=%(Status)s",
+      "incognito=%(Incognito)b",
       "server_host=%(LServer)s"]).
 
 get_and_store_user_card(LServer,LUser,PeerJID,Message) ->
   X = xmpp:get_subtag(Message,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   Ch_X = xmpp:get_subtag(Message,#channel_x{xmlns = ?NS_CHANNELS}),
-  maybe_store_card(LServer,LUser,PeerJID,group,X),
-  maybe_store_card(LServer,LUser,PeerJID,channel,Ch_X).
+  maybe_store_card(LServer,LUser,PeerJID,#xabbergroupchat_user_card{},X),
+  maybe_store_card(LServer,LUser,PeerJID,#channel_user_card{},Ch_X).
 
 maybe_store_card(_LServer,_LUser,_PeerJID, _Type, false) ->
   ok;
-maybe_store_card(LServer,LUser,PeerJID, channel, X) ->
+maybe_store_card(LServer,LUser,PeerJID, CardType, X) ->
   Ref = xmpp:get_subtag(X,#xmppreference{}),
   case Ref of
     false -> ok;
     _ ->
-      Card = xmpp:get_subtag(Ref,#channel_user_card{}),
-      case Card of
-        false -> ok;
-        _ ->
-          store_card(LServer,LUser,PeerJID,Card)
-      end
-  end;
-maybe_store_card(LServer,LUser,PeerJID, group, X) ->
-  Ref = xmpp:get_subtag(X,#xmppreference{}),
-  case Ref of
-    false -> ok;
-    _ ->
-      Card = xmpp:get_subtag(Ref,#xabbergroupchat_user_card{}),
+      Card = xmpp:get_subtag(Ref, CardType),
       case Card of
         false -> ok;
         _ ->
@@ -2542,7 +2377,7 @@ store_card(LServer,LUser,Peer,Pkt) ->
   case {mnesia:table_info(user_card, disc_only_copies),
     mnesia:table_info(user_card, memory)} of
     {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
-      ?ERROR_MSG("Last messages too large, won't store message id for ~s@~s",
+      ?ERROR_MSG("user_card table too large, won't store card ~s@~s",
         [LUser, LServer]),
       {error, overflow};
     _ ->
@@ -2554,27 +2389,23 @@ store_card(LServer,LUser,Peer,Pkt) ->
             packet = Pkt
           })
            end,
-      delete_previous_card(Peer, LUser, LServer),
+      delete_user_cards(Peer, LUser, LServer),
       case mnesia:transaction(F1) of
-        {atomic, ok} ->
-          ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
-          ok;
-        {aborted, Err1} ->
-          ?DEBUG("Cannot add last msg for ~s@~s: ~s",
-            [LUser, LServer, Err1]),
-          Err1
+        {atomic, ok} -> ok;
+        {aborted, Err} ->
+          ?ERROR_MSG("Cannot store card for ~s@~s: ~s", [LUser, LServer, Err]), Err
       end
   end.
 
-delete_previous_card(Peer, LUser, LServer) ->
+delete_user_cards(Peer, LUser, LServer) ->
   {PUser, PServer,_R} = jid:tolower(Peer),
-  Msgs = get_last_card(LUser, LServer, PUser, PServer),
+  Msgs = get_user_cards(LUser, LServer, PUser, PServer),
   lists:foreach(
     fun(Msg) ->
       mnesia:dirty_delete_object(Msg)
     end, Msgs).
 
-get_last_card(LUser, LServer, PUser, PServer) ->
+get_user_cards(LUser, LServer, PUser, PServer) ->
   FN = fun()->
     mnesia:match_object(user_card,
       {user_card, {LUser, LServer}, {PUser, PServer,<<>>}, '_'},
@@ -2584,7 +2415,7 @@ get_last_card(LUser, LServer, PUser, PServer) ->
   MsgRec.
 
 get_user_card(LUser, LServer, PUser, PServer) ->
-  case get_last_card(LUser, LServer, PUser, PServer) of
+  case get_user_cards(LUser, LServer, PUser, PServer) of
     [] ->
       [];
     [F|_R] ->
@@ -2699,20 +2530,6 @@ change_last_msg(Pkt, Peer, LUser, LServer, Timestamp) ->
       end
   end.
 
-update_table(unread_msg_counter) ->
-%%  For updating old installations
-%%  It works only when starting in debug shell
-  Transformer1 = fun({_V1, V2, V3 ,V4, V5, V6, V7}) -> {old_unread_msg_counter, V2, V3 ,V4, V5, V6, V7} end,
-  Transformer2 = fun({_V1, V2, V3 ,V4, V5, V6, V7}) -> {unread_msg_counter, V2, V3 ,V4, V5, V6, V7, V7} end,
-    {atomic, ok} = mnesia:transform_table(unread_msg_counter, Transformer1,
-      record_info(fields, old_unread_msg_counter),
-      old_unread_msg_counter),
-    {atomic, ok} = mnesia:transform_table(unread_msg_counter, Transformer2,
-      record_info(fields, unread_msg_counter),
-      unread_msg_counter);
-update_table(_) ->
-  ok.
-
 -spec update_mam_prefs(atom(), jid(), jid()) -> stanza() | error.
 update_mam_prefs(_Action, User, User) ->
 %%  skip for myself
@@ -2749,3 +2566,17 @@ get_mam_prefs(#jid{lserver = LServer} = User) ->
     _ ->
       error
   end.
+
+update_table(unread_msg_counter) ->
+%%  For updating old installations
+%%  It works only when starting in debug shell
+  Transformer1 = fun({_V1, V2, V3 ,V4, V5, V6, V7}) -> {old_unread_msg_counter, V2, V3 ,V4, V5, V6, V7} end,
+  Transformer2 = fun({_V1, V2, V3 ,V4, V5, V6, V7}) -> {unread_msg_counter, V2, V3 ,V4, V5, V6, V7, V7} end,
+    {atomic, ok} = mnesia:transform_table(unread_msg_counter, Transformer1,
+      record_info(fields, old_unread_msg_counter),
+      old_unread_msg_counter),
+    {atomic, ok} = mnesia:transform_table(unread_msg_counter, Transformer2,
+      record_info(fields, unread_msg_counter),
+      unread_msg_counter);
+update_table(_) ->
+  ok.

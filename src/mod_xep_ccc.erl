@@ -610,10 +610,9 @@ process_message(in,#message{type = chat, body = [], from = From, to = To, sub_el
 process_message(in,#message{id = _ID, type = chat, from = Peer, to = To, meta = #{stanza_id := TS}} = Pkt)->
   {LUser, LServer, _ } = jid:tolower(To),
   {PUser, PServer, _} = jid:tolower(Peer),
-  PktRefGrp = filter_reference(Pkt,<<"groupchat">>),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   Type = get_conversation_type(LServer,LUser,Conversation),
-  Invite = xmpp:get_subtag(PktRefGrp, #xabbergroupchat_invite{}),
+  Invite = xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}),
   X = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
   OriginIDElemnt = xmpp:get_subtag(Pkt, #origin_id{}),
   OriginID = get_origin_id(OriginIDElemnt),
@@ -1568,7 +1567,7 @@ get_count_encrypted_messages(LServer,LUser,PUser,TS) ->
       0
   end.
 
-get_last_groupchat_message(LServer,LUser,Status,User) ->
+get_last_groupchat_message(LServer,LUser,<<"both">>,User) ->
   Chat = jid:to_string(jid:make(LUser,LServer)),
   case ejabberd_sql:sql_query(
     LServer,
@@ -1576,13 +1575,14 @@ get_last_groupchat_message(LServer,LUser,Status,User) ->
     @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
      from archive"
     " where username=%(LUser)s  and txt notnull and txt !='' and %(LServer)H order by timestamp desc limit 1")) of
-    {selected,[<<>>]} ->
-      get_invite(LServer,User,Chat);
-    {selected,[{TS, XML, Peer, Kind, Nick}]} when Status == <<"both">> ->
+    {selected,[{TS, XML, Peer, Kind, Nick}]} ->
       convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer);
     _ ->
       get_invite(LServer,User,Chat)
-  end.
+  end;
+get_last_groupchat_message(LServer,LUser,_Status,User) ->
+  Chat = jid:to_string(jid:make(LUser,LServer)),
+  get_invite(LServer,User,Chat).
 
 get_invite(LServer,LUser,Chat) ->
   case ejabberd_sql:sql_query(
@@ -1882,26 +1882,6 @@ filter_packet(Pkt,BareJID) ->
       end
     end, Els),
   xmpp:set_els(Pkt, NewEls).
-
-filter_reference(Pkt,Type) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = lists:filtermap(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = TypeRef} ->
-            TypeRef == Type
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els),
-  xmpp:set_els(Pkt, NewEls).
-
 
 time_now() ->
   {MSec, Sec, USec} = erlang:timestamp(),

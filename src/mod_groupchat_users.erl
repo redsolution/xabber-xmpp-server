@@ -1499,7 +1499,7 @@ current_values(LServer,User,Chat) ->
 get_user_from_chat(LServer,Chat,User,ID) ->
   RequesterRole = calculate_role(LServer,User,Chat),
   Chat1 = ejabberd_sql:escape(Chat),
-  ID1 = ejabberd_sql:escape(Chat),
+  ID1 = ejabberd_sql:escape(ID),
   User1 = ejabberd_sql:escape(User),
   Filter = if
              ID == <<>> orelse ID == <<"0">> -> <<" and groupchat_users.username = '",User1/binary,"'">>;
@@ -1518,10 +1518,10 @@ get_user_from_chat(LServer,Chat,User,ID) ->
   COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDThh24:mi:ssZ'))
   FROM groupchat_users left join groupchat_users_vcard on groupchat_users_vcard.jid = groupchat_users.username
   WHERE groupchat_users.chatgroup = '",Chat1/binary,"' ">>,Filter],
-  {selected, _, Res} = ejabberd_sql:sql_query(LServer, SQLQuery),
-  case Res of
-    [] -> [];
-    [UserInfo] ->
+  Result = ejabberd_sql:sql_query(LServer, SQLQuery),
+  case Result of
+    {selected, _, []} -> [];
+    {selected, _, [UserInfo]}->
       IsAnon = mod_groupchat_chats:is_anonim(LServer,Chat),
       [Username,Id,Badge,NickChat,Subscription,GF,FullName,NickVcard,LastSeen] = UserInfo,
       Nick = case nick(GF,FullName,NickVcard,NickChat,IsAnon) of

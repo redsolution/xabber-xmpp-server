@@ -862,10 +862,12 @@ get_query(SubEl,Lang)->
   end.
 
 
-change_id_to_jid(Mam,Server,Chat,ID) ->
+change_id_to_jid(Query,Server,Chat,ID) ->
   JID = mod_groupchat_users:get_user_by_id(Server,Chat,ID),
-  #xdata{type = Type, instructions = Inst, title = Title, reported = Rep,  items = Items} = Mam#mam_query.xdata,
-  NewFields = [#xdata_field{type = 'hidden', var = <<"FORM_TYPE">>, values = [Mam#mam_query.xmlns]},
-    #xdata_field{var = <<"with">>, values = [JID]}],
-  NewXdata = #xdata{type = Type, instructions = Inst, title = Title, reported = Rep,  items = Items, fields = NewFields},
-  #mam_query{id = Mam#mam_query.id, rsm = Mam#mam_query.rsm, xmlns = Mam#mam_query.xmlns, start = Mam#mam_query.start, 'end' = Mam#mam_query.'end', withtext = Mam#mam_query.withtext, xdata = NewXdata, with = Mam#mam_query.with}.
+  OldXData = Query#mam_query.xdata,
+  NewFields = [
+    #xdata_field{type = 'hidden', var = <<"FORM_TYPE">>, values = [Query#mam_query.xmlns]},
+    #xdata_field{var = <<"with">>, values = [JID]}
+  ],
+  NewXData = OldXData#xdata{fields = NewFields},
+  Query#mam_query{xdata = NewXData}.

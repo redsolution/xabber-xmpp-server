@@ -1189,18 +1189,13 @@ handle_vcard_photo(Server,Photo) ->
 get_name_from_hash_and_type(undefined) ->
   <<>>;
 get_name_from_hash_and_type(Photo) ->
-  #vcard_photo{type = TypeRaw, binval = Binval} = Photo,
-  Len = string:length(TypeRaw),
-  case TypeRaw of
-    undefined ->
+  {Hash,TypeRaw} = get_hash_and_type(Photo),
+  if
+    Hash == <<>> orelse TypeRaw == <<>> ->
       <<>>;
-    _ when Len > 0 ->
+    true ->
       <<"image/", Type/binary>> = TypeRaw,
-      Hash = get_hash(Binval),
-      Name = <<Hash/binary, ".", Type/binary >>,
-      Name;
-    _ ->
-      <<>>
+      <<Hash/binary,$., Type/binary >>
   end.
 
 get_hash(Binval) ->
@@ -1212,8 +1207,15 @@ get_hash(Binval) ->
 get_hash_and_type(undefined) ->
   {<<>>,<<>>};
 get_hash_and_type(Photo) ->
-  #vcard_photo{type = TypeRaw, binval = Binval} = Photo,
-  Hash = get_hash(Binval),
+  #vcard_photo{type = TypeRaw0, binval = Binval} = Photo,
+  Hash = case Binval of
+           undefined -> <<>>;
+           _ -> get_hash(Binval)
+         end,
+  TypeRaw = case TypeRaw0 of
+               undefined -> <<>>;
+               _ -> TypeRaw0
+             end,
   {Hash,TypeRaw}.
 
 get_url(Host) ->

@@ -60,7 +60,7 @@ mod_opt_type(session_lifetime) ->
   fun(I) when is_integer(I), I > 0 -> I end.
 
 mod_options(_Host) -> [
-  {session_lifetime, 45000}
+  {session_lifetime, 45}
 ].
 
 %%%===================================================================
@@ -85,13 +85,12 @@ get_chat_sessions() ->
 
 -spec set_session(binary(),binary(),binary()) -> ok | ignore.
 set_session(Resource, User, ChatJid) ->
+  From = jid:replace_resource(jid:from_string(User),Resource),
+  To = jid:from_string(ChatJid),
+  LServer = To#jid.lserver,
+  Timeout = gen_mod:get_module_opt(LServer, ?MODULE, session_lifetime) * 1000,
   case select_session(Resource,User,ChatJid) of
     [] ->
-      From = jid:replace_resource(jid:from_string(User),Resource),
-      To = jid:from_string(ChatJid),
-      LServer = To#jid.lserver,
-      Timeout = gen_mod:get_module_opt(LServer, ?MODULE,
-        session_lifetime),
       PID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, Timeout]),
       Session = #chat_session{
         id = PID,
@@ -100,14 +99,8 @@ set_session(Resource, User, ChatJid) ->
         chat = ChatJid
       },
       mnesia:dirty_write(Session);
-    [#chat_session{id = PID} = SS] ->
-      exit(PID, kill),
+    [#chat_session{} = SS] ->
       delete_session(SS),
-      From = jid:replace_resource(jid:from_string(User),Resource),
-      To = jid:from_string(ChatJid),
-      LServer = To#jid.lserver,
-      Timeout = gen_mod:get_module_opt(LServer, ?MODULE,
-        session_lifetime),
       NEWPID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, Timeout]),
       Session = #chat_session{
         id = NEWPID,
@@ -126,7 +119,8 @@ delete_session(Resource,Username,Chat) ->
   lists:foreach(fun(N) -> delete_session(N) end, S).
 
 -spec delete_session(#chat_session{}) -> ok.
-delete_session(#chat_session{} = S) ->
+delete_session(#chat_session{id = PID} = S) ->
+  exit(PID, kill),
   mnesia:dirty_delete_object(S).
 
 select_session(Resource,User,Chat) ->

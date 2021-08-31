@@ -27,7 +27,6 @@
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -behavior(gen_server).
--include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("mod_groupchat_present.hrl").
@@ -124,6 +123,9 @@ groupchat_changed(LServer, Chat, _User, ChatProperties, Status) ->
   case Status of
     <<"inactive">> ->
       maybe_send_to_index(LServer, Chat, ChatProperties),
+      Ss = mod_groupchat_present_mnesia:select_sessions('_', ChatJID),
+      lists:foreach(fun(Session) ->
+        mod_groupchat_present_mnesia:delete_session(Session) end, Ss),
       send_presence(form_presence_unavailable(Chat),Users,FromChat);
     _ ->
       {HumanStatus, Show} = mod_groupchat_chats:define_human_status_and_show(LServer, Chat, Status),

@@ -31,7 +31,8 @@
 %% API
 -export([init/2, remove_user/2, remove_room/3, delete_old_messages/3,
 	 get_columns_and_from/0, get_user_and_bare_peer/3, get_odbctype_and_escape/1, is_encrypted/2,
-	 extended_fields/0, store/8, write_prefs/4, get_prefs/2, select/6, export/1, make_archive_el/8]).
+	 extended_fields/0, store/8, write_prefs/4, get_prefs/2, select/6, export/1,
+   remove_from_archive/3, make_archive_el/8]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
 -include("xmpp.hrl").
@@ -383,6 +384,9 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
     FilterSticker = proplists:get_value(filter_sticker, MAMQuery),
     FilterGeo = proplists:get_value(filter_geo, MAMQuery),
     FilterImage = proplists:get_value(filter_image, MAMQuery),
+    FilterIDs = proplists:get_value(ids, MAMQuery),
+    FilterAfterID = proplists:get_value('after-id', MAMQuery),
+    FilterBeforeID = proplists:get_value('before-id', MAMQuery),
     {Max, Direction, ID} = get_max_direction_id(RSM),
     {ODBCType, Escape} = get_odbctype_and_escape(LServer),
     LimitClause = if is_integer(Max), Max >= 0, ODBCType /= mssql ->
@@ -440,6 +444,22 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
 		    _ ->
 			[]
 		end,
+    IDsClause = case FilterIDs of
+                  undefined -> [];
+                  [] -> [];
+                  _ ->
+                    [<<" and timestamp in (">>] ++ lists:join(<<$,>>,FilterIDs) ++ [<<$)>>]
+                end,
+    BeforeIDClause = case FilterBeforeID of
+                       undefined -> [];
+                       <<>> -> [];
+                       _ -> [<<" and timestamp < ">>,FilterBeforeID]
+                     end,
+    AfterIDClause = case FilterAfterID of
+                       undefined -> [];
+                       <<>> -> [];
+                       _ -> [<<" and timestamp > ">>,FilterAfterID]
+                     end,
 		StanzaIdClause = case StanzaId of
 											 <<>> ->
 												 [];
@@ -457,62 +477,62 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
                     _ ->
                       []
                   end,
-  AudioClause = case FilterAudio of
-                  false ->
-                    [<<"and audio = false ">>];
-                  true ->
-                    [<<"and audio = true ">>];
-                  _ ->
-                    []
-                end,
-  VideoClause = case FilterVideo of
-             false ->
-               [<<"and video = false ">>];
-             true ->
-               [<<"and video = true ">>];
-             _ ->
-               []
-           end,
-  GeoClause = case FilterGeo of
-             false ->
-               [<<"and geo = false ">>];
-             true ->
-               [<<"and geo = true ">>];
-             _ ->
-               []
-           end,
-  EncryptedClause = case FilterEncrypted of
-             false ->
-               [<<"and encrypted = false ">>];
-             true ->
-               [<<"and encrypted = true ">>];
-             _ ->
-               []
-           end,
-  VoiceClause = case FilterVoice of
-             false ->
-               [<<"and voice = false ">>];
-             true ->
-               [<<"and voice = true ">>];
-             _ ->
-               []
-           end,
-  StickerClause = case FilterSticker of
-             false ->
-               [<<"and sticker = false ">>];
-             true ->
-               [<<"and sticker = true ">>];
-             _ ->
-               []
-           end,
-  DocumentClause = case FilterDocument of
-             false ->
-               [<<"and document = false ">>];
-             true ->
-               [<<"and document = true ">>];
-             _ ->
-               []
-           end,
+    AudioClause = case FilterAudio of
+                    false ->
+                      [<<"and audio = false ">>];
+                    true ->
+                      [<<"and audio = true ">>];
+                    _ ->
+                      []
+                  end,
+    VideoClause = case FilterVideo of
+               false ->
+                 [<<"and video = false ">>];
+               true ->
+                 [<<"and video = true ">>];
+               _ ->
+                 []
+             end,
+    GeoClause = case FilterGeo of
+               false ->
+                 [<<"and geo = false ">>];
+               true ->
+                 [<<"and geo = true ">>];
+               _ ->
+                 []
+             end,
+    EncryptedClause = case FilterEncrypted of
+               false ->
+                 [<<"and encrypted = false ">>];
+               true ->
+                 [<<"and encrypted = true ">>];
+               _ ->
+                 []
+             end,
+    VoiceClause = case FilterVoice of
+               false ->
+                 [<<"and voice = false ">>];
+               true ->
+                 [<<"and voice = true ">>];
+               _ ->
+                 []
+             end,
+    StickerClause = case FilterSticker of
+               false ->
+                 [<<"and sticker = false ">>];
+               true ->
+                 [<<"and sticker = true ">>];
+               _ ->
+                 []
+             end,
+    DocumentClause = case FilterDocument of
+               false ->
+                 [<<"and document = false ">>];
+               true ->
+                 [<<"and document = true ">>];
+               _ ->
+                 []
+             end,
     SUser = Escape(User),
     SServer = Escape(LServer),
     Query =
@@ -523,15 +543,19 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
                  " FROM archive WHERE username='">>,
                  SUser, <<"' and server_host='">>,
                  SServer, <<"'">>, WithClause, WithTextClause,
-                 StartClause, EndClause, PageClause, StanzaIdClause, ImageClause,
-                  AudioClause, VideoClause, VoiceClause, DocumentClause, StickerClause, GeoClause, EncryptedClause];
+                  StartClause, EndClause, PageClause, StanzaIdClause,
+                  IDsClause, AfterIDClause, BeforeIDClause,
+                  ImageClause, AudioClause, VideoClause, VoiceClause,
+                  DocumentClause, StickerClause, GeoClause, EncryptedClause];
             false ->
                 [<<"SELECT ">>, TopClause,
                   <<" timestamp, xml, peer, kind, nick"
                   " FROM archive WHERE username='">>,
                  SUser, <<"'">>, WithClause, WithTextClause,
-                 StartClause, EndClause, PageClause, StanzaIdClause, ImageClause,
-                  AudioClause, VideoClause, VoiceClause, DocumentClause, StickerClause, GeoClause, EncryptedClause]
+                  StartClause, EndClause, PageClause, StanzaIdClause,
+                  IDsClause, AfterIDClause, BeforeIDClause,
+                  ImageClause, AudioClause, VideoClause, VoiceClause,
+                  DocumentClause, StickerClause, GeoClause, EncryptedClause]
         end,
 
     QueryPage =
@@ -553,16 +577,18 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
              [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
               SUser, <<"' and server_host='">>,
               SServer, <<"'">>, WithClause, WithTextClause,
-              StartClause, EndClause, StanzaIdClause, ImageClause,
-               AudioClause, VideoClause, VoiceClause, DocumentClause,
-               StickerClause, GeoClause, EncryptedClause, <<";">>]};
+               StartClause, EndClause, StanzaIdClause,
+               IDsClause, AfterIDClause, BeforeIDClause,
+               ImageClause,AudioClause, VideoClause, VoiceClause,
+               DocumentClause, StickerClause, GeoClause, EncryptedClause, <<";">>]};
         false ->
             {QueryPage,
              [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
               SUser, <<"'">>, WithClause, WithTextClause,
-              StartClause, EndClause, StanzaIdClause, ImageClause,
-               AudioClause, VideoClause, VoiceClause, DocumentClause,
-               StickerClause, GeoClause, EncryptedClause, <<";">>]}
+              StartClause, EndClause, StanzaIdClause,
+               IDsClause, AfterIDClause, BeforeIDClause,
+               ImageClause, AudioClause, VideoClause, VoiceClause,
+               DocumentClause,StickerClause, GeoClause, EncryptedClause, <<";">>]}
     end.
 
 -spec get_max_direction_id(rsm_set() | undefined) ->

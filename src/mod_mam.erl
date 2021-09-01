@@ -39,7 +39,8 @@
 	 disco_sm_features/5, remove_user/2, remove_room/3, mod_opt_type/1,
 	 muc_process_iq/2, muc_filter_message/3, message_is_archived/3,
 	 delete_old_messages/2, get_commands_spec/0, msg_to_el/4,
-	 get_room_config/4, set_room_option/3, offline_message/1, export/1, parse_query/2,
+	 get_room_config/4, set_room_option/3, offline_message/1, export/1,
+   remove_mam_for_user_with_peer/3, remove_mam_for_user/2, parse_query/2,
 	 mod_options/1]).
 -export([pre_process_iq_v0_2/1, pre_process_iq_v0_3/1]).
 -include("xmpp.hrl").
@@ -569,7 +570,7 @@ disco_sm_features(empty, From, To, Node, Lang) ->
 disco_sm_features({result, OtherFeatures},
 		  #jid{luser = U, lserver = S},
 		  #jid{luser = U, lserver = S}, <<"">>, _Lang) ->
-    {result, [?NS_MAM_TMP, ?NS_MAM_0, ?NS_MAM_1, ?NS_MAM_2, ?NS_SID_0 |
+    {result, [?NS_MAM_TMP, ?NS_MAM_0, ?NS_MAM_1, ?NS_MAM_2, ?NS_MAM_2_E, ?NS_SID_0 |
 	      OtherFeatures]};
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
     Acc.

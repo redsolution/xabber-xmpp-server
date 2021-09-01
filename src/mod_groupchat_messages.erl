@@ -424,22 +424,7 @@ get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
     #stanza_id{by = BareJID, id = StanzaID} ->
       StanzaID;
     _ ->
-      get_stanza_id_by_origin_id(LServer,OriginID)
-  end.
-
-get_stanza_id_by_origin_id(LServer,OriginID) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select
-    @(stanza_id)d
-     from origin_id"
-    " where id=%(OriginID)s and %(LServer)H order by stanza_id asc limit 1")) of
-    {selected,[<<>>]} ->
-      empty;
-    {selected,[{StanzaID}]} ->
-      integer_to_binary(StanzaID);
-    _ ->
-      empty
+      mod_unique:get_stanza_id_by_origin_id(LServer,OriginID,BareJID#jid.luser)
   end.
 
 filter_packet(Pkt,BareJID) ->

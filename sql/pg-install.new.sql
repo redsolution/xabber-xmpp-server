@@ -523,26 +523,15 @@ CREATE TABLE conversation_metadata(
 
 ALTER TABLE archive ADD CONSTRAINT unique_timestamp UNIQUE (timestamp, server_host);
 
-CREATE TABLE origin_id (
-    id text NOT NULL,
-    server_host text NOT NULL,
-    stanza_id BIGINT,
-    username text,
-    PRIMARY KEY (server_host, stanza_id),
-    FOREIGN KEY (server_host, stanza_id) REFERENCES archive (server_host, timestamp) ON DELETE CASCADE
-);
-
-CREATE INDEX i_origin_id ON origin_id USING btree (id);
-
-CREATE TABLE previous_id (
-    server_host text NOT NULL,
-    id BIGINT,
-    stanza_id BIGINT,
-    PRIMARY KEY (server_host, id),
-    CONSTRAINT uniq_prev_id UNIQUE (server_host, stanza_id),
-    FOREIGN KEY (server_host, stanza_id) REFERENCES archive (server_host, timestamp) ON DELETE CASCADE,
-    FOREIGN KEY (server_host, id) REFERENCES archive (server_host, timestamp) ON DELETE CASCADE
-);
+--CREATE TABLE previous_id (
+--    server_host text NOT NULL,
+--    id BIGINT,
+--    stanza_id BIGINT,
+--    PRIMARY KEY (server_host, id),
+--    CONSTRAINT uniq_prev_id UNIQUE (server_host, stanza_id),
+--    FOREIGN KEY (server_host, stanza_id) REFERENCES archive (server_host, timestamp) ON DELETE CASCADE,
+--    FOREIGN KEY (server_host, id) REFERENCES archive (server_host, timestamp) ON DELETE CASCADE
+--);
 
 CREATE TABLE message_retract(
     username text,

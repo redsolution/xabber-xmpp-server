@@ -164,9 +164,9 @@ is_encrypted(LServer,StanzaID) ->
 
 is_encrypted(Pkt0) ->
   Pkt = xmpp:decode(Pkt0),
-  Encrypted = xmpp:get_subtag(Pkt, #encrypted_message{}),
+  Encrypted = xmpp:get_subtag(Pkt, #encrypted_message_omemo{}),
   case Encrypted of
-    #encrypted_message{} ->
+    #encrypted_message_omemo{} ->
       true;
     _ ->
       false

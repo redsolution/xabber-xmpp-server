@@ -502,7 +502,7 @@ CREATE TABLE conversation_metadata(
     username text,
     server_host text NOT NULL,
     conversation text,
-    type text NOT NULL DEFAULT 'chat',
+    type text NOT NULL DEFAULT 'https://xabber.com/protocol/synchronization#chat',
     retract bigint NOT NULL DEFAULT 0,
     conversation_thread text NOT NULL DEFAULT '',
     read_until text NOT NULL DEFAULT '0',
@@ -511,13 +511,10 @@ CREATE TABLE conversation_metadata(
     updated_at bigint NOT NULL DEFAULT 0,
     metadata_updated_at bigint NOT NULL DEFAULT 0,
     status text NOT NULL DEFAULT 'active',
-    incognito boolean NOT NULL DEFAULT false,
-    p2p boolean NOT NULL DEFAULT false,
-    pinned boolean NOT NULL DEFAULT false,
-    pinned_at bigint NOT NULL DEFAULT 0,
-    archived boolean NOT NULL DEFAULT false,
-    archived_at bigint NOT NULL DEFAULT 0,
     encrypted boolean NOT NULL DEFAULT false,
+    pinned integer,
+    mute bigint NOT NULL DEFAULT 0,
+    group_info text NOT NULL DEFAULT '',
     CONSTRAINT uc_conversation_metadata UNIQUE (username, server_host, conversation, conversation_thread, encrypted)
     );
 

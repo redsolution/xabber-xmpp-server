@@ -512,7 +512,7 @@ CREATE TABLE conversation_metadata(
     metadata_updated_at bigint NOT NULL DEFAULT 0,
     status text NOT NULL DEFAULT 'active',
     encrypted boolean NOT NULL DEFAULT false,
-    pinned integer,
+    pinned bigint NOT NULL DEFAULT 0,
     mute bigint NOT NULL DEFAULT 0,
     group_info text NOT NULL DEFAULT '',
     CONSTRAINT uc_conversation_metadata UNIQUE (username, server_host, conversation, conversation_thread, encrypted)

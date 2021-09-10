@@ -7,7 +7,7 @@ ALTER TABLE conversation_metadata DROP COLUMN pinned;
 ALTER TABLE conversation_metadata DROP COLUMN pinned_at;
 
 ALTER TABLE conversation_metadata ALTER COLUMN type SET DEFAULT 'https://xabber.com/protocol/synchronization#chat';
-ALTER TABLE conversation_metadata ADD COLUMN pinned integer;
+ALTER TABLE conversation_metadata ADD COLUMN pinned bigint DEFAULT 0;
 ALTER TABLE conversation_metadata ADD COLUMN mute bigint DEFAULT 0;
 ALTER TABLE conversation_metadata ADD COLUMN group_info text DEFAULT ''::text;
 

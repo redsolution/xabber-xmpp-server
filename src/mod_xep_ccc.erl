@@ -737,15 +737,11 @@ make_result_el(LServer, LUser, El) ->
   ConversationMetadata = ejabberd_hooks:run_fold(syncronization_query,
     LServer, [], [LUser,LServer,Conversation,Read,Delivered,Display,ConversationStatus,Retract,Type,Encrypted,GroupInfo]),
   C = #xabber_conversation{stamp = integer_to_binary(UpdateAt), type = Type, status = ConversationStatus,
-    thread = Thread, jid = jid:from_string(Conversation),sub_els = ConversationMetadata},
+    thread = Thread, jid = jid:from_string(Conversation), pinned = Pinned, sub_els = ConversationMetadata},
   Now = time_now() div 1000000,
-  C2 = case  Mute of
-         M when M >= Now -> C#xabber_conversation{mute = integer_to_binary(M)};
-         _ ->  C
-       end,
-  case  Pinned of
-    null -> C2;
-    P -> C2#xabber_conversation{pinned = P}
+  case  Mute of
+    M when M >= Now -> C#xabber_conversation{mute = integer_to_binary(M)};
+    _ ->  C
   end.
 
 create_synchronization_metadata(_Acc,_LUser,_LServer,_Conversation,
@@ -1941,12 +1937,13 @@ get_max_direction_chat(RSM) ->
       {undefined, undefined, undefined}
   end.
 
-pin_conversation(LServer, LUser, #xabber_conversation{type = Type, jid = ConvJID, thread = Thread, pinned = Num}) ->
+pin_conversation(LServer, LUser, #xabber_conversation{type = Type, jid = ConvJID, thread = Thread, pinned = Pinned}) ->
+  Num = binary_to_integer(Pinned),
   TS = time_now(),
   Conversation = jid:to_string(ConvJID),
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("update conversation_metadata set pinned=NULLIF(%(Num)s, '')::int, metadata_updated_at=%(TS)d
+    ?SQL("update conversation_metadata set pinned=%(Num)d, metadata_updated_at=%(TS)d
      where username = %(LUser)s and conversation = %(Conversation)s and type = %(Type)s and status!='deleted'
       and conversation_thread = %(Thread)s")) of
     {updated, 0} ->

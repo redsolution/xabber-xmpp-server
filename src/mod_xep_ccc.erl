@@ -1949,7 +1949,7 @@ pin_conversation(LServer, LUser, #xabber_conversation{type = Type, jid = ConvJID
     {updated, 0} ->
       {error,xmpp:err_item_not_found()};
     {updated,_N} ->
-      make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,{pinned,Num}),
+      make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,{pinned,Pinned}),
       ok;
     _ ->
       {error,xmpp:err_internal_server_error()}

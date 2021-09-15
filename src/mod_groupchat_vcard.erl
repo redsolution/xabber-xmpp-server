@@ -83,6 +83,14 @@ handle_iq(_IQ) ->
   ok.
 
 handle_request(Iq) ->
+  try xmpp:decode_els(Iq) of
+    DecodedIQ ->
+      handle_decoded_request(DecodedIQ)
+  catch _:_ ->
+    error
+  end.
+
+handle_decoded_request(Iq) ->
   #iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From,to = To,sub_els = Decoded} = Iq,
   Pubsub = lists:keyfind(pubsub,1,Decoded),
   #pubsub{items = Items} = Pubsub,
@@ -1284,12 +1292,19 @@ publish_avatar(Chat, Data, FileName) when is_binary(Chat) ->
 publish_avatar(#jid{lserver = Server} = Chat, Data, FileName)->
   JIDinURL = gen_mod:get_module_opt(Server,mod_http_upload,jid_in_url),
   UserStr = make_user_string(Chat, JIDinURL),
-  DocRoot = filename:absname(gen_mod:get_module_opt(Server,mod_http_upload,docroot)),
+  DocRoot1 = gen_mod:get_module_opt(Server, mod_http_upload, docroot),
+  DocRoot2 = mod_http_upload:expand_home(str:strip(DocRoot1, right, $/)),
+  DocRoot3 = mod_http_upload:expand_host(DocRoot2, Server),
+  DocRoot = filename:absname(DocRoot3),
   AvatarDir = <<DocRoot/binary,$/,UserStr/binary,$/,"avatar">>,
   FullPath = filename:join(AvatarDir,FileName),
   case do_store_file(FullPath, Data, undefined, undefined) of
     ok ->
-      UrlOpt = gen_mod:get_module_opt(Server,mod_http_upload,get_url),
+      UrlOpt =  case gen_mod:get_module_opt(Server,mod_http_upload,get_url) of
+                  undefined ->
+                    gen_mod:get_module_opt(Server,mod_http_upload,put_url);
+                  Val -> Val
+                end,
       Url = misc:expand_keyword(<<"@HOST@">>, str:strip(UrlOpt, right, $/), Server),
       AvatarUrl = <<Url/binary, "/",UserStr/binary,$/,"avatar",$/,FileName/binary>>,
       Size = byte_size(Data),

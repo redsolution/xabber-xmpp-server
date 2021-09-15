@@ -364,14 +364,22 @@ make_action(#iq{from = From, to = To, type = get,
   end;
 make_action(#iq{from = UserJID, to = ChatJID, type = result, sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:metadata">>, items = [#ps_item{id = _Hash, sub_els = Subs}]}}]}) ->
   ?DEBUG("Catch pubsub meta ~p",[Subs]),
-  MD = lists:map(fun(E) -> xmpp:decode(E) end, Subs),
-  Meta = lists:keyfind(avatar_meta,1,MD),
-  mod_groupchat_vcard:handle_pubsub(ChatJID,UserJID,Meta);
+  try
+    MD = lists:map(fun(E) -> xmpp:decode(E) end, Subs),
+    Meta = lists:keyfind(avatar_meta,1,MD),
+    mod_groupchat_vcard:handle_pubsub(ChatJID,UserJID,Meta)
+  catch _:_ ->
+    ok
+  end;
 make_action(#iq{from = UserJID, to = ChatJID, type = result, sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:data">>, items = [#ps_item{id = Hash, sub_els = Subs}]}}]}) ->
   ?DEBUG("Catch pubsub data result1 iq ~p",[Hash]),
-  MD = lists:map(fun(E) -> xmpp:decode(E) end, Subs),
-  Data = lists:keyfind(avatar_data,1,MD),
-  mod_groupchat_vcard:handle_pubsub(ChatJID,UserJID,Hash,Data);
+  try
+    MD = lists:map(fun(E) -> xmpp:decode(E) end, Subs),
+    Data = lists:keyfind(avatar_data,1,MD),
+    mod_groupchat_vcard:handle_pubsub(ChatJID,UserJID,Hash,Data)
+  catch _:_ ->
+    ok
+  end;
 make_action(#iq{type = result, sub_els = [#xmlel{name = <<"pubsub">>, attrs = _Attrs, children = _Children}] = SubEls} = IQ) ->
   ?DEBUG("Catch pubsub result2 iq ~p",[IQ]),
   SubElsDec = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),

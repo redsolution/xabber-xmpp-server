@@ -24,10 +24,10 @@
 %%%----------------------------------------------------------------------
 -module(mod_xabber_entity).
 -author("andrey.gagarin@redsolution.ru").
--include("ejabberd_sql_pt.hrl").
+%%-include("ejabberd_sql_pt.hrl").
 -compile([{parse_transform, ejabberd_sql_pt}]).
 %% API
--export([is_exist/2, is_exist_anywhere/2, get_entity_type/2]).
+-export([is_exist/2, is_exist_anywhere/2, get_entity_type/2, is_group/2, is_channel/2]).
 
 is_exist_anywhere(LUser, LServer) ->
   case ejabberd_auth:user_exists(LUser, LServer) of
@@ -38,68 +38,67 @@ is_exist_anywhere(LUser, LServer) ->
   end.
 
 is_exist(LUser, LServer) ->
-  is_exist(LUser, LServer , ejabberd_sql:use_new_schema()).
+  case get_entity_type(LUser, LServer) of
+    user -> false;
+    _-> true
+  end.
+%%  is_exist(LUser, LServer , ejabberd_sql:use_new_schema()).
 
-is_exist(LUser, LServer, true) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    [<<"select localpart from
-    (
-    (select localpart,server_host from groupchats)
-    UNION
-    (select localpart,server_host from channels)
-    ) as t
-    where localpart = '">>,LUser,<<"' and server_host ='">>,ejabberd_sql:escape(LServer),<<"'">>]) of
-    {selected,_TableRow,[]} ->
-      false;
-    _ ->
-      true
-  end;
-is_exist(LUser, LServer, _Schema) ->
-case ejabberd_sql:sql_query(
-  LServer,
-  [<<"select localpart from
-    (
-    (select localpart from groupchats)
-    UNION
-    (select localpart from channels)
-    ) as t
-    where localpart ='">>,ejabberd_sql:escape(LUser),<<"'">>]) of
-  {selected,_TableRow,[]} ->
-    false;
-  _ ->
-    true
-end.
+%%is_exist(LUser, LServer, true) ->
+%%  case ejabberd_sql:sql_query(
+%%    LServer,
+%%    [<<"select localpart from
+%%    (
+%%    (select localpart,server_host from groupchats)
+%%    UNION
+%%    (select localpart,server_host from channels)
+%%    ) as t
+%%    where localpart = '">>,LUser,<<"' and server_host ='">>,ejabberd_sql:escape(LServer),<<"'">>]) of
+%%    {selected,_TableRow,[]} ->
+%%      false;
+%%    _ ->
+%%      true
+%%  end;
+%%is_exist(LUser, LServer, _Schema) ->
+%%case ejabberd_sql:sql_query(
+%%  LServer,
+%%  [<<"select localpart from
+%%    (
+%%    (select localpart from groupchats)
+%%    UNION
+%%    (select localpart from channels)
+%%    ) as t
+%%    where localpart ='">>,ejabberd_sql:escape(LUser),<<"'">>]) of
+%%  {selected,_TableRow,[]} ->
+%%    false;
+%%  _ ->
+%%    true
+%%end.
 
 is_group(LUser, LServer) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(localpart)s
-    from groupchats where localpart=%(LUser)s and %(LServer)H")) of
-    {selected, Info} when length(Info) > 0 ->
-      true;
-    _ ->
-      false
-  end.
+  check_entity_type(group, ejabberd_sm:get_user_info(LUser,LServer)).
 
 is_channel(LUser, LServer) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(localpart)s
-    from channels where localpart=%(LUser)s and %(LServer)H")) of
-    {selected, Info} when length(Info) > 0 ->
-      true;
-    _ ->
-      false
-  end.
+  check_entity_type(channel, ejabberd_sm:get_user_info(LUser,LServer)).
 
 get_entity_type(LUser, LServer) ->
-  case is_group(LUser, LServer) of
+  Ss = ejabberd_sm:get_user_info(LUser,LServer),
+  case check_entity_type(group, Ss) of
     true ->
       group;
     _ ->
-      case is_channel(LUser, LServer) of
+      case check_entity_type(channel, Ss) of
         true -> channel;
         _ -> user
       end
+  end.
+
+%% Internal API
+
+check_entity_type(Type, Sessions) ->
+  case lists:filter(fun({_R, Info}) -> proplists:get_value(Type,Info,false) end, Sessions) of
+    [] ->
+      false;
+    _ ->
+      true
   end.

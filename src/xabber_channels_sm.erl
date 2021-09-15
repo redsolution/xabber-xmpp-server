@@ -71,7 +71,7 @@ handle_call(_Request, _From, State = #xabber_sm_state{}) ->
   {stop, Reason :: term(), NewState :: #xabber_sm_state{}}).
 handle_cast({channel_created,Server,Channel}, #xabber_sm_state{pid = PID} = State) ->
   SID = {p1_time_compat:unique_timestamp(), PID},
-  ejabberd_sm:open_session(SID, Channel, Server, <<"Channel">>, 50, []),
+  ejabberd_sm:open_session(SID, Channel, Server, <<"Channel">>, 50, [{channel, true}]),
   {noreply, State};
 handle_cast(_Request, State = #xabber_sm_state{}) ->
   {noreply, State}.
@@ -127,7 +127,7 @@ start_entities(Entities,Server,Pid,Resource) ->
   lists:foreach(fun(C) ->
     {Entity} = C,
     SID = {p1_time_compat:unique_timestamp(), Pid},
-    ejabberd_sm:open_session(SID, Entity, Server, Resource, 50, []) end, Entities).
+    ejabberd_sm:open_session(SID, Entity, Server, Resource, 50, [{channel, true}]) end, Entities).
 
 activate(Server, Channel) ->
   gen_server:cast(?MODULE, {channel_created,Server,Channel}).

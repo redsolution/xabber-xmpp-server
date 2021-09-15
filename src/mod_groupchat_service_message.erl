@@ -250,7 +250,10 @@ chat_created(LServer,User,Chat,Lang) ->
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
   SubEls = [XEl,By],
   M = form_message(jid:from_string(Chat),Body,SubEls),
-  send_to_all(Chat,M).
+  ChatJID = jid:from_string(Chat),
+  Pkt1 = mod_groupchat_messages:strip_stanza_id(M,LServer),
+  ejabberd_hooks:run_fold(
+    user_send_packet, LServer, {Pkt1, #{jid => ChatJID}}, []).
 
 users_blocked(Acc, #iq{lang = Lang,to = To, from = From}) ->
   Chat = jid:to_string(jid:remove_resource(To)),

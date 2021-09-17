@@ -565,7 +565,7 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
           % XEP-0059: Result Set Management
           % 2.5 Requesting the Last Page in a Result Set
           [<<"SELECT timestamp, xml, peer, kind, nick FROM (">>, Query,
-            <<" ORDER BY timestamp DESC ">>,
+            <<" ORDER BY timestamp DESC NULLS LAST">>,
             LimitClause, <<") AS t ORDER BY timestamp ASC;">>];
         _ ->
           [Query, <<" ORDER BY timestamp ASC ">>,

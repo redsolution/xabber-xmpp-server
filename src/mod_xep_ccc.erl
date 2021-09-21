@@ -45,7 +45,7 @@
   terminate/2, code_change/3]).
 
 %% hooks
--export([c2s_stream_features/2, sm_receive_packet/1, user_send_packet/1, groupchat_send_message/3,
+-export([c2s_stream_features/2, sm_receive_packet/1, user_send_packet/1,
   groupchat_got_displayed/3, process_messages/0]).
 
 %% iq
@@ -136,6 +136,7 @@
 -define(TABLE_SIZE_LIMIT, 2000000000). % A bit less than 2 GiB.
 -define(NS_XABBER_SYNCHRONIZATION_CHAT, <<"https://xabber.com/protocol/synchronization#chat">>).
 -define(CHAT_NS,?NS_XABBER_SYNCHRONIZATION_CHAT).
+-define(NS_OMEMO, <<"urn:xmpp:omemo:1">>).
 %%--------------------------------------------------------------------
 %% gen_mod callbacks.
 %%--------------------------------------------------------------------
@@ -299,8 +300,6 @@ code_change(_OldVsn, State, _Extra) ->
 register_hooks(Host) ->
   ejabberd_hooks:add(syncronization_query, Host, ?MODULE,
     create_synchronization_metadata, 60),
-  ejabberd_hooks:add(groupchat_send_message, Host, ?MODULE,
-    groupchat_send_message, 10),
   ejabberd_hooks:add(groupchat_got_displayed, Host, ?MODULE,
     groupchat_got_displayed, 10),
   ejabberd_hooks:add(user_send_packet, Host, ?MODULE,
@@ -313,8 +312,6 @@ register_hooks(Host) ->
 unregister_hooks(Host) ->
   ejabberd_hooks:delete(syncronization_query, Host, ?MODULE,
     create_synchronization_metadata, 60),
-  ejabberd_hooks:delete(groupchat_send_message, Host, ?MODULE,
-    groupchat_send_message, 10),
   ejabberd_hooks:delete(groupchat_got_displayed, Host, ?MODULE,
     groupchat_got_displayed, 10),
   ejabberd_hooks:delete(user_send_packet, Host, ?MODULE,
@@ -332,18 +329,11 @@ c2s_stream_features(Acc, Host) ->
       Acc
   end.
 
-groupchat_send_message(From,ChatJID,Pkt) ->
-  #jid{luser =  LUser,lserver = LServer} = ChatJID,
-  #jid{lserver = PServer, luser = PUser} = From,
-  #message{meta = #{stanza_id := TS, mam_archived := true}} = Pkt,
-  Conversation = jid:to_string(jid:make(PUser,PServer)),
-  update_metainfo(read, LServer,LUser,Conversation,TS).
-
 groupchat_got_displayed(From,ChatJID,TS) ->
   #jid{luser =  LUser,lserver = LServer} = ChatJID,
   #jid{lserver = PServer, luser = PUser} = From,
   Conversation = jid:to_string(jid:make(PUser,PServer)),
-  update_metainfo(read, LServer,LUser,Conversation,TS).
+  update_metainfo(read, LServer,LUser,Conversation,TS,?CHAT_NS).
 
 -spec sm_receive_packet(stanza()) -> stanza().
 sm_receive_packet(#message{to = #jid{luser = LUser, lserver = LServer}} = Pkt) ->
@@ -546,12 +536,16 @@ process_message(in,#message{id = _ID, type = chat, from = Peer, to = To, meta = 
   {LUser, LServer, _ } = jid:tolower(To),
   {PUser, PServer, _} = jid:tolower(Peer),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
-  Type = get_conversation_type(LServer,LUser,Conversation),
   Invite = xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}),
-  X = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
+  GroupSysMsg = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
+  GroupMsg = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
   OriginIDElemnt = xmpp:get_subtag(Pkt, #origin_id{}),
   OriginID = get_origin_id(OriginIDElemnt),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
+  Type = case get_conversation_type(LServer,LUser,Conversation) of
+           undefined when GroupSysMsg =/= false orelse GroupMsg =/= false-> ?NS_GROUPCHAT;
+           T -> T
+         end,
   if
     Invite  =/= false ->
       #xabbergroupchat_invite{jid = ChatJID} = Invite,
@@ -581,7 +575,7 @@ process_message(in,#message{id = _ID, type = chat, from = Peer, to = To, meta = 
         _ ->
           TSGroupchat = StanzaID#stanza_id.id,
           if
-            IsLocal andalso X ->
+            IsLocal andalso GroupSysMsg ->
               store_special_message_id(LServer,LUser,Conversation,binary_to_integer(TSGroupchat),OriginID,<<"service">>);
             IsLocal ->
               pass;
@@ -633,15 +627,15 @@ process_message(out, #message{id = ID, type = chat, from = #jid{luser =  LUser,l
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"invite">>);
     true ->
       Encrypted = xmpp:get_subtag(Pkt,#encrypted_message_omemo{}),
-      IsEncrypted = case Encrypted of
+      Type = case Encrypted of
                       #encrypted_message_omemo{} ->
-                        create_conversation(LServer,LUser,Conversation,<<"">>,true,<<"urn:xmpp:omemo:1">>,<<>>),
-                        true;
+                        create_conversation(LServer,LUser,Conversation,<<"">>,true,?NS_OMEMO,<<>>),
+                        ?NS_OMEMO;
                       _ ->
                         update_metainfo(LServer,LUser,Conversation,undefined),
-                        false
+                        undefined
                     end,
-      update_metainfo(read, LServer,LUser,Conversation,TS,IsEncrypted),
+      update_metainfo(read, LServer,LUser,Conversation,TS,Type),
       maybe_push_notification(LUser,LServer,<<"outgoing">>,
         #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)})
   end;
@@ -660,7 +654,7 @@ process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = 
                    _ ->
                      get_stanza_id_from_counter(LUser,LServer,PUser,PServer,OriginID)
                  end,
-      update_metainfo(read, LServer,LUser,Conversation,StanzaID),
+      update_metainfo(read, LServer,LUser,Conversation,StanzaID,Type),
       maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed),
       if
         IsLocal -> pass;
@@ -671,8 +665,15 @@ process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = 
       BareJID = jid:make(LUser,LServer),
       Displayed2 = filter_packet(Displayed,BareJID),
       StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
-      IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID),
-      update_metainfo(read, LServer,LUser,Conversation,StanzaID,IsEncrypted),
+      Type1 = case Type of
+                undefined ->
+                  case mod_mam_sql:is_encrypted(LServer,StanzaID) of
+                    true -> ?NS_OMEMO;
+                    _-> ?CHAT_NS
+                  end;
+                _-> Type
+              end,
+      update_metainfo(read, LServer,LUser,Conversation,StanzaID,Type1),
       maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed);
     _ ->
       ok
@@ -846,7 +847,7 @@ get_last_informative_message_for_chat(LServer,LUser,Conversation) ->
      from archive"
     " where username=%(LUser)s and bare_peer=%(Conversation)s and %(LServer)H and txt notnull and txt !=''
     and timestamp not in (select timestamp from special_messages where %(LServer)H ) and encrypted = false
-     order by timestamp desc limit 1")) of
+     order by timestamp desc NULLS LAST limit 1")) of
     {selected,[<<>>]} ->
       [];
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
@@ -869,7 +870,7 @@ get_last_encrypted_informative_message_for_chat(LServer,LUser,Conversation) ->
      from archive"
     " where username=%(LUser)s and bare_peer=%(Conversation)s and %(LServer)H and txt notnull and txt !=''
     and timestamp not in (select timestamp from special_messages where %(LServer)H ) and encrypted = true
-     order by timestamp desc limit 1")) of
+     order by timestamp desc NULLS LAST limit 1")) of
     {selected,[<<>>]} ->
       [];
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
@@ -899,7 +900,7 @@ store_last_call(Pkt, Peer, LUser, LServer, TS) ->
       case mnesia:transaction(F1) of
         {atomic, ok} ->
           Conversation = jid:to_string(jid:remove_resource(Peer)),
-          update_metainfo(call, LServer,LUser,Conversation,TS,false),
+          update_metainfo(call, LServer,LUser,Conversation,TS,?CHAT_NS),
           ?DEBUG("Save call ~p to ~p~n TS ~p ",[LUser,Peer,TS]),
           ok;
         {aborted, Err1} ->
@@ -1236,7 +1237,9 @@ update_metainfo(LServer, LUser, Conversation, undefined) ->
   F = fun () ->
     case ejabberd_sql:sql_query_t(
       ?SQL("select @(type)s,@(status)s,@(mute)d from conversation_metadata
-       where username = %(LUser)s and conversation = %(Conversation)s")) of
+       where username = %(LUser)s and conversation = %(Conversation)s and not encrypted and %(LServer)H" )) of
+      {selected,[]} ->
+        conversation_sql_upsert(LServer, LUser, Conversation , []);
       {selected,[{Type, Status, Mute}]} ->
         metainfo_sql_update(LServer, LUser, Conversation, Type, Status, Mute);
       _->
@@ -1250,13 +1253,7 @@ update_metainfo(LServer, LUser, Conversation, Type) ->
       ?SQL("select @(status)s,@(mute)d from conversation_metadata
        where username = %(LUser)s and conversation = %(Conversation)s and type=%(Type)s ")) of
       {selected,[]} ->
-        TS = time_now(),
-        ejabberd_sql:sql_query_t(
-          ?SQL_INSERT("conversation_metadata",
-            ["username=%(LUser)s", "conversation=%(Conversation)s", "type=%(Type)s",
-              "updated_at=%(TS)d", "metadata_updated_at=%(TS)d", "status='active'",
-              "server_host=%(LServer)s"])
-        );
+        conversation_sql_upsert(LServer, LUser, Conversation , [{type, Type}]);
       {selected,[{Status, Mute}]} ->
         metainfo_sql_update(LServer, LUser, Conversation, Type, Status, Mute);
       _ ->
@@ -1295,37 +1292,10 @@ update_type(NewType, LServer,LUser,Conversation,X) ->
      where username=%(LUser)s and conversation=%(Conversation)s and type != %(NewType)s and %(LServer)H")
   ).
 
-update_metainfo(_Any, _LServer,_LUser,_Conversation, undefined) ->
-  ?DEBUG("No id in displayed",[]),
-  ok;
-update_metainfo(delivered, LServer,LUser,Conversation,StanzaID) ->
-  ?DEBUG("save delivered ~p ~p ~p",[LUser,Conversation,StanzaID]),
-  TS = time_now(),
-  ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, delivered_until = %(StanzaID)s
-    where username=%(LUser)s and conversation=%(Conversation)s and delivered_until::bigint <= %(StanzaID)d and %(LServer)H")
-  );
-update_metainfo(read, LServer,LUser,Conversation,StanzaID) ->
-  TS = time_now(),
-  ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, read_until = %(StanzaID)s
-    where username=%(LUser)s and conversation=%(Conversation)s and read_until::bigint <= %(StanzaID)d and %(LServer)H")
-  );
-update_metainfo(displayed, LServer,LUser,Conversation,StanzaID) ->
-  ?DEBUG("save displayed ~p ~p ~p",[LUser,Conversation,StanzaID]),
-  TS = time_now(),
-  ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, displayed_until = %(StanzaID)s
-    where username=%(LUser)s and conversation=%(Conversation)s and displayed_until::bigint <= %(StanzaID)d and %(LServer)H")
-  ).
-
 update_metainfo(_Any, _LServer,_LUser,_Conversation, undefined,_Type) ->
   ?DEBUG("No id in displayed",[]),
   ok;
-update_metainfo(call, LServer,LUser,Conversation,_StanzaID,Encrypted) ->
+update_metainfo(call, LServer,LUser,Conversation,_StanzaID, Type) ->
   ?DEBUG("save new call ~p ~p ",[LUser,Conversation]),
   TS = time_now(),
   ?SQL_UPSERT(
@@ -1333,31 +1303,42 @@ update_metainfo(call, LServer,LUser,Conversation,_StanzaID,Encrypted) ->
     "conversation_metadata",
     ["!username=%(LUser)s",
       "!conversation=%(Conversation)s",
-      "!encrypted=%(Encrypted)b",
+      "!type=%(Type)s",
       "metadata_updated_at=%(TS)d",
       "server_host=%(LServer)s"]);
-update_metainfo(delivered, LServer,LUser,Conversation,StanzaID,Encrypted) ->
+update_metainfo(delivered, LServer,LUser,Conversation,StanzaID,Type) ->
   ?DEBUG("save delivered ~p ~p ~p",[LUser,Conversation,StanzaID]),
   TS = time_now(),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, delivered_until = %(StanzaID)s
-    where username=%(LUser)s and conversation=%(Conversation)s and encrypted = %(Encrypted)b and delivered_until::bigint <= %(StanzaID)d and %(LServer)H")
+    where username=%(LUser)s and conversation=%(Conversation)s and type = %(Type)s
+     and delivered_until::bigint <= %(StanzaID)d and %(LServer)H")
   );
-update_metainfo(read, LServer,LUser,Conversation,StanzaID,Encrypted) ->
+update_metainfo(read, LServer,LUser,Conversation,StanzaID,undefined) ->
   TS = time_now(),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, read_until = %(StanzaID)s
-    where username=%(LUser)s and conversation=%(Conversation)s and encrypted = %(Encrypted)b and read_until::bigint <= %(StanzaID)d and %(LServer)H")
+    where username=%(LUser)s and conversation=%(Conversation)s and not encrypted
+     and read_until::bigint <= %(StanzaID)d  and %(LServer)H")
   );
-update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Encrypted) ->
+update_metainfo(read, LServer,LUser,Conversation,StanzaID,Type) ->
+  TS = time_now(),
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, read_until = %(StanzaID)s
+    where username=%(LUser)s and conversation=%(Conversation)s and type = %(Type)s
+     and read_until::bigint <= %(StanzaID)d and %(LServer)H")
+  );
+update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type) ->
   ?DEBUG("save displayed ~p ~p ~p",[LUser,Conversation,StanzaID]),
   TS = time_now(),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, displayed_until = %(StanzaID)s
-    where username=%(LUser)s and conversation=%(Conversation)s and encrypted = %(Encrypted)b and displayed_until::bigint <= %(StanzaID)d and %(LServer)H")
+    where username=%(LUser)s and conversation=%(Conversation)s and type = %(Type)s and
+     displayed_until::bigint <= %(StanzaID)d and %(LServer)H")
   ).
 
 %% does not return types of encrypted conversations
@@ -1400,7 +1381,7 @@ update_retract(LServer,LUser,Conversation,NewVersion,Stanza, RetractType) ->
     retract = %(NewVersion)d, metadata_updated_at = %(TS)d
      where username=%(LUser)s and conversation=%(Conversation)s and encrypted='true' and retract < %(NewVersion)d and %(LServer)H")) of
         {updated,1} ->
-          maybe_push_notification(LUser,LServer,Conversation,<<"urn:xmpp:omemo:1">>,<<"update">>,xmpp:decode(Stanza)),
+          maybe_push_notification(LUser,LServer,Conversation,?NS_OMEMO,<<"update">>,xmpp:decode(Stanza)),
           ok;
         _Other ->
           not_ok
@@ -1437,7 +1418,7 @@ get_last_message(LServer,LUser,PUser) ->
     ?SQL("select
     @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
      from archive"
-    " where username=%(LUser)s and bare_peer=%(PUser)s and %(LServer)H and txt notnull and txt !='' order by timestamp desc limit 1")) of
+    " where username=%(LUser)s and bare_peer=%(PUser)s and %(LServer)H and txt notnull and txt !='' order by timestamp desc NULLS LAST limit 1")) of
     {selected,[<<>>]} ->
       undefined;
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
@@ -1458,7 +1439,7 @@ get_last_previous_message(LServer,LUser,PUser,TS) ->
     ?SQL("select
     @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
      from archive"
-    " where username=%(LUser)s and bare_peer=%(PUser)s and timestamp < %(TS)d and txt notnull and txt !='' and %(LServer)H order by timestamp desc limit 1")) of
+    " where username=%(LUser)s and bare_peer=%(PUser)s and timestamp < %(TS)d and txt notnull and txt !='' and %(LServer)H order by timestamp desc NULLS LAST limit 1")) of
     {selected,[<<>>]} ->
       undefined;
     {selected,[{NewTS, XML, Peer, Kind, Nick}]} ->
@@ -1503,7 +1484,7 @@ get_last_groupchat_message(LServer,LUser,<<"both">>,User) ->
     ?SQL("select
     @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
      from archive"
-    " where username=%(LUser)s  and txt notnull and txt !='' and %(LServer)H order by timestamp desc limit 1")) of
+    " where username=%(LUser)s  and txt notnull and txt !='' and %(LServer)H order by timestamp desc NULLS LAST limit 1")) of
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
       convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer);
     _ ->
@@ -1519,7 +1500,7 @@ get_invite(LServer,LUser,Chat) ->
     ?SQL("select
     @(timestamp)d
      from special_messages"
-    " where username=%(LUser)s and conversation = %(Chat)s and type = 'invite' and %(LServer)H order by timestamp desc limit 1")) of
+    " where username=%(LUser)s and conversation = %(Chat)s and type = 'invite' and %(LServer)H order by timestamp desc  NULLS LAST limit 1")) of
     {selected,[<<>>]} ->
       [];
     {selected,[{TS}]} ->
@@ -1528,7 +1509,7 @@ get_invite(LServer,LUser,Chat) ->
         ?SQL("select
     @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
      from archive"
-        " where username = %(LUser)s and timestamp = %(TS)d and %(LServer)H order by timestamp desc limit 1")) of
+        " where username = %(LUser)s and timestamp = %(TS)d and %(LServer)H order by timestamp desc NULLS LAST limit 1")) of
         {selected,[<<>>]} ->
           [];
         {selected,[{TS, XML, Peer, Kind, Nick}]}->
@@ -1546,7 +1527,7 @@ get_reject(LServer,LUser,Conversation) ->
     ?SQL("select
     @(timestamp)d
      from special_messages"
-    " where username=%(LUser)s and conversation = %(Conversation)s and type = 'reject' and %(LServer)H order by timestamp desc limit 1")) of
+    " where username=%(LUser)s and conversation = %(Conversation)s and type = 'reject' and %(LServer)H order by timestamp desc NULLS LAST limit 1")) of
     {selected,[<<>>]} ->
       {0,[]};
     {selected,[{TS}]} ->
@@ -1555,7 +1536,7 @@ get_reject(LServer,LUser,Conversation) ->
         ?SQL("select
     @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s
      from archive"
-        " where username = %(LUser)s and timestamp = %(TS)d and %(LServer)H order by timestamp desc limit 1")) of
+        " where username = %(LUser)s and timestamp = %(TS)d and %(LServer)H order by timestamp desc NULLS LAST limit 1")) of
         {selected,[<<>>]} ->
           {0,[]};
         {selected,[{TS, XML, Peer, Kind, Nick}]}->
@@ -1634,22 +1615,22 @@ handle_sub_els(chat, [#message_displayed{id = OriginID} = Displayed], From, To) 
   BareJID = jid:make(LUser,LServer),
   Type = get_conversation_type(LServer,LUser,Conversation),
   PeerJID = jid:make(PUser,PServer),
-  case Type of
-    ?NS_GROUPCHAT ->
-      Displayed2= filter_packet(Displayed,PeerJID),
-      StanzaID = get_stanza_id(Displayed2,PeerJID,LServer,OriginID),
-      update_metainfo(displayed, LServer,LUser,Conversation,StanzaID);
-    _ ->
-      Displayed2 = filter_packet(Displayed,BareJID),
-      StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
-      IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID),
-      case IsEncrypted of
-        true ->
-          update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,true);
-        _ ->
-          update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,false)
-      end
-  end;
+  {Type1, StanzaID} = if
+                        Type == ?NS_GROUPCHAT ->
+                          Displayed2= filter_packet(Displayed,PeerJID),
+                          {Type, get_stanza_id(Displayed2,PeerJID,LServer,OriginID)};
+                        Type =/= undefined ->
+                          Displayed2 = filter_packet(Displayed,BareJID),
+                          {Type, get_stanza_id(Displayed2,BareJID,LServer,OriginID)};
+                        true ->
+                          Displayed2 = filter_packet(Displayed,BareJID),
+                          SID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
+                          case mod_mam_sql:is_encrypted(LServer,SID) of
+                            true -> {?NS_OMEMO, SID};
+                            _-> {?CHAT_NS, SID}
+                          end
+                      end,
+  update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type1);
 handle_sub_els(chat, [#message_received{id = OriginID} = Delivered], From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
@@ -1660,32 +1641,9 @@ handle_sub_els(chat, [#message_received{id = OriginID} = Delivered], From, To) -
   IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID1),
   case IsEncrypted of
     true ->
-      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,true);
+      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,?NS_OMEMO);
     _ ->
-      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,false)
-  end;
-handle_sub_els(headline, [#unique_received{} = UniqueReceived], From, To) ->
-  case UniqueReceived of
-    #unique_received{forwarded = Forwarded} when Forwarded =/= undefined ->
-      #forwarded{sub_els = [Message]} = Forwarded,
-      MessageD = xmpp:decode(Message),
-      {PUser, PServer, _} = jid:tolower(From),
-      PeerJID = jid:make(PUser, PServer),
-      {LUser,LServer,_} = jid:tolower(To),
-      Conversation = jid:to_string(PeerJID),
-      StanzaID = get_stanza_id(MessageD,PeerJID),
-      IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
-      case IsLocal of
-        false ->
-          store_last_msg(MessageD, PeerJID, LUser, LServer, StanzaID),
-          delete_msg(LUser, LServer, PUser, PServer, StanzaID),
-          update_metainfo(read, LServer,LUser,Conversation,StanzaID),
-          update_metainfo(delivered, LServer,LUser,Conversation,StanzaID);
-        _ ->
-          update_metainfo(delivered, LServer,LUser,Conversation,StanzaID)
-      end;
-    _ ->
-      ok
+      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,?CHAT_NS)
   end;
 handle_sub_els(headline, [#xabber_retract_message{version = _Version, id = undefined,
   conversation = _Conv}], _From, _To) ->
@@ -1752,11 +1710,11 @@ handle_sub_els(headline, [#delivery_x{ sub_els = [Message]}], From, To) ->
       get_and_store_user_card(LServer,LUser,PeerJID,MessageD),
       store_last_msg(MessageD, PeerJID, LUser, LServer, StanzaID),
       delete_msg(LUser, LServer, PUser, PServer, StanzaID),
-      update_metainfo(read, LServer,LUser,Conversation,StanzaID),
-      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID);
+      update_metainfo(read, LServer,LUser,Conversation,StanzaID,?NS_GROUPCHAT);
     _ ->
-      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID)
+      pass
   end,
+  update_metainfo(delivered, LServer,LUser,Conversation,StanzaID,?NS_GROUPCHAT),
   ok;
 handle_sub_els(_Type, _SubEls, _From, _To) ->
   ok.
@@ -1775,19 +1733,19 @@ check_voip_msg(#message{id = ID, type = chat,
     is_record(Propose, jingle_propose) ->
       maybe_push_notification(LUser,LServer,<<"call">>,Pkt),
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"call">>),
-      update_metainfo(call, LServer,LUser,Conversation,TS,false),
+      update_metainfo(call, LServer,LUser,Conversation,TS,?CHAT_NS),
       store_last_call(Pkt, From, LUser, LServer, TS),
       true;
     is_record(Accept, jingle_accept) ->
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"accept">>),
       maybe_push_notification(LUser,LServer,<<"data">>,Accept),
-      update_metainfo(call, LServer,LUser,Conversation,TS,false),
+      update_metainfo(call, LServer,LUser,Conversation,TS,?CHAT_NS),
       delete_last_call(From, LUser, LServer),
       true;
     is_record(Reject, jingle_reject) ->
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"reject">>),
       maybe_push_notification(LUser,LServer,<<"data">>,Reject),
-      update_metainfo(call, LServer,LUser,Conversation,TS,false),
+      update_metainfo(call, LServer,LUser,Conversation,TS,?CHAT_NS),
       delete_last_call(From, LUser, LServer),
       true;
     true ->
@@ -2059,15 +2017,18 @@ maybe_push_notification(LUser, LServer, PushType, PushPayload)->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
   gen_server:cast(Proc, {send_push, LUser, LServer, PushType, PushPayload}).
 
-maybe_push_notification(LUser, LServer, Conversation, CType, PushType, PushPayload)->
-  Ss = ejabberd_sm:get_user_info(LUser,LServer),
-  case lists:filter(fun({_R, Info}) -> proplists:get_value(group,Info,false) end, Ss) of
-    [] ->
+maybe_push_notification(LUser, LServer, Conversation, CType, PushType, PushPayload)
+  when <<LUser/binary,$@,LServer/binary>> /= Conversation ->
+  case mod_xabber_entity:get_entity_type(LUser,LServer) of
+    user ->
       Proc = gen_mod:get_module_proc(LServer, ?MODULE),
       gen_server:cast(Proc, {send_push, LUser, LServer, Conversation,CType, PushType, PushPayload});
     _ ->
       pass
-  end.
+  end;
+maybe_push_notification(_, _, _, _, _, _) ->
+  %%  ignore notifications from yourself
+  pass.
 
 %% invite logic
 
@@ -2130,20 +2091,30 @@ make_ccc_push(LServer,LUser,Conversation, TS, Type, Thread, PushType) ->
                 end, UserResources).
 
 create_conversation(LServer,LUser,Conversation,Thread,Encrypted,Type,GroupInfo) ->
+  F = fun() ->
+    Options = [{type, Type}, {thread, Thread}, {encrypted, Encrypted}, {'group_info', GroupInfo}],
+    conversation_sql_upsert(LServer, LUser, Conversation , Options)
+    end,
+  ejabberd_sql:sql_transaction(LServer, F).
+
+conversation_sql_upsert(LServer, LUser, Conversation , Options) ->
+  Type = proplists:get_value(type, Options, ?CHAT_NS),
+  Thread = proplists:get_value(thread, Options, <<"">>),
+  Encrypted = proplists:get_value(encrypted, Options, false),
+  GroupInfo = proplists:get_value('group_info', Options, <<"">>),
+  Status = proplists:get_value('group_info', Options, <<"active">>),
   TS = time_now(),
-  Status = <<"active">>,
-  ?SQL_UPSERT(
-    LServer,
+  ?SQL_UPSERT_T(
     "conversation_metadata",
     ["!username=%(LUser)s",
       "!conversation=%(Conversation)s",
-      "!encrypted=%(Encrypted)b",
-      "type=%(Type)s",
+      "!type=%(Type)s",
       "updated_at=%(TS)d",
       "conversation_thread=%(Thread)s",
       "metadata_updated_at=%(TS)d",
       "status=%(Status)s",
       "group_info=%(GroupInfo)s",
+      "encrypted=%(Encrypted)b",
       "server_host=%(LServer)s"]).
 
 get_and_store_user_card(LServer,LUser,PeerJID,Message) ->
@@ -2225,7 +2196,7 @@ body_is_encrypted(#message{sub_els = SubEls}) ->
     El ->
       try xmpp:decode(El) of
         #encrypted_message_omemo{} ->
-          {true, <<"urn:xmpp:omemo:1">>}
+          {true, ?NS_OMEMO}
       catch _:{xmpp_codec, _} ->
         false
       end

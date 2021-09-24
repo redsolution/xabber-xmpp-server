@@ -247,8 +247,9 @@ handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser
                   true -> {?CHAT_NS, <<>>}
                 end,
   CurrentType = get_conversation_type(LServer,LUser,Conversation),
+  IsSameType = lists:member(NewType, CurrentType),
   if
-    NewType == CurrentType ->
+    IsSameType ->
       pass;
     NewType == ?NS_GROUPCHAT orelse NewType == ?NS_CHANNELS ->
       update_mam_prefs(add,jid:make(LUser,LServer),jid:make(PUser,PServer)),
@@ -543,8 +544,9 @@ process_message(in,#message{id = _ID, type = chat, from = Peer, to = To, meta = 
   OriginID = get_origin_id(OriginIDElemnt),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
   Type = case get_conversation_type(LServer,LUser,Conversation) of
-           undefined when GroupSysMsg =/= false orelse GroupMsg =/= false-> ?NS_GROUPCHAT;
-           T -> T
+           [] when GroupSysMsg =/= false orelse GroupMsg =/= false-> ?NS_GROUPCHAT;
+           [T] -> T;
+           _ -> undefined
          end,
   if
     Invite  =/= false ->
@@ -644,7 +646,10 @@ process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = 
   Displayed = xmpp:get_subtag(Pkt, #message_displayed{}),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
-  Type = get_conversation_type(LServer,LUser,Conversation),
+  Type = case get_conversation_type(LServer,LUser,Conversation) of
+           [T] -> T;
+           _ -> undefined
+         end,
   case Displayed of
     #message_displayed{id = OriginID} when Type == ?NS_GROUPCHAT ->
       FilPacket = filter_packet(Displayed,jid:make(PUser,PServer)),
@@ -1341,7 +1346,7 @@ update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type) ->
      displayed_until::bigint <= %(StanzaID)d and %(LServer)H")
   ).
 
-%% does not return types of encrypted conversations
+-spec get_conversation_type(binary(),binary(),binary()) -> list() | error.
 get_conversation_type(LServer,LUser,Conversation) ->
   case ejabberd_sql:sql_query(
     LServer,
@@ -1349,9 +1354,9 @@ get_conversation_type(LServer,LUser,Conversation) ->
     @(type)s
      from conversation_metadata"
     " where username=%(LUser)s and conversation=%(Conversation)s and %(LServer)H")) of
-    {selected,[]} -> undefined;
-    {selected,[{Type}]} -> Type;
-    {selected,_List} -> ?CHAT_NS;
+    {selected,[]} -> [];
+%%    {selected,[{Type}]} -> Type;
+    {selected, List} -> [T || {T} <- List];
     _ -> error
   end.
 
@@ -1393,8 +1398,11 @@ update_retract(LServer,LUser,Conversation,NewVersion,Stanza, RetractType) ->
     retract = %(NewVersion)d, metadata_updated_at = %(TS)d
      where username=%(LUser)s and conversation=%(Conversation)s and encrypted='false' and retract < %(NewVersion)d and %(LServer)H")) of
         {updated,1} ->
-          maybe_push_notification(LUser,LServer,Conversation,
-            get_conversation_type(LServer,LUser,Conversation),<<"update">>,xmpp:decode(Stanza)),
+          Type = case get_conversation_type(LServer,LUser,Conversation) of
+                   [T] -> T;
+                   _-> ?CHAT_NS
+                 end,
+          maybe_push_notification(LUser,LServer,Conversation,Type,<<"update">>,xmpp:decode(Stanza)),
           ok;
         _Other ->
           not_ok
@@ -1613,7 +1621,10 @@ handle_sub_els(chat, [#message_displayed{id = OriginID} = Displayed], From, To) 
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
   BareJID = jid:make(LUser,LServer),
-  Type = get_conversation_type(LServer,LUser,Conversation),
+  Type = case get_conversation_type(LServer,LUser,Conversation) of
+           [T] -> T;
+           _ -> undefined
+         end,
   PeerJID = jid:make(PUser,PServer),
   {Type1, StanzaID} = if
                         Type == ?NS_GROUPCHAT ->
@@ -2049,7 +2060,7 @@ maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer) ->
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   Type = get_conversation_type(LServer,LUser,Conversation),
   case Type of
-    ?NS_GROUPCHAT ->
+    [?NS_GROUPCHAT] ->
       Invites = get_invite_information(LUser,LServer,PUser,PServer),
       lists:foreach(fun(Invite) ->
         delete_invite(Invite) end, Invites

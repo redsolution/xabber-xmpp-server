@@ -194,8 +194,8 @@ check_kick(_Acc,LServer,Chat,Admin,Kick,_Lang) ->
   end.
 
 kick_user(Acc, LServer, Chat, _Admin, _Kick, _Lang) ->
-  KickedUsers = lists:map(fun(User) -> kick_user_from_chat(LServer,Chat,User) end, Acc),
-  KickedUsers.
+  lists:foreach(fun(User) -> kick_user_from_chat(LServer,Chat,User) end, Acc),
+  Acc.
 
 validate_kick_request(LServer,Chat, User1, User2) when User1 =/= User2 ->
   mod_groupchat_restrictions:validate_users(LServer,Chat,User1,User2);
@@ -213,8 +213,7 @@ kick_user_from_chat(LServer,Chat,User) ->
       UserJID = jid:from_string(User),
       ChatJID = jid:from_string(Chat),
       ejabberd_router:route(ChatJID,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
-      ejabberd_router:route(ChatJID,UserJID,#presence{type = unavailable, id = randoms:get_string()}),
-      form_user_card(User,Chat);
+      ejabberd_router:route(ChatJID,UserJID,#presence{type = unavailable, id = randoms:get_string()});
     _ ->
       <<>>
   end.
@@ -337,23 +336,24 @@ current_chat_version(Server,Chat)->
   DateNew = get_chat_version(Server,Chat),
   integer_to_binary(convert_from_datetime_to_unix_time(DateNew)).
 
-get_vcard(_Acc,{Server,To,Chat,_Lang}) ->
-  User = jid:to_string(jid:remove_resource(To)),
+get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
+  User = jid:to_string(jid:remove_resource(UserJID)),
   Status = check_user_if_exist(Server,User,Chat),
-  From = jid:from_string(Chat),
+  From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
+  To = jid:remove_resource(UserJID),
   Nick = get_nick_in_chat(Server,User,Chat),
   IsAnon = mod_groupchat_inspector:is_anonim(Server,Chat),
   case IsAnon of
     no when Status == not_exist ->
       add_user_pre_approval(Server,User,<<"member">>,Chat,<<"wait">>),
       add_wait_for_vcard(Server,User),
-      ejabberd_router:route(To,jid:remove_resource(From),mod_groupchat_vcard:get_vcard()),
-      ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta()),
+      ejabberd_router:route(From,To,mod_groupchat_vcard:get_vcard()),
+      ejabberd_router:route(From,To,mod_groupchat_vcard:get_pubsub_meta()),
       {stop,ok};
     no ->
       mod_groupchat_sql:set_update_status(Server,User,<<"true">>),
-      ejabberd_router:route(To,jid:remove_resource(From),mod_groupchat_vcard:get_vcard()),
-      ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta()),
+      ejabberd_router:route(From,To,mod_groupchat_vcard:get_vcard()),
+      ejabberd_router:route(From,To,mod_groupchat_vcard:get_pubsub_meta()),
       ok;
     yes when Nick == <<>> ->
       mod_groupchat_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),

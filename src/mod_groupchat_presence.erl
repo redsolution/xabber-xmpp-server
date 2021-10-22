@@ -275,10 +275,8 @@ answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
         undefined ->
           ok;
         _ ->
-          mod_groupchat_sql:update_hash(Server,User,NewHash),
-          mod_groupchat_sql:set_update_status(Server,User,<<"true">>)
+          ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_vcard())
       end,
-      Chats = mod_groupchat_inspector:chats_to_parse_vcard(Server,User),
       IsAnon = mod_groupchat_inspector:is_anonim(Server,ChatJid),
       PeerToPeer = lists:keyfind(xabbergroup_peer,1,Decoded),
       case PeerToPeer of
@@ -291,15 +289,8 @@ answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
             true when IsAnon == yes ->
               mod_groupchat_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
             _ ->
-              ?DEBUG("Not change state",[])
+              ok
           end
-      end,
-      case lists:member({ChatJid},Chats) of
-        true when IsAnon == no->
-          ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta()),
-          ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_vcard());
-        _ ->
-          ok
       end,
       FromChat = jid:replace_resource(To,<<"Group">>),
       Present = lists:keyfind(x_present,1,Decoded),

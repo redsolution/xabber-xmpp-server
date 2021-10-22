@@ -113,7 +113,6 @@ block_iq_handler(D, #iq{to = To, from = From}) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   Admin = jid:to_string(jid:remove_resource(From)),
-  Elements = D#xabbergroup_block.domain ++ D#xabbergroup_block.jid ++ D#xabbergroup_block.id,
   {selected,_Rows,Owners} = get_owners(Server,Chat),
   OwnerJIDs = [JID||[JID,_ID] <- Owners],
   OwnerIDS = [ID||[_JID,ID] <- Owners],
@@ -123,7 +122,7 @@ block_iq_handler(D, #iq{to = To, from = From}) ->
   OId = check(id,OwnerIDS,D#xabbergroup_block.id),
   case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
     true when OJ == false andalso OS == false andalso OId == false ->
-      [Elements];
+      D;
     _ ->
       {stop,not_ok}
   end.
@@ -227,8 +226,8 @@ check_if_exist(Server,User,Chat,Admin) ->
       {true,Card}
   end.
 
-block_elements(Acc, #iq{to = To, from = From})->
-  [Elements|_R] = Acc,
+block_elements(D, #iq{to = To, from = From} = Iq)->
+  Elements = D#xabbergroup_block.domain ++ D#xabbergroup_block.jid ++ D#xabbergroup_block.id,
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   Admin = jid:to_string(jid:remove_resource(From)),
@@ -274,7 +273,8 @@ block_elements(Acc, #iq{to = To, from = From})->
       _ ->
         {stop,not_ok}
     end end, Elements),
-  Kicked.
+  mod_groupchat_service_message:users_blocked(Kicked, Iq),
+  D.
 
 unblock_elements([],_Server,_Chat)->
   {stop,ok};

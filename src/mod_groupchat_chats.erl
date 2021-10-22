@@ -456,7 +456,7 @@ delete_chat(_Acc,{LServer,User,Chat,_UserCard,_Lang})->
       delete(Chat);
     _ -> pass
   end,
-  {stop,ok}.
+  ok.
 
 is_anonim(LServer,Chat) ->
   case ejabberd_sql:sql_query(

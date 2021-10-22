@@ -194,7 +194,7 @@ make_action(#iq{to = To, type = set, sub_els = [#xmlel{name = <<"block">>,
   case Result of
     not_ok ->
       ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed()));
-    ok ->
+    _ ->
       ejabberd_router:route(xmpp:make_iq_result(Iq))
   end;
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
@@ -439,7 +439,8 @@ process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set, sub_els 
       ejabberd_router:route(xmpp:make_error(IQ, Error));
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:serr_internal_server_error()))
-  end;
+  end,
+  ignore;
 process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, id = ID, rsm = undefined, version = undefined, sub_els = []}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),

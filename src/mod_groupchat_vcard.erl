@@ -46,7 +46,9 @@
   get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, get_url/1, create_p2p_avatar/6,
   handle_iq/1
 ]).
--export([publish_avatar/3]).
+-export([publish_avatar/3, make_http_request/6]).
+-export([subscribe_to_avatar/2, groupchat_user_kick_hook/6, groupchat_block_hook/2,
+  groupchat_presence_unsubscribed_hook/2]).
 %% gen_mod behavior
 -export([start/2, stop/1, mod_options/1, depends/2, mod_opt_type/1]).
 -include("ejabberd.hrl").
@@ -55,10 +57,18 @@
 -include("xmpp.hrl").
 
 
-start(_, _) ->
+start(Host, _) ->
+  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, subscribe_to_avatar, 80),
+  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, groupchat_presence_unsubscribed_hook, 80),
+  ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, groupchat_user_kick_hook, 80),
+  ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, groupchat_block_hook, 80),
   ok.
 
-stop(_) ->
+stop(Host) ->
+  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, subscribe_to_avatar, 80),
+  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, groupchat_presence_unsubscribed_hook, 80),
+  ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, groupchat_user_kick_hook, 80),
+  ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, groupchat_block_hook, 80),
   ok.
 
 mod_opt_type(get_url) ->
@@ -421,76 +431,88 @@ get_vcard() ->
       }.
 
 get_pubsub_meta() ->
-  #xmlel{
-    name = <<"iq">>,
-    attrs = [
-      {<<"id">>, randoms:get_string()},
-      {<<"xmlns">>,<<"jabber:client">>},
-      {<<"type">>,<<"get">>}
-    ],
-    children = [#xmlel{
-      name = <<"pubsub">>,
-      attrs = [
-        {<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}
-      ],
-      children = [#xmlel{
-        name = <<"items">>,
-        attrs = [
-          {<<"node">>,<<"urn:xmpp:avatar:metadata">>}
-      ]
-    }]
-    }
-    ]
+  #iq{type = get, id = randoms:get_string(),
+    sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:metadata">>}}]
   }.
 
 get_pubsub_data() ->
-  #xmlel{
-    name = <<"iq">>,
-    attrs = [
-      {<<"id">>, randoms:get_string()},
-      {<<"xmlns">>,<<"jabber:client">>},
-      {<<"type">>,<<"get">>}
-    ],
-    children = [#xmlel{
-      name = <<"pubsub">>,
-      attrs = [
-        {<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}
-      ],
-      children = [#xmlel{
-        name = <<"items">>,
-        attrs = [
-          {<<"node">>,<<"urn:xmpp:avatar:data">>}
-        ]
-      }]
-    }
-    ]
+  #iq{type = get, id = randoms:get_string(),
+    sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:data">>}}]
   }.
 
 get_pubsub_data(ID) ->
-  #xmlel{
-    name = <<"iq">>,
-    attrs = [
-      {<<"id">>, randoms:get_string()},
-      {<<"xmlns">>,<<"jabber:client">>},
-      {<<"type">>,<<"get">>}
-    ],
-    children = [#xmlel{
-      name = <<"pubsub">>,
-      attrs = [
-        {<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}
-      ],
-      children = [#xmlel{
-        name = <<"items">>,
-        attrs = [
-          {<<"node">>,<<"urn:xmpp:avatar:data">>}
-        ],
-        children = [#xmlel{name = <<"item">>, attrs = [{<<"id">>,ID}]}]
-      }]
-    }
-    ]
-  }.
+  #iq{type = get, id = randoms:get_string(),
+    sub_els = [
+      #pubsub{
+        items = #ps_items{
+          node = <<"urn:xmpp:avatar:data">>,
+          items = [#ps_item{id = ID}]
+        }
+      }
+    ]}.
+
+subscribe_to_avatar(_Acc,{Server,User,Chat,_Lang}) ->
+  case mod_groupchat_inspector:is_anonim(Server,Chat) of
+    yes ->
+      ?INFO_MSG("SUBSCRIBE AVATAR ~p ~p",[User,Chat]),
+      To = jid:remove_resource(User),
+      BareChatJID = jid:from_string(Chat),
+      From = jid:replace_resource(BareChatJID,<<"Group">>),
+      Subscribe  = #ps_subscribe{node = <<"urn:xmpp:avatar:metadata">>, jid = BareChatJID},
+      Iq = #iq{type = set, id = randoms:get_string(), sub_els = [#pubsub{subscribe = Subscribe}]},
+      ejabberd_router:route(From,To, Iq);
+    _ ->
+      pass
+  end,
+  ok.
+
+%%  groupchat_user_kick hook
+groupchat_user_kick_hook(Acc, _LServer, Chat, _Admin, _Kick, _Lang) ->
+  lists:foreach(fun(User) ->
+    From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
+    To = jid:from_string(User),
+    unsubscribe_from_avatar(From, To)
+                end, Acc),
+  Acc.
+
+%%  groupchat_block_hook
+groupchat_block_hook(#xabbergroup_block{} = Elem, #iq{to = Chat}) ->
+  JIDs = Elem#xabbergroup_block.jid ,
+  IDs = Elem#xabbergroup_block.id,
+  Users = if
+            JIDs =/= [] ->
+              [U || {_, U} <- JIDs];
+            IDs =/= [] ->
+              Server = Chat#jid.lserver,
+              ChatBin = jid:to_string(jid:remove_resource(Chat)),
+              lists:map(fun({_, ID}) ->
+                mod_groupchat_users:get_user_by_id(Server,ChatBin,ID)
+                        end, IDs);
+            true -> []
+          end,
+  lists:foreach(fun(User) ->
+    From = jid:replace_resource(Chat,<<"Group">>),
+    To = jid:from_string(User),
+    unsubscribe_from_avatar(From, To)
+                end, Users),
+  Elem.
+
+%%  groupchat_presence_unsubscribed_hook
+groupchat_presence_unsubscribed_hook(Acc,{_Server,User,Chat,_UserCard,_Lang}) ->
+  From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
+  To = jid:from_string(User),
+  unsubscribe_from_avatar(From, To),
+  Acc.
+
+unsubscribe_from_avatar(Group, User) ->
+  ?INFO_MSG("UNSUBSCRIBE AVATAR ~p ~p",[User, Group]),
+  UnSubscribe  = #ps_unsubscribe{node = <<"urn:xmpp:avatar:metadata">>, jid = jid:remove_resource(Group)},
+  Iq = #iq{type = set, id = randoms:get_string(), sub_els = [#pubsub{unsubscribe = UnSubscribe}]},
+  ejabberd_router:route(Group, jid:remove_resource(User), Iq),
+  ok.
 
 handle(#iq{from = From, to = To, sub_els = Els}) ->
+  ?INFO_MSG("VCARD ~p ",[From]),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
@@ -516,12 +538,16 @@ handle_pubsub(ChatJID,UserJID,#avatar_meta{info = AvatarINFO}) ->
     [] ->
       OldMeta = get_image_metadata(LServer, User, Chat),
       check_old_meta(LServer, OldMeta);
-    [#avatar_info{bytes = Size, id = ID, type = Type}] ->
-      [#avatar_info{bytes = Size, id = ID, type = Type}] = AvatarINFO,
+    [#avatar_info{bytes = Size, id = ID, type = Type, url = Url}] ->
       OldMeta = get_image_metadata(LServer, User, Chat),
       check_old_meta(LServer, OldMeta),
       update_id_in_chats(LServer,User,ID,Type,Size,<<>>),
-      ejabberd_router:route(ChatJID,UserJID,get_pubsub_data(ID));
+      case Url of
+        <<>> ->
+          ejabberd_router:route(ChatJID,UserJID,get_pubsub_data(ID));
+        _ ->
+          download_user_avatar(LServer, User, ID, Type, Size, Url)
+      end;
     _ ->
       ok
   end;
@@ -535,15 +561,7 @@ handle_pubsub(ChatJID,UserJID,ID,#avatar_data{data = Data}) ->
   Meta = get_image_metadata(Server, User, Chat),
   case Meta of
     [{ID,AvaSize,AvaType,_AvaUrl}] ->
-      <<"image/",Type/binary>> = AvaType,
-      Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
-      UrlDir = get_url(Server),
-      Name = <<ID/binary, ".", Type/binary >>,
-      Url = <<UrlDir/binary, "/", Name/binary>>,
-      File = <<Path/binary, "/" , Name/binary>>,
-      file:write_file(binary_to_list(File),Data),
-      update_avatar_url_chats(Server,User,ID,AvaType,AvaSize,Url),
-      set_update_status(Server,User,<<"false">>);
+      store_user_avatar(Server, User, ID, AvaType, AvaSize, Data);
     _ ->
       ok
   end;
@@ -564,6 +582,52 @@ update_vcard(Server,User,D,_Chat) ->
     _ ->
       update_vcard_info(Server,User,LF,FN,NickName,D#vcard_temp.photo)
   end.
+
+download_user_avatar(Server, User, ID, Type, Size, Url) ->
+  ?INFO_MSG("Download user avatar: ~p ~p ~n",[User, Url]),
+  spawn(?MODULE,make_http_request,[Server, User, ID, Type, Size, Url]).
+
+make_http_request(Server, User, ID, Type, Size, Url) ->
+  Options = [{sync, false},{stream, self}],
+  HttpOptions = [{timeout, 5000}, {autoredirect, false}], % 5 seconds.
+  httpc:request(get, {binary_to_list(Url), []}, HttpOptions, Options),
+  http_response_process(Server, User, ID, Type, Size, <<>>).
+
+http_response_process(Server, User, ID, Type, Size, Data) ->
+  receive
+    {http, {_RequestId, stream_start, _Headers}} ->
+      http_response_process(Server, User, ID, Type, Size, Data);
+    {http, {_RequestId, stream, BinBodyPart}} ->
+      NewData = <<Data/binary,BinBodyPart/binary>>,
+      CurrSize = byte_size(NewData),
+      if
+        CurrSize > Size ->
+          ?ERROR_MSG("download error: file too large",[]),
+          exit(normal);
+        true ->
+          http_response_process(Server, User, ID, Type, Size, NewData)
+      end;
+    {http, {_RequestId, stream_end, _Headers}} ->
+      store_user_avatar(Server, User, ID, Type, Size, Data),
+      ?INFO_MSG("Download stream_end: ~p~n",[User]),
+      exit(normal);
+    E ->
+      ?ERROR_MSG("User avatar download error: ~p~n",[E]),
+      exit(normal)
+  after
+    60000 -> exit(normal)
+  end.
+
+store_user_avatar(Server, User, ID, AvaType, AvaSize, Data) ->
+  <<"image/",Type/binary>> = AvaType,
+  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+  UrlDir = get_url(Server),
+  Name = <<ID/binary, ".", Type/binary >>,
+  Url = <<UrlDir/binary, "/", Name/binary>>,
+  File = <<Path/binary, "/" , Name/binary>>,
+  file:write_file(binary_to_list(File),Data),
+  update_avatar_url_chats(Server,User,ID,AvaType,AvaSize,Url),
+  set_update_status(Server,User,<<"false">>).
 
 send_notifications_about_nick_change(Server,User) ->
   ChatAndIds = select_chat_for_update_nick(Server,User),
@@ -951,6 +1015,9 @@ update_data_user_put(Server, UserID, Data, Hash, Chat) ->
     parse_avatar = 'no',
     avatar_url = %(Url)s
   where id = %(UserID)s and chatgroup = %(Chat)s ")),
+%%  todo: need refactoring
+  User = mod_groupchat_users:get_user_by_id(Server,Chat,UserID),
+  unsubscribe_from_avatar(jid:from_string(Chat), jid:from_string(User)),
   check_old_meta(Server, OldMeta).
 
 set_update_status(Server,Jid,Status) ->

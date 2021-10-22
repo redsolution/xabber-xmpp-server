@@ -55,7 +55,7 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(change_user_settings, Host, ?MODULE, user_rights_changed, 40),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, users_kicked, 35),
-  ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, users_blocked, 35),
+%%  ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, users_blocked, 35),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 55),
   ejabberd_hooks:add(groupchat_user_change_own_avatar, Host, ?MODULE, user_change_own_avatar, 10),
   ejabberd_hooks:add(groupchat_user_change_some_avatar, Host, ?MODULE, user_change_avatar, 10),
@@ -70,7 +70,7 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_user_change_some_avatar, Host, ?MODULE, user_change_avatar, 10),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, users_kicked, 35),
-  ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, users_blocked, 35),
+%%  ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, users_blocked, 35),
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 55),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, user_left, 25).
 
@@ -296,6 +296,7 @@ users_blocked(Acc, #iq{lang = Lang,to = To, from = From}) ->
   {stop,ok}.
 
 users_kicked(Acc,LServer,Chat,Admin,_Kick,Lang) ->
+  UsersCard = lists:map(fun(User) -> mod_groupchat_users:form_user_card(User,Chat) end, Acc),
   X = mod_groupchat_users:form_user_card(Admin,Chat),
   UserID = case anon(X) of
              public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
@@ -313,7 +314,7 @@ users_kicked(Acc,LServer,Chat,Admin,_Kick,Lang) ->
         [jid:to_string(Card#xabbergroupchat_user_card.jid),<<" ">>];
       anonim ->
         [Card#xabbergroupchat_user_card.nickname, <<" ">>]
-    end end, Acc
+    end end, UsersCard
   ),
   case length(KickedUsers) of
     0 ->
@@ -326,14 +327,14 @@ users_kicked(Acc,LServer,Chat,Admin,_Kick,Lang) ->
   MsgTxt = text_for_msg(Lang,Txt,UserID,KickedUsers,AddTxt),
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groupchat_users:current_chat_version(LServer,Chat),
-  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = Acc, type = <<"kick">>, version = Version},
+  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = UsersCard, type = <<"kick">>, version = Version},
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
   SubEls = [XEl,By],
   ChatJID = jid:from_string(Chat),
   M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M),
   send_presences(LServer,Chat),
-  {stop,ok}.
+  Acc.
 
 user_left(_Acc,{Server,_User,Chat,X,Lang})->
   Txt = <<"left chat">>,
@@ -379,7 +380,7 @@ user_join(_Acc,{Server,To,Chat,Lang}) ->
   M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M),
   send_presences(Server,Chat),
-  {stop,ok}.
+  ok.
 
 user_updated({User,OldCard}, LServer,Chat, Admin,_ID,Nick,_Badge,Lang) ->
   ByUserCard = mod_groupchat_users:form_user_card(Admin,Chat),

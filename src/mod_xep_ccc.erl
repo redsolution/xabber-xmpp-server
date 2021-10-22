@@ -688,6 +688,32 @@ process_message(_Direction,_Pkt) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+get_conversation_info(LServer, LUser, Conversation, Type) ->
+  SServer = ejabberd_sql:escape(LServer),
+  SUser = ejabberd_sql:escape(LUser),
+  SConversation = ejabberd_sql:escape(Conversation),
+  SType = ejabberd_sql:escape(Type),
+  HostClause = case ejabberd_sql:use_new_schema() of
+                 true ->
+                   <<" and server_host='",SServer/binary,"' ">>;
+                 _->
+                   <<>>
+               end,
+  Query = [<<"select conversation, retract,type, conversation_thread,
+  read_until, delivered_until, displayed_until, updated_at, status,
+  encrypted, pinned, mute, group_info
+  from conversation_metadata where username = '">>,SUser,<<"' and
+  conversation = '">>,SConversation,<<"' and type = '">>,SType,<<"'">>,HostClause,<<";">>],
+  case ejabberd_sql:sql_query(LServer, Query) of
+    {selected, _, []} ->
+      {error, notfound};
+    {selected, _, [Res]} ->
+      [ConvRes] = convert_result([Res]),
+      make_result_el(LServer, LUser, ConvRes);
+    _ ->
+      {error, internal}
+  end.
+
 make_result(LServer, LUser, Stamp, RSM, Form) ->
   {QueryChats, QueryCount} = make_sql_query(LServer, LUser, Stamp, RSM, Form),
   {selected, _, Res} = ejabberd_sql:sql_query(LServer, QueryChats),
@@ -742,12 +768,12 @@ make_result_el(LServer, LUser, El) ->
     Delivered,Display,UpdateAt,ConversationStatus,Encrypted,Pinned,Mute,GroupInfo} = El,
   ConversationMetadata = ejabberd_hooks:run_fold(syncronization_query,
     LServer, [], [LUser,LServer,Conversation,Read,Delivered,Display,ConversationStatus,Retract,Type,Encrypted,GroupInfo]),
-  C = #xabber_conversation{stamp = integer_to_binary(UpdateAt), type = Type, status = ConversationStatus,
+  CElem = #xabber_conversation{stamp = integer_to_binary(UpdateAt), type = Type, status = ConversationStatus,
     thread = Thread, jid = jid:from_string(Conversation), pinned = Pinned, sub_els = ConversationMetadata},
   Now = time_now() div 1000000,
-  case  Mute of
-    M when M >= Now -> C#xabber_conversation{mute = integer_to_binary(M)};
-    _ ->  C
+  if
+    Mute >= Now -> CElem#xabber_conversation{mute = integer_to_binary(Mute)};
+    true -> CElem
   end.
 
 create_synchronization_metadata(_Acc,_LUser,_LServer,_Conversation,
@@ -1376,8 +1402,8 @@ update_group_retract(LServer,LUser,Conversation,NewVersion,Stanza) ->
       not_ok
   end.
 
-update_retract(LServer,LUser,Conversation,NewVersion,Stanza, RetractType) ->
-  TS = time_now(),
+update_retract(LServer,LUser,Conversation,NewVersion,RetractType,TS) ->
+%%  TS = time_now(),
   case RetractType of
     <<"encrypted">> ->
       case ejabberd_sql:sql_query(
@@ -1386,10 +1412,9 @@ update_retract(LServer,LUser,Conversation,NewVersion,Stanza, RetractType) ->
     retract = %(NewVersion)d, metadata_updated_at = %(TS)d
      where username=%(LUser)s and conversation=%(Conversation)s and encrypted='true' and retract < %(NewVersion)d and %(LServer)H")) of
         {updated,1} ->
-          maybe_push_notification(LUser,LServer,Conversation,?NS_OMEMO,<<"update">>,xmpp:decode(Stanza)),
           ok;
         _Other ->
-          not_ok
+          error
       end;
     _ ->
       case ejabberd_sql:sql_query(
@@ -1398,14 +1423,9 @@ update_retract(LServer,LUser,Conversation,NewVersion,Stanza, RetractType) ->
     retract = %(NewVersion)d, metadata_updated_at = %(TS)d
      where username=%(LUser)s and conversation=%(Conversation)s and encrypted='false' and retract < %(NewVersion)d and %(LServer)H")) of
         {updated,1} ->
-          Type = case get_conversation_type(LServer,LUser,Conversation) of
-                   [T] -> T;
-                   _-> ?CHAT_NS
-                 end,
-          maybe_push_notification(LUser,LServer,Conversation,Type,<<"update">>,xmpp:decode(Stanza)),
           ok;
         _Other ->
-          not_ok
+          error
       end
   end.
 
@@ -1671,7 +1691,13 @@ handle_sub_els(headline, [#xabber_retract_message{type = Type, version = Version
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   delete_one_msg(LUser, LServer, PUser, PServer, integer_to_binary(StanzaID)),
   Conversation = jid:to_string(ConversationJID),
-  update_retract(LServer,LUser,Conversation,Version,Retract,Type),
+  TS = time_now(),
+  case update_retract(LServer,LUser,Conversation,Version,Type, TS) of
+    ok ->
+      send_push_about_retract(LServer,LUser,Conversation,Retract,Type,TS);
+    _->
+      pass
+  end,
   ok;
 handle_sub_els(headline, [#xabber_retract_user{version = Version, id = UserID,
   conversation = ConversationJID} = Retract], _From, To) ->
@@ -1691,19 +1717,30 @@ handle_sub_els(headline, [
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   Conversation = jid:to_string(ConversationJID),
-  case update_retract(LServer,LUser,Conversation,Version,Retract,Type) of
+  TS = time_now(),
+  case update_retract(LServer,LUser,Conversation,Version,Type,TS) of
     ok ->
-      delete_all_msgs(LUser, LServer, PUser, PServer);
+      delete_all_msgs(LUser, LServer, PUser, PServer),
+      send_push_about_retract(LServer,LUser,Conversation,Retract,Type,TS);
     _ ->
-      ok
-  end;
-handle_sub_els(headline, [#xabber_replace{version = undefined, conversation = _ConversationJID} = _Retract], _From, _To) ->
+      pass
+  end,
   ok;
-handle_sub_els(headline, [#xabber_replace{type = Type, version = Version, conversation = ConversationJID} = Replace], _From, To) ->
+handle_sub_els(headline, [#xabber_replace{version = undefined, conversation = _ConversationJID} = _Retract],
+    _From, _To) ->
+  ok;
+handle_sub_els(headline, [#xabber_replace{type = Type, version = Version, conversation = ConversationJID} = Replace],
+    _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   Conversation = jid:to_string(ConversationJID),
   maybe_change_last_msg(LServer, LUser, ConversationJID, Replace),
-  update_retract(LServer,LUser,Conversation,Version,Replace,Type),
+  TS = time_now(),
+  case update_retract(LServer,LUser,Conversation,Version,Type,TS) of
+    ok ->
+      send_push_about_retract(LServer,LUser,Conversation,Replace,Type,TS);
+    _->
+      pass
+  end,
   ok;
 %%handle_sub_els(headline, [#xabbergroupchat_replace{version = Version} = Retract], _From, To) ->
 %%  #jid{luser = LUser, lserver = LServer} = To,
@@ -1918,7 +1955,7 @@ pin_conversation(LServer, LUser, #xabber_conversation{type = Type, jid = ConvJID
     {updated, 0} ->
       {error,xmpp:err_item_not_found()};
     {updated,_N} ->
-      make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,{pinned,Pinned}),
+      make_sync_push(LServer,LUser,Conversation,TS,Type),
       ok;
     _ ->
       {error,xmpp:err_internal_server_error()}
@@ -1947,7 +1984,7 @@ mute_conversation(LServer, LUser, #xabber_conversation{type = Type, jid = ConvJI
     {updated, 0} ->
       {error,xmpp:err_item_not_found()};
     {updated,_N} ->
-      make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,{mute,SetMute}),
+      make_sync_push(LServer,LUser,Conversation,TS,Type),
       ok;
     _ ->
       {error,xmpp:err_internal_server_error()}
@@ -1967,7 +2004,7 @@ archive_conversation(LServer, LUser,
       {updated, 0} ->
         {error,xmpp:err_item_not_found()};
       {updated,_N} ->
-        make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,{status,archived}),
+        make_sync_push(LServer,LUser,Conversation,TS,Type),
         ok;
       _ ->
         {error,xmpp:err_internal_server_error()}
@@ -1986,7 +2023,7 @@ activate_conversation(LServer, LUser, #xabber_conversation{type = Type, jid = Co
     {updated, 0} ->
       {error,xmpp:err_item_not_found()};
     {updated,_N} ->
-      make_ccc_push(LServer,LUser,Conversation,TS,Type,Thread,{status,active}),
+      make_sync_push(LServer,LUser,Conversation,TS,Type),
       ok;
     _ ->
       {error,xmpp:err_internal_server_error()}
@@ -2005,7 +2042,7 @@ delete_conversation(LServer,LUser,#xabber_conversation{type = Type, jid = JID}) 
     {updated,0} ->
       {error,xmpp:err_item_not_found()};
     {updated,_N} ->
-      make_ccc_push(LServer,LUser,Conversation,TS,Type,<<>>,{status,deleted}),
+      make_sync_push(LServer,LUser,Conversation,TS,Type),
       ok;
     _ ->
       {error,xmpp:err_internal_server_error()}
@@ -2041,6 +2078,19 @@ maybe_push_notification(_, _, _, _, _, _) ->
   %%  ignore notifications from yourself
   pass.
 
+send_push_about_retract(LServer,LUser,Conversation,PushPayload,RetractType,TS) ->
+  CType = case RetractType of
+            <<"encrypted">> ->
+              ?NS_OMEMO;
+            _ ->
+              case get_conversation_type(LServer,LUser,Conversation) of
+                [T] -> T;
+                _-> ?CHAT_NS
+              end
+          end,
+  make_sync_push(LServer,LUser,Conversation, TS, CType),
+  maybe_push_notification(LUser,LServer,Conversation,CType,<<"update">>,xmpp:decode(PushPayload)).
+
 %% invite logic
 
 store_invite_information(LUser,LServer,PUser,PServer, ID) ->
@@ -2065,7 +2115,7 @@ maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer) ->
       lists:foreach(fun(Invite) ->
         delete_invite(Invite) end, Invites
       ),
-      delete_conversation(LServer,LUser,#xabber_conversation{jid = jid:make(PUser,PServer), type = Type});
+      delete_conversation(LServer,LUser,#xabber_conversation{jid = jid:make(PUser,PServer), type = ?NS_GROUPCHAT});
     _ ->
       ok
   end.
@@ -2080,20 +2130,10 @@ delete_invite(#invite_msg{us = {LUser,LServer}, id = ID} = Invite) ->
   mod_xep_rrr:delete_message(LServer, LUser, ID),
   mnesia:dirty_delete_object(Invite).
 
-make_ccc_push(LServer,LUser,Conversation, TS, Type, Thread, PushType) ->
+make_sync_push(LServer,LUser,Conversation, TS, Type) ->
   UserResources = ejabberd_sm:user_resources(LUser,LServer),
-  Conv0 = #xabber_conversation{jid = jid:from_string(Conversation), type = Type, thread = Thread},
-  Conv = case PushType of
-           {pinned, Pinned} ->
-             Conv0#xabber_conversation{pinned = Pinned};
-           {mute, <<"0">>} ->
-             Conv0#xabber_conversation{mute = <<"">>};
-           {mute, Mute} ->
-             Conv0#xabber_conversation{mute = Mute};
-           {status, Status} ->
-             Conv0#xabber_conversation{status = Status}
-         end,
-  Query = #xabber_synchronization_query{stamp = integer_to_binary(TS), sub_els = [Conv]},
+  CnElem = get_conversation_info(LServer,LUser,Conversation,Type),
+  Query = #xabber_synchronization_query{stamp = integer_to_binary(TS), sub_els = [CnElem]},
   lists:foreach(fun(Res) ->
     From = jid:make(LUser,LServer),
     To = jid:make(LUser,LServer,Res),

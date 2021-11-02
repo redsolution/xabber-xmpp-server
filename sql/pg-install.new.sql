@@ -553,9 +553,11 @@ CREATE INDEX i_our_origin_id ON foreign_message_stanza_id USING btree (foreign_s
 CREATE TABLE xabber_token (
     token text NOT NULL,
     token_uid text NOT NULL,
+    count bigint NOT NULL DEFAULT 0,
     jid text NOT NULL,
-    device text,
-    client text,
+    device text text DEFAULT ''::text,
+    client text text DEFAULT ''::text,
+    description text DEFAULT ''::text,
     expire bigint NOT NULL,
     ip text DEFAULT ''::text,
     last_usage bigint NOT NULL DEFAULT 0

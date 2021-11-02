@@ -41,6 +41,8 @@ start(_Opts) ->
 stop() -> ok.
 
 -spec format_error(error_reason()) -> {atom(), binary()}.
+format_error(malformed_request) ->
+  {'malformed-request', <<"The token and counter combination is incorrect">>};
 format_error(parser_failed) ->
   {'bad-protocol', <<"Response decoding failed">>};
 format_error(not_authorized) ->
@@ -56,8 +58,22 @@ mech_step(State, ClientIn) ->
         User, State#state.host, Token) of
         true ->
           {ok,
-            [{username, User}, {authzid, AuthzId}, {token, Token},
+            [{username, User}, {authzid, AuthzId}, {token, Token}, {count, undefined},
               {auth_module, mod_x_auth_token}]};
+        _ ->
+          {error, not_authorized, User}
+      end;
+    [AuthzId, User, Token, CountB] ->
+      Count = binary_to_integer(CountB),
+      case mod_x_auth_token:check_token(User, State#state.host, Token, Count) of
+        {ok, {Token, Count}} ->
+          mod_x_auth_token:increase_token_count(State#state.host, User, Token),
+          {ok,
+            [{username, User}, {authzid, AuthzId}, {token, Token}, {count, Count + 1},
+              {auth_module, mod_x_auth_token}]};
+        {ok, {Token, _C}} ->
+          mod_x_auth_token:xabber_revoke_token(State#state.host, Token),
+          {error, malformed_request, User};
         _ ->
           {error, not_authorized, User}
       end;
@@ -73,14 +89,8 @@ prepare(ClientIn) ->
         %% <NUL>login<NUL>pwd
         [User] -> [User, User, Token]
       end;
-    %% login@domain<NUL>login<NUL>pwd
-    [AuthzId, User, Token] ->
-      case parse_domain(AuthzId) of
-        %% login@domain<NUL>login<NUL>pwd
-        [AuthzUser, _Domain] -> [AuthzUser, User, Token];
-        %% login<NUL>login<NUL>pwd
-        [AuthzUser] -> [AuthzUser, User, Token]
-      end;
+    [<<"">>, User, Token, Count] ->
+      [User, User, Token, Count];
     _ -> error
   end.
 

@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : cyrsasl_xtoken.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose : X-Token SASL mechanism
-%%% Created : 10 Sep 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : cyrsasl_hotp.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Purpose : HOTP SASL mechanism
+%%% Created : 9 Nov 2021 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2021   Redsolution OÜ
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,57 +23,47 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(cyrsasl_xtoken).
+-module(cyrsasl_hotp).
 
--author('andrey.gagarin@redsolution.com').
+-author('ilya.kalashnikov@redsolution.com').
 
 -export([start/1, stop/0, mech_new/4, mech_step/2, parse/1, format_error/1]).
 
 -behaviour(cyrsasl).
 -include("logger.hrl").
 -record(state, {host}).
--type error_reason() :: parser_failed | not_authorized | malformed_request.
+-type error_reason() :: parser_failed | not_authorized | expired.
 -export_type([error_reason/0]).
 
 start(_Opts) ->
-  cyrsasl:register_mechanism(<<"X-TOKEN">>, ?MODULE, plain).
+  cyrsasl:register_mechanism(<<"HOTP">>, ?MODULE, plain).
 
 stop() -> ok.
 
 -spec format_error(error_reason()) -> {atom(), binary()}.
-format_error(malformed_request) ->
-  {'malformed-request', <<"The token and counter combination is incorrect">>};
+format_error(expired) ->
+  {'credentials-expired', <<"Device token expired">>};
 format_error(parser_failed) ->
   {'bad-protocol', <<"Response decoding failed">>};
 format_error(not_authorized) ->
-  {'not-authorized', <<"Invalid token">>}.
+  {'not-authorized', <<"Invalid password">>}.
+
+
 
 mech_new(Host, _GetPassword, _CheckPassword, _CheckPasswordDigest) ->
   {ok, #state{host = Host}}.
 
 mech_step(State, ClientIn) ->
   case prepare(ClientIn) of
-    [AuthzId, User, Token] ->
-      case mod_x_auth_token:check_token(
-        User, State#state.host, Token) of
-        true ->
+    [AuthzId, User, Password] ->
+      Server = State#state.host,
+      case mod_devices:check_token(User, Server, Password) of
+        {ok, {DeviceID, NewCount}} ->
+          mod_devices:set_count(User, Server, DeviceID, NewCount),
           {ok,
-            [{username, User}, {authzid, AuthzId}, {token, Token}, {count, undefined},
-              {auth_module, mod_x_auth_token}]};
-        _ ->
-          {error, not_authorized, User}
-      end;
-    [AuthzId, User, Token, CountB] ->
-      Count = binary_to_integer(CountB),
-      case mod_x_auth_token:check_token(User, State#state.host, Token, Count) of
-        {ok, {Token, Count}} ->
-          mod_x_auth_token:increase_token_count(State#state.host, User, Token),
-          {ok,
-            [{username, User}, {authzid, AuthzId}, {token, Token}, {count, Count + 1},
-              {auth_module, mod_x_auth_token}]};
-        {ok, {Token, _C}} ->
-          mod_x_auth_token:xabber_revoke_token(State#state.host, Token),
-          {error, malformed_request, User};
+            [{username, User}, {authzid, AuthzId}, {device_id, DeviceID}, {auth_module, mod_devices}]};
+        expared ->
+          {error, expired, User};
         _ ->
           {error, not_authorized, User}
       end;

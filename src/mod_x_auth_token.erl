@@ -231,7 +231,7 @@ issue_and_upgrade_to_token_session(Iq,User,Server,State,#xabbertoken_issue{
       ejabberd_router:route(newtokenmsg(ClientInfo,DeviceInfo,UID,SJIDNoRes,IPs)),
       Token;
     _ ->
-      xmpp:make_error(Iq,xmpp:err_bad_request()),
+      xmpp_stream_in:send(State,xmpp:make_error(Iq,xmpp:err_bad_request())),
       error
   end.
 
@@ -672,7 +672,7 @@ xabber_revoke_token(LServer,Token) ->
           ReasonTXT = <<"Token was revoked">>,
           JID=jid:from_string(User),
           LUser = JID#jid.luser,
-          kick_by_tocken_uid(LServer,LUser,UID,ReasonTXT);
+          kick_by_tocken_uid(LServer,LUser,UID,ReasonTXT,undefined);
         _ ->
           1
       end;
@@ -699,13 +699,23 @@ user_token_info(LServer, Token) ->
 kick_by_tocken_uid(_Server,_User, undefined,_Reason) ->
   ok;
 kick_by_tocken_uid(Server,User,TokenUID,Reason) ->
+  NotifyFun = fun(User_,Server_,Resource_,TokenUID_) ->
+    From =  jid:from_string(Server_),
+    Message = #message{type = headline, from = From, to = jid:make(User_, Server_, Resource_),
+      id = randoms:get_string(),
+      sub_els = [#xabbertoken_revoke{xtokens = [#xabbertoken_xtoken{uid = TokenUID_}]}]},
+    ejabberd_router:route(Message) end,
+  kick_by_tocken_uid(Server,User,TokenUID,Reason,NotifyFun).
+
+
+kick_by_tocken_uid(Server,User,TokenUID,Reason, NotifyFun) ->
   Resources = get_resources_by_token_uid(User,Server,TokenUID),
-  From =  jid:from_string(Server),
-  Message = #message{type = headline, from = From,
-    sub_els = [#xabbertoken_revoke{xtokens = [#xabbertoken_xtoken{uid = TokenUID}]}]},
   lists:foreach(fun(Resource) ->
-    ejabberd_router:route(Message#message{id = randoms:get_string(), to = jid:make(User, Server, Resource)}),
-    mod_admin_extra:kick_session(User,Server,Resource,Reason)
+    case NotifyFun of
+      undefined -> ok;
+      _ -> NotifyFun(User, Server, Resource,TokenUID)
+    end,
+  mod_admin_extra:kick_session(User,Server,Resource,Reason)
                 end, Resources).
 
 token_uid_clause(UIDs) ->

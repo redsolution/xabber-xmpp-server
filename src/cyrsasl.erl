@@ -99,6 +99,7 @@ init([]) ->
     cyrsasl_anonymous:start([]),
     cyrsasl_oauth:start([]),
     cyrsasl_xtoken:start([]),
+    cyrsasl_hotp:start([]),
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->

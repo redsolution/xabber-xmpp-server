@@ -559,7 +559,6 @@ update_device(LServer, SJID, ID, Props) ->
   EID = "'" ++ binary_to_list(ejabberd_sql:escape(ID)) ++ "'",
   Query = "update devices set " ++ SetString ++
     " where jid=" ++ EJID ++ " and device_id=" ++  EID  ++ ";",
-  ?INFO_MSG("AHTUNG 3 ~p",[Query]),
   case ejabberd_sql:sql_query(LServer, Query) of
     {updated,0} ->
       notfound;

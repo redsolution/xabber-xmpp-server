@@ -34,7 +34,7 @@
   update_user_subscription/4,
          users_from_chat/2,
          check_user/3,
-         delete_user_chat/3,
+         delete_user_from_chat/3,
          create_groupchat/12,
          check_jid/2
         ]).
@@ -59,36 +59,19 @@ check_user(User,Server,Chat) ->
 
 
 
-delete_user_chat(User,Server,Chat) ->
-  From = jid:from_string(Chat),
-  IsAnonim = mod_groupchat_inspector:is_anonim(Server,Chat),
-  {_UserId,_Nickname} = mod_groupchat_inspector:get_user_id_and_nick(Server,User,Chat),
+delete_user_from_chat(User,Server,Chat) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("delete from groupchat_users where 
          username=%(User)s and chatgroup=%(Chat)s")) of
-    {updated,1} when IsAnonim == yes->
-      Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
-      Unavailable = mod_groupchat_presence:form_presence_unavailable(),
-      mod_groupchat_presence:send_presence(Unsubscribe,[{User}],From),
-      mod_groupchat_presence:send_presence(Unavailable,[{User}],From);
-    {updated,1} when IsAnonim == no ->
-      Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
-      Unavailable = mod_groupchat_presence:form_presence_unavailable(),
-      mod_groupchat_presence:send_presence(Unsubscribe,[{User}],From),
-      mod_groupchat_presence:send_presence(Unavailable,[{User}],From);
-    _ ->
-      nothing
-  end,
-
-  case users_from_chat(Chat,Server) of
-    {selected,[]} ->
+    {updated, 0} -> notfound;
+    {updated, _N} ->
       ejabberd_sql:sql_query(
         Server,
-        ?SQL("delete from archive where peer=%(Chat)s")
-      );
-    _ ->
-      ok
+        ?SQL("delete from archive where
+         not exists(select from groupchat_users where chatgroup=%(Chat)s) and peer=%(Chat)s")),
+      ok;
+    _ -> error
   end.
 
 

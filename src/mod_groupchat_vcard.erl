@@ -47,8 +47,7 @@
   handle_iq/1
 ]).
 -export([publish_avatar/3, make_http_request/6]).
--export([subscribe_to_avatar/2, groupchat_user_kick_hook/6, groupchat_block_hook/2,
-  groupchat_presence_unsubscribed_hook/2]).
+-export([maybe_update_avatar/3]).
 %% gen_mod behavior
 -export([start/2, stop/1, mod_options/1, depends/2, mod_opt_type/1]).
 -include("ejabberd.hrl").
@@ -57,18 +56,10 @@
 -include("xmpp.hrl").
 
 
-start(Host, _) ->
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, subscribe_to_avatar, 80),
-  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, groupchat_presence_unsubscribed_hook, 80),
-  ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, groupchat_user_kick_hook, 80),
-  ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, groupchat_block_hook, 80),
+start(_Host, _) ->
   ok.
 
-stop(Host) ->
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, subscribe_to_avatar, 80),
-  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, groupchat_presence_unsubscribed_hook, 80),
-  ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, groupchat_user_kick_hook, 80),
-  ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, groupchat_block_hook, 80),
+stop(_Host) ->
   ok.
 
 mod_opt_type(get_url) ->
@@ -451,65 +442,21 @@ get_pubsub_data(ID) ->
       }
     ]}.
 
-subscribe_to_avatar(_Acc,{Server,User,Chat,_Lang}) ->
-  case mod_groupchat_inspector:is_anonim(Server,Chat) of
-    yes ->
-      ?INFO_MSG("SUBSCRIBE AVATAR ~p ~p",[User,Chat]),
-      To = jid:remove_resource(User),
-      BareChatJID = jid:from_string(Chat),
-      From = jid:replace_resource(BareChatJID,<<"Group">>),
-      Subscribe  = #ps_subscribe{node = <<"urn:xmpp:avatar:metadata">>, jid = BareChatJID},
-      Iq = #iq{type = set, id = randoms:get_string(), sub_els = [#pubsub{subscribe = Subscribe}]},
-      ejabberd_router:route(From,To, Iq);
+-spec maybe_update_avatar(jid(), jid(), binary()) -> any().
+maybe_update_avatar(User, Chat, Server) ->
+  SUser = jid:to_string(jid:remove_resource(User)),
+  SChat = jid:to_string(jid:remove_resource(Chat)),
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(parse_avatar)s from groupchat_users
+    where username = %(SUser)s and chatgroup  = %(SChat)s and
+    chatgroup not in (select jid from groupchats where anonymous = 'incognito')")) of
+    {selected, [{<<"yes">>}]} ->
+      From = jid:replace_resource(Chat, <<"Group">>),
+      ejabberd_router:route(From,jid:remove_resource(User),mod_groupchat_vcard:get_pubsub_meta());
     _ ->
-      pass
-  end,
-  ok.
-
-%%  groupchat_user_kick hook
-groupchat_user_kick_hook(Acc, _LServer, Chat, _Admin, _Kick, _Lang) ->
-  lists:foreach(fun(User) ->
-    From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
-    To = jid:from_string(User),
-    unsubscribe_from_avatar(From, To)
-                end, Acc),
-  Acc.
-
-%%  groupchat_block_hook
-groupchat_block_hook(#xabbergroup_block{} = Elem, #iq{to = Chat}) ->
-  JIDs = Elem#xabbergroup_block.jid ,
-  IDs = Elem#xabbergroup_block.id,
-  Users = if
-            JIDs =/= [] ->
-              [U || {_, U} <- JIDs];
-            IDs =/= [] ->
-              Server = Chat#jid.lserver,
-              ChatBin = jid:to_string(jid:remove_resource(Chat)),
-              lists:map(fun({_, ID}) ->
-                mod_groupchat_users:get_user_by_id(Server,ChatBin,ID)
-                        end, IDs);
-            true -> []
-          end,
-  lists:foreach(fun(User) ->
-    From = jid:replace_resource(Chat,<<"Group">>),
-    To = jid:from_string(User),
-    unsubscribe_from_avatar(From, To)
-                end, Users),
-  Elem.
-
-%%  groupchat_presence_unsubscribed_hook
-groupchat_presence_unsubscribed_hook(Acc,{_Server,User,Chat,_UserCard,_Lang}) ->
-  From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
-  To = jid:from_string(User),
-  unsubscribe_from_avatar(From, To),
-  Acc.
-
-unsubscribe_from_avatar(Group, User) ->
-  ?INFO_MSG("UNSUBSCRIBE AVATAR ~p ~p",[User, Group]),
-  UnSubscribe  = #ps_unsubscribe{node = <<"urn:xmpp:avatar:metadata">>, jid = jid:remove_resource(Group)},
-  Iq = #iq{type = set, id = randoms:get_string(), sub_els = [#pubsub{unsubscribe = UnSubscribe}]},
-  ejabberd_router:route(Group, jid:remove_resource(User), Iq),
-  ok.
+      ok
+  end.
 
 handle(#iq{from = From, to = To, sub_els = Els}) ->
   ?INFO_MSG("VCARD ~p ",[From]),
@@ -540,13 +487,19 @@ handle_pubsub(ChatJID,UserJID,#avatar_meta{info = AvatarINFO}) ->
       check_old_meta(LServer, OldMeta);
     [#avatar_info{bytes = Size, id = ID, type = Type, url = Url}] ->
       OldMeta = get_image_metadata(LServer, User, Chat),
-      check_old_meta(LServer, OldMeta),
-      update_id_in_chats(LServer,User,ID,Type,Size,<<>>),
-      case Url of
-        <<>> ->
-          ejabberd_router:route(ChatJID,UserJID,get_pubsub_data(ID));
+      case OldMeta of
+        [{ID,_Size,_ImageType,_Url}] ->
+          ok;
         _ ->
-          download_user_avatar(LServer, User, ID, Type, Size, Url)
+%%          check_old_meta(LServer, OldMeta),
+          update_id_in_chats(LServer,User,ID,Type,Size,<<>>),
+          check_old_meta(LServer, OldMeta),
+          case Url of
+            <<>> ->
+              ejabberd_router:route(ChatJID,UserJID,get_pubsub_data(ID));
+            _ ->
+              download_user_avatar(LServer, User, ID, Type, Size, Url)
+          end
       end;
     _ ->
       ok
@@ -584,7 +537,7 @@ update_vcard(Server,User,D,_Chat) ->
   end.
 
 download_user_avatar(Server, User, ID, Type, Size, Url) ->
-  ?INFO_MSG("Download user avatar: ~p ~p ~n",[User, Url]),
+  ?DEBUG("Download user avatar: ~p ~p ~n",[User, Url]),
   spawn(?MODULE,make_http_request,[Server, User, ID, Type, Size, Url]).
 
 make_http_request(Server, User, ID, Type, Size, Url) ->
@@ -609,7 +562,6 @@ http_response_process(Server, User, ID, Type, Size, Data) ->
       end;
     {http, {_RequestId, stream_end, _Headers}} ->
       store_user_avatar(Server, User, ID, Type, Size, Data),
-      ?INFO_MSG("Download stream_end: ~p~n",[User]),
       exit(normal);
     E ->
       ?ERROR_MSG("User avatar download error: ~p~n",[E]),
@@ -1015,9 +967,6 @@ update_data_user_put(Server, UserID, Data, Hash, Chat) ->
     parse_avatar = 'no',
     avatar_url = %(Url)s
   where id = %(UserID)s and chatgroup = %(Chat)s ")),
-%%  todo: need refactoring
-  User = mod_groupchat_users:get_user_by_id(Server,Chat,UserID),
-  unsubscribe_from_avatar(jid:from_string(Chat), jid:from_string(User)),
   check_old_meta(Server, OldMeta).
 
 set_update_status(Server,Jid,Status) ->

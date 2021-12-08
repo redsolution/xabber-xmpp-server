@@ -247,7 +247,12 @@ extract_auth(#request{auth = HTTPAuth}, Host) ->
             true->
               #{usr => {User, Server, <<"">>}, caller_server => Server};
             _ ->
-              {error, invalid_auth}
+              case mod_devices:check_token(User, Server, Pass) of
+                {ok, {DeviceID, NewCount}} ->
+                  mod_devices:set_count(User, Server, DeviceID, NewCount),
+                  #{usr => {User, Server, <<"">>}, caller_server => Server};
+                _-> {error, invalid_auth}
+              end
           end
       catch _:{bad_jid, _} ->
         {error, invalid_auth}

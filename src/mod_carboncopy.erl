@@ -197,7 +197,7 @@ send_copies(JID, To, Packet, Direction)->
     PrioRes = ejabberd_sm:get_user_present_resources(U, S),
     {_, AvailRs0} = lists:unzip(PrioRes),
     AvailRs = case Direction of
-                send -> lists:usort(AvailRs0 ++ ejabberd_sm:get_user_resources(U, S));
+                sent -> lists:usort(AvailRs0 ++ ejabberd_sm:get_user_resources(U, S));
                 _ -> AvailRs0
               end,
     {MaxPrio, _MaxRes} = case catch lists:max(PrioRes) of

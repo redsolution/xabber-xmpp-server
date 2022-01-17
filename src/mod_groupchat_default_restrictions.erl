@@ -146,7 +146,7 @@ is_valid_value(_Other,_ValidValues) ->
   false.
 
 valid_values() ->
-  [<<>>,<<"0">>,<<"5 minutes">>,<<"10 minutes">>,<<"15 minutes">>,<<"30 minutes">>,<<"1 hour">>,<<"1 week">>,<<"1 month">>].
+  [<<>>,<<"300">>,<<"600">>,<<"900">>,<<"1800">>,<<"3600">>,<<"604800">>,<<"2592000">>].
 
 validate([]) ->
   {stop,bad_request};

@@ -28,7 +28,7 @@
 %% API
 -export([random_nick/3,get_avatar_file/1, init/1, handle_call/3, handle_cast/2]).
 -export([start/2, stop/1, mod_options/1, depends/2, reload/3, mod_opt_type/1]).
--export([merge_avatar/3]).
+-export([merge_avatar/3, random_adjective/0]).
 %%-export([delete_previous_block/3]).
 -behavior(gen_mod).
 -behavior(gen_server).
@@ -665,45 +665,12 @@ animals()->
     "Zonkey",
     "Zorse"].
 
-random_nick(Server, User, Chat) ->
-  Nick = mod_groupchat_users:get_nick_in_chat(Server,User,Chat),
-  NickLength = string:length(Nick),
-  case NickLength of
-    0 ->
-      NewNick = generate_nick_and_avatar(Server, User, Chat),
-      check_unique_and_update(Server,User,Chat,NewNick);
-    _ ->
-      Nick
-  end.
+random_nick(LServer, _User, _Chat) ->
+  generate_nick_and_avatar(LServer).
 
-check_unique_and_update(Server, User, Chat, Nick) ->
-  case mod_groupchat_users:is_duplicated_nick(Server,Chat,Nick,User) of
-    false ->
-      Nick;
-    _ ->
-      Adjectives = new_adjectives(),
-      LengthAdjectives = length(Adjectives),
-      RandomAdjectivePosition = rand:uniform(LengthAdjectives),
-      RandomAdjective = list_to_binary(lists:nth(RandomAdjectivePosition,Adjectives)),
-      UpdatedNick = <<RandomAdjective/binary," ", Nick/binary>>,
-      UpdatedNick
-  end.
-
-random_avatar(Server, User, Chat, AvatarUrl, File) ->
-  {AvatarID, Type, AvatarSize} = get_image_info(File),
-  AvatarType = <<"image/",Type/binary>>,
-  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
-  Name = <<AvatarID/binary, ".", Type/binary>>,
-  FileName = <<Path/binary, "/" , Name/binary>>,
-  file:write_file(binary_to_list(FileName), File),
-  mod_groupchat_vcard:update_avatar(Server, User, Chat, AvatarID, AvatarType, AvatarSize, AvatarUrl).
-
-get_image_info(File) ->
-  Hash = mod_groupchat_vcard:get_hash(File),
-  Type = atom_to_binary(eimp:get_type(File), latin1),
-  Size = byte_size(File),
-  {Hash,Type,Size}.
-
+random_adjective() ->
+  A = new_adjectives(),
+  list_to_binary(lists:nth(rand:uniform(length(A)),A)).
 
 old_random_nick() ->
   Animals = animals(),
@@ -719,13 +686,10 @@ old_random_nick() ->
     RandomNum/binary>>,
   Nick.
 
-generate_nick_and_avatar(Server, User, Chat) ->
+generate_nick_and_avatar(Server) ->
   case get_avatar_file(Server) of
     {ok,FileName,Bin} ->
-      Url = mod_groupchat_vcard:get_url(Server),
-      AvatarUrl = <<Url/binary, "/", FileName/binary>>,
-      random_avatar(Server, User, Chat, AvatarUrl, Bin),
-      hd(binary:split(FileName,<<".">>));
+      {hd(binary:split(FileName,<<".">>)),{FileName, Bin}};
     _ ->
       old_random_nick()
   end.
@@ -804,6 +768,16 @@ generate_image(Host) ->
 
 %% Merge avatars
 
-merge_avatar(Avatar1, Avatar2, FullPath) ->
-  CMD = binary_to_list(<<"python3 mergeavatars.py ", "'", Avatar1/binary, "' '", Avatar2/binary, "' ", "'",FullPath/binary,"'">>),
-  string:chomp(list_to_binary(os:cmd(CMD))).
+merge_avatar(Avatar1, Avatar2, Host) ->
+  Path1 = filename:absname(gen_mod:get_module_opt(Host,?MODULE,pre_generated_images)),
+  Path = filename:join(Path1, <<"p2p">>),
+  CMD = binary_to_list(<<"python3 mergeavatars.py ", "'", Avatar1/binary, "' '", Avatar2/binary, "' ", "'",Path/binary,"'">>),
+  FileName = string:chomp(list_to_binary(os:cmd(CMD))),
+  File = filename:join(Path,FileName),
+  case file:read_file(File) of
+    {ok, Data} ->
+      {ok, FileName, Data};
+    _ ->
+      ?ERROR_MSG("Problem to generate image",[]),
+      error
+  end.

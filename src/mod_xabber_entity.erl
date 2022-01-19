@@ -42,38 +42,6 @@ is_exist(LUser, LServer) ->
     user -> false;
     _-> true
   end.
-%%  is_exist(LUser, LServer , ejabberd_sql:use_new_schema()).
-
-%%is_exist(LUser, LServer, true) ->
-%%  case ejabberd_sql:sql_query(
-%%    LServer,
-%%    [<<"select localpart from
-%%    (
-%%    (select localpart,server_host from groupchats)
-%%    UNION
-%%    (select localpart,server_host from channels)
-%%    ) as t
-%%    where localpart = '">>,LUser,<<"' and server_host ='">>,ejabberd_sql:escape(LServer),<<"'">>]) of
-%%    {selected,_TableRow,[]} ->
-%%      false;
-%%    _ ->
-%%      true
-%%  end;
-%%is_exist(LUser, LServer, _Schema) ->
-%%case ejabberd_sql:sql_query(
-%%  LServer,
-%%  [<<"select localpart from
-%%    (
-%%    (select localpart from groupchats)
-%%    UNION
-%%    (select localpart from channels)
-%%    ) as t
-%%    where localpart ='">>,ejabberd_sql:escape(LUser),<<"'">>]) of
-%%  {selected,_TableRow,[]} ->
-%%    false;
-%%  _ ->
-%%    true
-%%end.
 
 is_group(LUser, LServer) ->
   check_entity_type(group, ejabberd_sm:get_user_info(LUser,LServer)).

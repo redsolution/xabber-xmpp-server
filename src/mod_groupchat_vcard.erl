@@ -43,18 +43,19 @@
   update_parse_avatar_option/4,
   get_photo_meta/3, get_photo_data/5, get_avatar_type/4, get_all_image_metadata/2, check_old_meta/2,
   make_chat_notification_message/3, get_pubsub_meta/0, get_pubsub_data/0, handle_pubsub/4, handle_pubsub/3, get_image_id/3,
-  get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, get_url/1, create_p2p_avatar/6,
+  get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, create_p2p_avatar/6,
   handle_iq/1
 ]).
--export([publish_avatar/3, make_http_request/6]).
+-export([publish_avatar/3, make_http_request/6, store_user_avatar_file/2]).
 -export([maybe_update_avatar/3]).
 %% gen_mod behavior
--export([start/2, stop/1, mod_options/1, depends/2, mod_opt_type/1]).
+-export([start/2, stop/1, mod_options/1, depends/2]).
 -include("ejabberd.hrl").
 -include("ejabberd_sql_pt.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
 
+-define(AVATARS_PATH, <<"groups/mavatars">>).
 
 start(_Host, _) ->
   ok.
@@ -62,19 +63,10 @@ start(_Host, _) ->
 stop(_Host) ->
   ok.
 
-mod_opt_type(get_url) ->
-  fun(<<"http://", _/binary>> = URL) -> URL;
-    (<<"https://", _/binary>> = URL) -> URL
-  end.
-
-mod_options(_Host) ->
-  [
-    %% Required option
-    get_url
-  ].
+mod_options(_Host) -> [] .
 
 depends(_, _) ->
-  [{mod_http_fileserver, hard}].
+  [{mod_http_upload, hard}].
 
 handle_iq(#iq{type = get} = IQ) ->
   handle_request(IQ);
@@ -341,13 +333,13 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                        ejabberd_hooks:run_fold(groupchat_user_change_some_avatar, Server, User, [Server,Chat,SomeUser]),
                        xmpp:make_iq_result(Iq);
                      _ ->
-                       xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,<<"en">>))
+                       xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>, Lang))
                    end;
                  _ ->
-                   xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,<<"en">>))
+                   xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>, Lang))
                end;
              _ ->
-               xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,<<"en">>))
+               xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>, Lang))
            end,
   case Result of
     #iq{type = result} when Node == <<"urn:xmpp:avatar:metadata">> ->
@@ -459,7 +451,6 @@ maybe_update_avatar(User, Chat, Server) ->
   end.
 
 handle(#iq{from = From, to = To, sub_els = Els}) ->
-  ?INFO_MSG("VCARD ~p ",[From]),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
@@ -572,14 +563,34 @@ http_response_process(Server, User, ID, Type, Size, Data) ->
 
 store_user_avatar(Server, User, ID, AvaType, AvaSize, Data) ->
   <<"image/",Type/binary>> = AvaType,
-  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
-  UrlDir = get_url(Server),
-  Name = <<ID/binary, ".", Type/binary >>,
-  Url = <<UrlDir/binary, "/", Name/binary>>,
-  File = <<Path/binary, "/" , Name/binary>>,
-  file:write_file(binary_to_list(File),Data),
-  update_avatar_url_chats(Server,User,ID,AvaType,AvaSize,Url),
-  set_update_status(Server,User,<<"false">>).
+  FileName = <<ID/binary, ".", Type/binary >>,
+  DocRoot = get_docroot(Server),
+  FullPath = filename:join([DocRoot, ?AVATARS_PATH, FileName]),
+  case do_store_file(FullPath, Data, undefined, undefined) of
+    ok ->
+      Url = get_root_url(Server),
+      AvatarUrl = <<Url/binary, $/,?AVATARS_PATH/binary,$/,FileName/binary>>,
+      update_avatar_url_chats(Server,User,ID,AvaType,AvaSize,AvatarUrl),
+      set_update_status(Server,User,<<"false">>);
+    Err ->
+      Err
+  end.
+
+store_user_avatar_file(Server, Data) ->
+  ID = get_hash(Data),
+  Type = atom_to_binary(eimp:get_type(Data), latin1),
+  Size = byte_size(Data),
+  FileName = <<ID/binary, ".", Type/binary >>,
+  DocRoot = get_docroot(Server),
+  FullPath = filename:join([DocRoot, ?AVATARS_PATH, FileName]),
+  case do_store_file(FullPath, Data, undefined, undefined) of
+    ok ->
+      Url = get_root_url(Server),
+      AvatarUrl = <<Url/binary, $/,?AVATARS_PATH/binary,$/,FileName/binary>>,
+      #avatar_info{bytes = Size, id = ID, type = <<"image/",Type/binary>>, url = AvatarUrl};
+    Err ->
+      Err
+  end.
 
 send_notifications_about_nick_change(Server,User) ->
   ChatAndIds = select_chat_for_update_nick(Server,User),
@@ -683,11 +694,7 @@ get_photo_meta(Server,User,Chat)->
     error ->
       #avatar_meta{};
     _ ->
-      [{Hash,AvatarSize,AvatarType,_AvatarOldStyle}] = Meta,
-      <<"image/",Type/binary>> = AvatarType,
-      Url = get_url(Server),
-      Name = <<Hash/binary, ".", Type/binary >>,
-      AvatarUrl = <<Url/binary, "/", Name/binary>>,
+      [{Hash,AvatarSize,AvatarType,AvatarUrl}] = Meta,
       Info = #avatar_info{bytes = AvatarSize, type = AvatarType, id = Hash, url = AvatarUrl},
       #avatar_meta{info = [Info]}
   end,
@@ -705,9 +712,9 @@ get_photo_data(Server,Hash,UserNode,_User,Chat) ->
       error;
     _ ->
       <<"image/", Type/binary>> = TypeRaw,
-      Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+      Path = get_docroot(Server),
       Name = <<Hash/binary, ".", Type/binary >>,
-      File = <<Path/binary, "/" , Name/binary>>,
+      File = filename:join([Path, ?AVATARS_PATH, Name]),
       get_avatar_data(File,Hash,UserNode)
   end.
 
@@ -737,8 +744,8 @@ get_vcard_avatar_data(Server,Username,Hash,UserNode) ->
     {selected, [<<>>]} ->
       not_filed;
     {selected,[{Name}]} ->
-      Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
-      File = <<Path/binary, "/" , Name/binary>>,
+      Path = get_docroot(Server),
+      File = filename:join([Path, ?AVATARS_PATH, Name]),
       get_avatar_data(File,Hash,UserNode);
     _ ->
       error
@@ -870,13 +877,13 @@ get_vcard_avatar(Server,Chat,User) ->
     ?SQL("select @(image)s,@(hash)s,@(image_type)s from groupchat_users_vcard
   where jid=%(User)s")) of
     {selected,[{Image,Hash,ImageType}]} when Image =/= null andalso Hash =/= null andalso ImageType =/= null andalso IsAnon == no ->
-      Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
-      File = <<Path/binary, "/" , Image/binary>>,
+      Path = get_docroot(Server),
+      File = filename:join(Path, Image),
       case file:read_file(File) of
         {ok,Binary} ->
           Size = byte_size(Binary),
-          UrlDir = get_url(Server),
-          Url = <<UrlDir/binary, "/", File/binary>>,
+          UrlDir = get_root_url(Server),
+          Url = <<UrlDir/binary, $/, ?AVATARS_PATH/binary, $/, File/binary>>,
           [{Hash,Size,ImageType,Url}];
         _ ->
           not_filed
@@ -951,21 +958,21 @@ update_metadata_user_put_by_id(Server, UserID, AvatarID, AvatarType, AvatarSize,
   where id = %(UserID)s and chatgroup = %(Chat)s ")).
 
 update_data_user_put(Server, UserID, Data, Hash, Chat) ->
-  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
-  UrlDir = get_url(Server),
+  Path = get_docroot(Server),
+  RootUrl = get_root_url(Server),
   TypeRaw = eimp:get_type(Data),
   Type = atom_to_binary(TypeRaw, latin1),
   Name = <<Hash/binary, ".", Type/binary >>,
-  Url = <<UrlDir/binary, "/", Name/binary>>,
-  File = <<Path/binary, "/" , Name/binary>>,
-  file:write_file(binary_to_list(File), Data),
+  _Url = <<RootUrl/binary, $/, ?AVATARS_PATH/binary, $/, Name/binary>>,
+  FilePath = filename:join([Path, ?AVATARS_PATH, Name]),
+  do_store_file(FilePath, Data, undefined, undefined),
   OldMeta = get_image_metadata_by_id(Server, UserID, Chat),
   ejabberd_sql:sql_query(
     Server,
     ?SQL("update groupchat_users set
     avatar_id = %(Hash)s,
     parse_avatar = 'no',
-    avatar_url = %(Url)s
+    avatar_url = %(_Url)s
   where id = %(UserID)s and chatgroup = %(Chat)s ")),
   check_old_meta(Server, OldMeta).
 
@@ -1119,10 +1126,10 @@ check_and_delete(Server, Hash, AvatarType) ->
   end.
 
 delete_file(Server, Hash, AvatarType) ->
-  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+  Path = get_docroot(Server),
   <<"image/",Type/binary>> = AvatarType,
   Name = <<Hash/binary, ".", Type/binary >>,
-  File = <<Path/binary, "/" , Name/binary>>,
+  File = filename:join([Path, ?AVATARS_PATH, Name]),
   file:delete(File).
 
 get_vcard(LUser,Server) ->
@@ -1199,15 +1206,14 @@ handle_vcard_photo(_Server, undefined) ->
   ok;
 handle_vcard_photo(Server,Photo) ->
   #vcard_photo{binval = Binval} = Photo,
-  Path = gen_mod:get_module_opt(Server,mod_http_fileserver,docroot),
+  Path = get_docroot(Server),
   Name = get_name_from_hash_and_type(Photo),
-  Len = string:length(Name),
   case Name of
-    _ when Len > 0 ->
-      File = <<Path/binary, "/" , Name/binary>>,
-      file:write_file(binary_to_list(File), Binval);
+    <<>> ->
+      ok;
     _ ->
-      ok
+      File = filename:join([Path, ?AVATARS_PATH, Name]),
+      file:write_file(binary_to_list(File), Binval)
   end.
 
 get_name_from_hash_and_type(undefined) ->
@@ -1242,9 +1248,19 @@ get_hash_and_type(Photo) ->
              end,
   {Hash,TypeRaw}.
 
-get_url(Host) ->
-  Url = gen_mod:get_module_opt(Host, ?MODULE, get_url),
-  mod_http_upload:expand_host(Url, Host).
+get_docroot(Server) ->
+  DocRoot1 = gen_mod:get_module_opt(Server, mod_http_upload, docroot),
+  DocRoot2 = mod_http_upload:expand_home(str:strip(DocRoot1, right, $/)),
+  DocRoot3 = mod_http_upload:expand_host(DocRoot2, Server),
+  filename:absname(DocRoot3).
+
+get_root_url(Server) ->
+  UrlOpt =  case gen_mod:get_module_opt(Server,mod_http_upload,get_url) of
+              undefined ->
+                gen_mod:get_module_opt(Server,mod_http_upload,put_url);
+              Val -> Val
+            end,
+  misc:expand_keyword(<<"@HOST@">>, str:strip(UrlOpt, right, $/), Server).
 
 create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2)
   when is_binary(AvatarID1) == true andalso is_binary(AvatarID2) == true
@@ -1257,16 +1273,14 @@ create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2)
     _ when L2 > 0 ->
       <<"image/", Type1/binary>> = AvatarType1,
       <<"image/", Type2/binary>> = AvatarType2,
-      Path = gen_mod:get_module_opt(LServer,mod_http_fileserver,docroot),
+      Path = get_docroot(LServer),
       Name1 = <<AvatarID1/binary, ".", Type1/binary >>,
       Name2 = <<AvatarID2/binary, ".", Type2/binary >>,
-      File1 = <<Path/binary, "/" , Name1/binary>>,
-      File2 = <<Path/binary, "/" , Name2/binary>>,
-      Filename = nick_generator:merge_avatar(File1,File2,Path),
-      File = <<Path/binary, "/" , Filename/binary>>,
-      case file:read_file(File) of
-        {ok, F} ->
-          publish_avatar(Chat, F, Filename);
+      File1 = filename:join([Path, ?AVATARS_PATH, Name1]),
+      File2 = filename:join([Path, ?AVATARS_PATH, Name2]),
+      case nick_generator:merge_avatar(File1, File2, LServer) of
+        {ok, Filename, Data} ->
+          publish_avatar(Chat, Data, Filename);
         _ ->
           ok
       end;
@@ -1308,21 +1322,12 @@ publish_avatar(Chat, Data, FileName) when is_binary(Chat) ->
 publish_avatar(#jid{lserver = Server} = Chat, Data, FileName)->
   JIDinURL = gen_mod:get_module_opt(Server,mod_http_upload,jid_in_url),
   UserStr = make_user_string(Chat, JIDinURL),
-  DocRoot1 = gen_mod:get_module_opt(Server, mod_http_upload, docroot),
-  DocRoot2 = mod_http_upload:expand_home(str:strip(DocRoot1, right, $/)),
-  DocRoot3 = mod_http_upload:expand_host(DocRoot2, Server),
-  DocRoot = filename:absname(DocRoot3),
-  AvatarDir = <<DocRoot/binary,$/,UserStr/binary,$/,"avatar">>,
-  FullPath = filename:join(AvatarDir,FileName),
+  DocRoot = get_docroot(Server),
+  FullPath = filename:join([DocRoot, UserStr, "avatar", FileName]),
   case do_store_file(FullPath, Data, undefined, undefined) of
     ok ->
-      UrlOpt =  case gen_mod:get_module_opt(Server,mod_http_upload,get_url) of
-                  undefined ->
-                    gen_mod:get_module_opt(Server,mod_http_upload,put_url);
-                  Val -> Val
-                end,
-      Url = misc:expand_keyword(<<"@HOST@">>, str:strip(UrlOpt, right, $/), Server),
-      AvatarUrl = <<Url/binary, "/",UserStr/binary,$/,"avatar",$/,FileName/binary>>,
+      Url = get_root_url(Server),
+      AvatarUrl = <<Url/binary, $/,UserStr/binary,$/,"avatar",$/,FileName/binary>>,
       Size = byte_size(Data),
       HashID = get_hash(Data),
       Type = lists:last(binary:split(FileName,<<".">>)),

@@ -668,23 +668,32 @@ insert_nickname(LServer,User,Chat,NickRaw) ->
     ?SQL("update groupchat_users set nickname = %(Nick)s, user_updated_at = (now() at time zone 'utc') where chatgroup=%(Chat)s and username=%(User)s")).
 
 insert_incognito_nickname(LServer,User,Chat) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(nickname)s from groupchat_users where chatgroup=%(Chat)s and username=%(User)s")) of
-    {selected,[{Nickname}]} ->
-      TrimedNickLength = str:len(string:trim(Nickname)),
-      case TrimedNickLength of
-        0 ->
-          RandomNick = nick_generator:random_nick(LServer,User,Chat),
-          update_incognito_nickname(LServer,User,Chat,RandomNick),
-          RandomNick;
-        _ ->
-          Nickname
-      end;
-    _ ->
-      RandomNick = nick_generator:random_nick(LServer,User,Chat),
-      update_incognito_nickname(LServer,User,Chat,RandomNick),
-      RandomNick
+  Nickname = string:trim(mod_groupchat_users:get_nick_in_chat(LServer,User,Chat)),
+  if
+    Nickname == <<>> orelse Nickname == [] ->
+      RandomNick =  case nick_generator:random_nick(LServer,User,Chat) of
+                      {Nick,{_FileName, Bin}} ->
+                        %% todo: make a function for this in vcard module
+                        case mod_groupchat_vcard:store_user_avatar_file(LServer, Bin) of
+                          #avatar_info{bytes = Size, id = ID, type = Type, url = Url} ->
+                            mod_groupchat_vcard:update_avatar(LServer, User, Chat, ID, Type, Size, Url);
+                          _ -> ok
+                        end,
+                        Nick;
+                      Nick ->
+                        Nick
+                    end,
+      NewNick = case is_duplicated_nick(LServer, Chat, RandomNick, User) of
+                  true ->
+                    Ad = nick_generator:random_adjective(),
+                    <<Ad/binary," ", RandomNick/binary>>;
+                  _ ->
+                    RandomNick
+                end,
+      update_incognito_nickname(LServer,User,Chat,NewNick),
+      NewNick;
+    true ->
+      Nickname
   end.
 
 update_incognito_nickname(Server,User,Chat,Nick) ->
@@ -703,13 +712,9 @@ add_random_badge(LServer,User,Chat) ->
   insert_badge(LServer,User,Chat,integer_to_binary(Badge)).
 
 is_duplicated_nick(LServer,Chat,Nick,User) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(nickname)s from groupchat_users where chatgroup=%(Chat)s and nickname=%(Nick)s and username!=%(User)s")) of
-    {selected,[]} ->
-      false;
-    _ ->
-      true
+  case get_nick_in_chat(LServer,User,Chat) of
+    Nick -> true;
+    _ -> false
   end.
 
 get_user_by_id(Server,Chat,Id) ->

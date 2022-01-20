@@ -55,6 +55,7 @@
 -include("logger.hrl").
 -include("xmpp.hrl").
 
+-define(RESOURCE, <<"Group">>).
 -define(AVATARS_PATH, <<"groups/mavatars">>).
 
 start(_Host, _) ->
@@ -163,7 +164,7 @@ send_back(Data,Iq) ->
   Result.
 
 handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to = To,sub_els = Decoded} = Iq) ->
-  FromGroupJID = jid:replace_resource(To,<<"Group">>),
+  FromGroupJID = jid:replace_resource(To,?RESOURCE),
   NewIq = #iq{from = FromGroupJID,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = Decoded},
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
@@ -225,13 +226,12 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                    ]},
                    Event = #ps_event{items = ItemsD},
                    M = #message{type = headline,
-                     from = jid:replace_resource(To,<<"Group">>),
+                     from = jid:replace_resource(To,?RESOURCE),
                      to = jid:remove_resource(From),
                      id = randoms:get_string(),
                      sub_els = [Event],
                      meta = #{}
                    },
-%%                   ejabberd_router:route(xmpp:make_iq_result(Iq)),
                    ejabberd_hooks:run_fold(groupchat_user_change_own_avatar, Server, User, [Server,Chat]),
                    notificate_all(To,M),
                    xmpp:make_iq_result(Iq)
@@ -243,7 +243,6 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                case IdItem of
                  <<>> ->
                    update_metadata_user_put(Server, User, IdItem, <<>>, 0, Chat),
-%%                   NewItems = [#ps_item{sub_els = [#avatar_meta{}]}],
                    Event = #ps_event{items = #ps_items{items = Items}},
                    M = #message{type = headline,
                      from = To,
@@ -284,7 +283,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                    update_data_user_put(Server, SomeUserId, Data, ItemId,Chat),
                    xmpp:make_iq_result(Iq);
                  _ ->
-                   xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,<<"en">>))
+                   xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,Lang))
                end;
              <<"urn:xmpp:avatar:metadata#",SomeUserId/binary>> when CanChangeAva == true ->
                SomeUser = mod_groupchat_inspector:get_user_by_id(Server,Chat,SomeUserId),
@@ -306,7 +305,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                        ejabberd_hooks:run_fold(groupchat_user_change_some_avatar, Server, User, [Server,Chat,SomeUser]),
                        xmpp:make_iq_result(Iq);
                      _ ->
-                       xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,<<"en">>))
+                       xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,Lang))
                    end;
                  _  when SomeUser =/= none ->
                    case mod_groupchat_restrictions:validate_users(Server,Chat,User,SomeUser) of
@@ -322,7 +321,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                        ]},
                        Event = #ps_event{items = ItemsD},
                        M = #message{type = headline,
-                         from = jid:replace_resource(To,<<"Group">>),
+                         from = jid:replace_resource(To,?RESOURCE),
                          to = jid:remove_resource(From),
                          id = randoms:get_string(),
                          sub_els = [Event],
@@ -347,12 +346,11 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
     _ ->
       ok
   end,
-  ejabberd_router:route(To,From,Result),
-  Result.
+  Result#iq{from = To, to = From}.
 
 notificate_all(ChatJID,Message) ->
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  FromChat = jid:replace_resource(ChatJID,<<"Group">>),
+  FromChat = jid:replace_resource(ChatJID,?RESOURCE),
   {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(ChatJID#jid.lserver,Chat),
   mod_groupchat_messages:send_message(Message,AllUsers,FromChat).
 
@@ -444,7 +442,7 @@ maybe_update_avatar(User, Chat, Server) ->
     where username = %(SUser)s and chatgroup  = %(SChat)s and
     chatgroup not in (select jid from groupchats where anonymous = 'incognito')")) of
     {selected, [{<<"yes">>}]} ->
-      From = jid:replace_resource(Chat, <<"Group">>),
+      From = jid:replace_resource(Chat, ?RESOURCE),
       ejabberd_router:route(From,jid:remove_resource(User),mod_groupchat_vcard:get_pubsub_meta());
     _ ->
       ok
@@ -607,7 +605,7 @@ send_notifications(ChatAndIds,User,Server) ->
     mod_groupchat_service_message:send_to_all(Chat,M) end, ChatAndIds).
 
 notification_message(User, Server, Chat) ->
-  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
+  ChatJID = jid:replace_resource(jid:from_string(Chat),?RESOURCE),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
@@ -619,7 +617,7 @@ notification_message(User, Server, Chat) ->
   #message{from = ChatJID, to = ChatJID, type = headline, id = ID, body = [], sub_els = NewEls, meta = #{}}.
 
 notification_message_about_nick(User, Server, Chat) ->
-  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
+  ChatJID = jid:replace_resource(jid:from_string(Chat),?RESOURCE),
   ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
   Version = mod_groupchat_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
@@ -1338,7 +1336,7 @@ publish_avatar(#jid{lserver = Server} = Chat, Data, FileName)->
       MetaItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarMeta)]},
       PublishMetaData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_METADATA, items = [MetaItems]}},
 
-      IQMeta = #iq{from = jid:replace_resource(Chat,<<"Group">>),
+      IQMeta = #iq{from = jid:replace_resource(Chat,?RESOURCE),
         to = jid:replace_resource(Chat,<<>>),
         id = randoms:get_string(),
         type = set,

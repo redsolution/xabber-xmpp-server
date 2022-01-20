@@ -94,26 +94,20 @@ handle_decoded_request(Iq) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   UserId = mod_groupchat_inspector:get_user_id(Server,UserJid,Chat),
   NewIq = #iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = Decoded},
-  case Node of
+  Result = case Node of
     <<"urn:xmpp:avatar:data">> ->
-      Result = mod_pubsub:iq_sm(NewIq),
-      ejabberd_router:route(To,From,Result),
-      Result;
+      mod_pubsub:iq_sm(NewIq);
     <<"urn:xmpp:avatar:metadata">> ->
-      Result = mod_pubsub:iq_sm(NewIq),
-      ejabberd_router:route(To,From,Result),
-      Result;
+      mod_pubsub:iq_sm(NewIq);
     <<"http://jabber.org/protocol/nick">> ->
-      Result = mod_pubsub:iq_sm(NewIq),
-      ejabberd_router:route(To,From,Result),
-      Result;
+      mod_pubsub:iq_sm(NewIq);
     <<"urn:xmpp:avatar:data#">> ->
       UserDataNode = <<"urn:xmpp:avatar:data#",UserId/binary>>,
       #ps_items{node = Node, items = Item} = Items,
       Item_ps = lists:keyfind(ps_item,1,Item),
       #ps_item{id = Hash} = Item_ps,
       Data = get_photo_data(Server,Hash,UserDataNode,UserJid,Chat),
-      send_back(Data,Iq);
+      check_data(Data,Iq);
     <<"urn:xmpp:avatar:metadata#">> ->
       UserDataNode = <<"urn:xmpp:avatar:metadata#",UserId/binary>>,
       #ps_items{node = Node, items = Item} = Items,
@@ -121,47 +115,35 @@ handle_decoded_request(Iq) ->
       NewPubsub = #pubsub{items = NewItems},
       NewDecoded = [NewPubsub],
       NewIqUser = #iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = NewDecoded},
-      Result = mod_pubsub:iq_sm(NewIqUser),
-      ejabberd_router:route(To,From,Result),
-      Result;
+      mod_pubsub:iq_sm(NewIqUser);
     _ ->
       node_analyse(Iq,Server,Node,Items,UserJid,Chat)
-  end.
+  end,
+  Result#iq{from = To, to = From}.
 
 node_analyse(Iq,Server,Node,Items,User,Chat) ->
   N = binary:split(Node,<<"#">>),
   case N of
     [<<"urn:xmpp:avatar:metadata">>,_UserID] ->
-      Result = xmpp:make_error(Iq,xmpp:err_item_not_found()),
-      ejabberd_router:route(Result);
+      xmpp:make_error(Iq,xmpp:err_item_not_found());
     [<<"urn:xmpp:avatar:data">>,_UserID] ->
       #ps_items{node = Node, items = Item} = Items,
       Item_ps = lists:keyfind(ps_item,1,Item),
       #ps_item{id = Hash} = Item_ps,
       Data = get_photo_data(Server,Hash,Node,User,Chat),
-      send_back(Data,Iq);
+      check_data(Data,Iq);
     _ ->
-      Result = xmpp:make_error(Iq,xmpp:err_item_not_found()),
-      ejabberd_router:route(Result),
-      Result
+      xmpp:make_error(Iq,xmpp:err_item_not_found())
   end.
 
-send_back(not_exist,Iq) ->
-  Result = xmpp:make_error(Iq,xmpp:err_item_not_found()),
-  ejabberd_router:route(Result),
-  Result;
-send_back(not_filed,Iq) ->
-  Result = xmpp:make_error(Iq,xmpp:err_item_not_found()),
-  ejabberd_router:route(Result),
-  Result;
-send_back(error,Iq) ->
-  Result = xmpp:make_error(Iq,xmpp:err_internal_server_error()),
-  ejabberd_router:route(Result),
-  Result;
-send_back(Data,Iq) ->
-  Result = xmpp:make_iq_result(Iq,Data),
-  ejabberd_router:route(Result),
-  Result.
+check_data(not_exist,Iq) ->
+  xmpp:make_error(Iq,xmpp:err_item_not_found());
+check_data(not_filed,Iq) ->
+  xmpp:make_error(Iq,xmpp:err_item_not_found());
+check_data(error,Iq) ->
+  xmpp:make_error(Iq,xmpp:err_internal_server_error());
+check_data(Data,Iq) ->
+  xmpp:make_iq_result(Iq,Data).
 
 handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to = To,sub_els = Decoded} = Iq) ->
   FromGroupJID = jid:replace_resource(To,?RESOURCE),

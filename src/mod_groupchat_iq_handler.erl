@@ -243,10 +243,12 @@ make_action(#iq{type = set, to = To, from = From,
   end;
 make_action(#iq{type = set, sub_els = [#xmlel{name = <<"pubsub">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}]}]} = Iq) ->
-  mod_groupchat_vcard:handle_pubsub(Iq);
+  R = mod_groupchat_vcard:handle_pubsub(xmpp:decode_els(Iq)),
+  ejabberd_router:route(R);
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"pubsub">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}]}]} = Iq) ->
-  mod_groupchat_vcard:handle_request(Iq);
+  R = mod_groupchat_vcard:handle_request(Iq),
+  ejabberd_router:route(R);
 make_action(#iq{type = set, sub_els = [#xmlel{name = <<"invite">>,
   attrs = [{<<"xmlns">>,<<"https://xabber.com/protocol/groups#invite">>}]}]} = Iq) ->
   #iq{from = From, to = To, sub_els = Sub} = Iq,
@@ -331,10 +333,11 @@ make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
   FeatureList = [<<"urn:xmpp:avatar:metadata">>,<<"urn:xmpp:avatar:data">>,
     <<"jabber:iq:last">>,<<"urn:xmpp:time">>,<<"jabber:iq:version">>,<<"urn:xmpp:avatar:metadata+notify">>,
     <<"https://xabber.com/protocol/groups">>,<<"https://xabber.com/protocol/groups#voice-permissions">>,
-  <<"http://jabber.org/protocol/disco#info">>,<<"http://jabber.org/protocol/disco#items">>],
+  <<"http://jabber.org/protocol/disco#info">>,<<"http://jabber.org/protocol/disco#items">>,
+    <<"http://jabber.org/protocol/caps">>],
   Features = lists:map(fun(N) ->
     #xmlel{name = <<"feature">>,
-      attrs = [{<<"var">>,N}]} end, FeatureList
+      attrs = [{<<"var">>,N}]} end, lists:sort(FeatureList)
   ),
   X = x_element_chat(Desc,Anonymous,Model),
   Els = [Identity]++Features++[X],

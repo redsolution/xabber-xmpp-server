@@ -437,9 +437,8 @@ init_stanza_id(Pkt, LServer) ->
     TimeStamp = misc:now_to_usec(erlang:now()),
     ID = TimeStamp,
 	  To = xmpp:get_from(Pkt),
-		Chat = jid:to_string(jid:remove_resource(To)),
-	case mod_groups_sql:search_for_chat(LServer,Chat) of
-		{selected,[]} ->
+	case mod_xabber_entity:is_group(To#jid.luser, To#jid.lserver) of
+		false ->
 			Pkt1 = strip_my_stanza_id(Pkt, LServer),
 			Pkt2 = xmpp:put_meta(Pkt1, unique_time, TimeStamp),
 			xmpp:put_meta(Pkt2, stanza_id, ID);
@@ -449,13 +448,12 @@ init_stanza_id(Pkt, LServer) ->
 	end.
 
 -spec init_stanza_id_incoming(stanza(), binary()) -> stanza().
-init_stanza_id_incoming(Pkt, LServer) ->
+init_stanza_id_incoming(Pkt, _LServer) ->
 	TimeStamp = misc:now_to_usec(erlang:now()),
 	ID = TimeStamp,
 	To = xmpp:get_from(Pkt),
-	Chat = jid:to_string(jid:remove_resource(To)),
-	case mod_groups_sql:search_for_chat(LServer,Chat) of
-		{selected,[]} ->
+	case mod_xabber_entity:is_group(To#jid.luser, To#jid.lserver) of
+		false ->
 			Receiver = jid:remove_resource(xmpp:get_to(Pkt)),
 			Pkt1 = strip_my_stanza_id_new_incoming(Pkt, Receiver),
 			Pkt2 = xmpp:put_meta(Pkt1, unique_time, TimeStamp),
@@ -1193,10 +1191,8 @@ maybe_update_from_to(#message{sub_els = Els} = Pkt, JidRequestor, JidArchive,
 		to = undefined,
 		sub_els = Items ++ Els};
 maybe_update_from_to(Pkt, JidRequestor, _JidArchive, _Peer, chat, _Nick) ->
-	Chat = jid:to_string(jid:remove_resource(JidRequestor)),
-	LServer =  JidRequestor#jid.lserver,
-	case mod_groups_sql:search_for_chat(LServer,Chat) of
-		{selected,[]} ->
+	case mod_xabber_entity:is_group(JidRequestor#jid.luser, JidRequestor#jid.lserver) of
+		false ->
 			Pkt;
 		_ ->
 			Pkt#message{from = JidRequestor, to = JidRequestor}
@@ -1207,10 +1203,8 @@ maybe_update_from_to(Pkt, JidRequestor, _JidArchive, _Peer, chat, _Nick) ->
 send(Msgs, Count, IsComplete,
      #iq{from = From, to = To,
 	 sub_els = [#mam_query{id = QID, xmlns = NS}]} = IQ) ->
-	#jid{lserver = LServer, luser = LUser} = From,
-	Chat = jid:to_string(jid:make(LUser,LServer,<<>>)),
-	case mod_groups_sql:search_for_chat(LServer,Chat) of
-		{selected,[]} ->
+	case mod_xabber_entity:is_group(From#jid.luser, From#jid.lserver) of
+		false ->
 			Hint = #hint{type = 'no-store'},
 			Els = lists:map(
 				fun({ID, _IDInt, El}) ->

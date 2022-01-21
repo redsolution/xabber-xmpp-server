@@ -76,7 +76,7 @@ answer_presence(#presence{to = To, from = From, type = available, sub_els = SubE
   LServer = To#jid.lserver,
   Key = lists:keyfind(vcard_xupdate,1,SubEls),
   NewHash = search_for_hash(Key),
-  OldHash = mod_groupchat_sql:get_hash(LServer,User),
+  OldHash = mod_groups_sql:get_hash(LServer,User),
   case NewHash of
     OldHash ->
       ok;
@@ -85,8 +85,8 @@ answer_presence(#presence{to = To, from = From, type = available, sub_els = SubE
     undefined ->
       ok;
     _ ->
-      mod_groupchat_sql:update_hash(LServer,User,NewHash),
-      mod_groupchat_sql:set_update_status(LServer,User,<<"true">>)
+      mod_groups_sql:update_hash(LServer,User,NewHash),
+      mod_groups_sql:set_update_status(LServer,User,<<"true">>)
   end,
   Presence = form_presence_with_info(LServer, Channel, From, available),
   ejabberd_router:route(Presence);
@@ -102,7 +102,7 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
       SubscribedPresence = form_presence(FromChannel,From,subscribed),
       ejabberd_router:route(SubscribedPresence),
       ejabberd_router:route(SubscribePresence),
-      ejabberd_router:route(FromChannel,From,mod_groupchat_vcard:get_pubsub_meta());
+      ejabberd_router:route(FromChannel,From, mod_groups_vcard:get_pubsub_meta());
     not_ok ->
       Presence = form_presence(FromChannel,From,unsubscribed),
       ejabberd_router:route(Presence);
@@ -119,7 +119,7 @@ answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) -
     ok ->
       SubscribedPresence = form_presence_with_info(LServer, Channel, From, subscribed),
       ejabberd_router:route(SubscribedPresence),
-      ejabberd_router:route(FromChannel,From,mod_groupchat_vcard:get_pubsub_meta());
+      ejabberd_router:route(FromChannel,From, mod_groups_vcard:get_pubsub_meta());
     not_ok ->
       ejabberd_router:route(ejabberd_router:route(form_presence(FromChannel, From, unsubscribed)));
     _ ->
@@ -129,7 +129,7 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
-  UserCard = mod_groupchat_users:form_user_card(User,Chat),
+  UserCard = mod_groups_users:form_user_card(User,Chat),
   ChannelRes = jid:replace_resource(ChatJID,<<"Channel">>),
   Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
   case Result of
@@ -145,15 +145,15 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
-  Exist = mod_groupchat_inspector_sql:check_user(User,Server,Chat),
+  Exist = mod_groups_inspector_sql:check_user(User,Server,Chat),
   case Exist of
     exist ->
-      UserCard = mod_groupchat_users:form_user_card(User,Chat),
+      UserCard = mod_groups_users:form_user_card(User,Chat),
       ChatJIDRes = jid:replace_resource(ChatJID,<<"Channel">>),
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
       case Result of
         ok ->
-          mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
+          mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
         alone ->

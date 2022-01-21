@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_inspector.erl
+%%% File    : mod_groups_inspector.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Old module - will be removed soon
 %%% Created : 17 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_inspector).
+-module(mod_groups_inspector).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -include("ejabberd.hrl").
@@ -99,7 +99,7 @@ mod_options(_Opts) -> [].
 
 update_chat(Server,To,Chat,User,Xa) ->
   {selected,[{_Name,_Anonymous,_Search,_Model,_Desc,ChatMessage,_ContactList,_DomainList_,Status}]} =
-    mod_groupchat_chats:get_information_of_chat(Chat,Server),
+    mod_groups_chats:get_information_of_chat(Chat,Server),
   case Status of
     <<"inactive">> ->
       {error, xmpp:err_not_allowed(<<"You need to active group">>,<<"en">>)};
@@ -111,14 +111,14 @@ update_chat(Server,To,Chat,User,Xa) ->
                    undefined
                end,
       NewMessage = set_message(ChatMessage,Pinned),
-      mod_groupchat_chats:update_pinned(Server,Chat,NewMessage),
-      UpdatePresence = mod_groupchat_presence:form_presence(Chat),
-      IsPinnedChanged = {pinned_changed, mod_groupchat_chats:is_value_changed(ChatMessage,NewMessage)},
+      mod_groups_chats:update_pinned(Server,Chat,NewMessage),
+      UpdatePresence = mod_groups_presence:form_presence(Chat),
+      IsPinnedChanged = {pinned_changed, mod_groups_chats:is_value_changed(ChatMessage,NewMessage)},
       Properties = [IsPinnedChanged],
       ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
-      {selected, AllUsers} = mod_groupchat_sql:user_list_of_channel(Server,Chat),
+      {selected, AllUsers} = mod_groups_sql:user_list_of_channel(Server,Chat),
       FromChat = jid:replace_resource(To,<<"Group">>),
-      mod_groupchat_presence:send_presence(UpdatePresence,AllUsers,FromChat)
+      mod_groups_presence:send_presence(UpdatePresence,AllUsers,FromChat)
   end.
 
 %%%%
@@ -179,7 +179,7 @@ item_chat(ChatJidQ,NameQ,AnonymousQ,ModelQ,DescQ,ContactListQ,DomainListQ,Count)
 revoke(Server,User,Chat) ->
   remove_invite(Server,User,Chat).
 revoke(Server, User, Chat, Admin) ->
-  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,Admin,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"change-group">>,Admin,Chat) of
     true ->
       remove_invite(Server,User,Chat);
     _ ->
@@ -249,7 +249,7 @@ sql_get_invited(Server,Chat, User) ->
 
 invite_right(_Acc, {Admin,Chat,_Server,
   #xabbergroupchat_invite{jid = _Jid, reason = _Reason, send = _Send}}) ->
-  case mod_groupchat_restrictions:is_restricted(<<"send-invitations">>,Admin,Chat) of
+  case mod_groups_restrictions:is_restricted(<<"send-invitations">>,Admin,Chat) of
     true ->
       {stop,forbidden};
     _ ->
@@ -258,7 +258,7 @@ invite_right(_Acc, {Admin,Chat,_Server,
 
 user_exist(_Acc, {_Admin,Chat,Server,
   #xabbergroupchat_invite{invite_jid =  User, reason = _Reason, send = _Send}}) ->
-  Status = mod_groupchat_users:check_user_if_exist(Server,User,Chat),
+  Status = mod_groups_users:check_user_if_exist(Server,User,Chat),
   case Status of
     <<"both">> ->
       {stop,exist};
@@ -298,7 +298,7 @@ message_invite(User,Chat,Admin,Reason) ->
   U = #xabbergroup_invite_user{jid = Admin},
   ChatJID = jid:from_string(Chat),
   LServer = ChatJID#jid.lserver,
-  Anonymous = case mod_groupchat_chats:is_anonim(LServer,Chat) of
+  Anonymous = case mod_groups_chats:is_anonim(LServer,Chat) of
                 yes ->
                   <<"incognito">>;
                 _ ->
@@ -316,7 +316,7 @@ user_rights(Server,Id,Chat,UserRequester,Lang) ->
     none ->
       not_ok;
     _ ->
-      Request = mod_groupchat_restrictions:get_user_rules(Server,Id,Chat),
+      Request = mod_groups_restrictions:get_user_rules(Server,Id,Chat),
       case Request of
         {selected,_Tables,[]} ->
           not_ok;
@@ -341,10 +341,10 @@ create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,ModelR
   ContactList = set_contacts(<<>>,Contacts),
   DomainList = set_domains(<<>>,Domains),
   UserExist = ejabberd_auth:user_exists(Localpart,Server),
-  case mod_groupchat_inspector_sql:check_jid(Localpart,Server) of
+  case mod_groups_inspector_sql:check_jid(Localpart,Server) of
     {selected,[]} when UserExist == false ->
       CreatorJid = jid:to_string(jid:make(Creator,Host,<<>>)),
-      mod_groupchat_inspector_sql:create_groupchat(Server,Localpart,CreatorJid,Name,ChatJid,
+      mod_groups_inspector_sql:create_groupchat(Server,Localpart,CreatorJid,Name,ChatJid,
         Anonymous,Search,Model,Desc,Message,ContactList,DomainList),
       add_user(Server,CreatorJid,<<"owner">>,ChatJid,<<"wait">>,<<>>),
       mod_admin_extra:set_nickname(Localpart,Host,Name),
@@ -353,7 +353,7 @@ create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,ModelR
       Permissions = get_permissions(Server),
       lists:foreach(fun(N)->
         {Rule} = N,
-        mod_groupchat_restrictions:insert_rule(Server,ChatJid,CreatorJid,Rule,Expires,IssuedBy) end,
+        mod_groups_restrictions:insert_rule(Server,ChatJid,CreatorJid,Rule,Expires,IssuedBy) end,
         Permissions
       ),
       {ok,created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)};
@@ -430,10 +430,10 @@ remove_invite_result(Result, User, Chat) ->
   case Result of
     {updated,1} ->
       From = jid:from_string(Chat),
-      Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
-      Unavailable = mod_groupchat_presence:form_presence_unavailable(),
-      mod_groupchat_presence:send_presence(Unsubscribe,[{User}],From),
-      mod_groupchat_presence:send_presence(Unavailable,[{User}],From),
+      Unsubscribe = mod_groups_presence:form_unsubscribe_presence(),
+      Unavailable = mod_groups_presence:form_presence_unavailable(),
+      mod_groups_presence:send_presence(Unsubscribe,[{User}],From),
+      mod_groups_presence:send_presence(Unavailable,[{User}],From),
       ok;
     _ ->
       {error, not_found}
@@ -452,12 +452,12 @@ case ejabberd_sql:sql_query(
     UserCard = #xabbergroupchat_user_card{jid = UserJID},
     X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,sub_els = [UserCard], type = <<"block">>},
     Msg = #message{type = chat, from = FromChat, to = UserJID, id = randoms:get_string(), body = [#text{lang = <<>>,data = Txt}], sub_els = [X], meta = #{}},
-    Unsubscribe = mod_groupchat_presence:form_unsubscribe_presence(),
-    Unavailable = mod_groupchat_presence:form_presence_unavailable(),
+    Unsubscribe = mod_groups_presence:form_unsubscribe_presence(),
+    Unavailable = mod_groups_presence:form_presence_unavailable(),
     ejabberd_router:route(Msg),
-    mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
-    mod_groupchat_presence:send_presence(Unsubscribe,[{User}],FromChat),
-    mod_groupchat_presence:send_presence(Unavailable,[{User}],FromChat);
+    mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
+    mod_groups_presence:send_presence(Unsubscribe,[{User}],FromChat),
+    mod_groups_presence:send_presence(Unavailable,[{User}],FromChat);
   _ ->
     nothing
 end.
@@ -466,11 +466,11 @@ add_user(Server,Member,Role,Groupchat,Subscription) ->
   add_user(Server,Member,Role,Groupchat,Subscription,<<>>).
 
 add_user(Server,Member,Role,Groupchat,Subscription,InvitedBy) ->
-  case mod_groupchat_sql:search_for_chat(Server,Member) of
+  case mod_groups_sql:search_for_chat(Server,Member) of
     {selected,[]} ->
-      case mod_groupchat_users:check_user_if_exist(Server,Member,Groupchat) of
+      case mod_groups_users:check_user_if_exist(Server,Member,Groupchat) of
         not_exist ->
-          mod_groupchat_inspector_sql:add_user(Server,Member,Role,Groupchat,Subscription,InvitedBy);
+          mod_groups_inspector_sql:add_user(Server,Member,Role,Groupchat,Subscription,InvitedBy);
         _ ->
           ok
       end;
@@ -489,9 +489,9 @@ chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,M,ContactList,DomainLi
   J = jid:from_string(ChatJid),
   Server = J#jid.lserver,
   Localpart = J#jid.luser,
-  {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(Server,ChatJid),
+  {selected,_Ct,MembersC} = mod_groups_sql:count_users(Server,ChatJid),
   Members = list_to_binary(MembersC),
-  ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',ChatJid),
+  ChatSessions = mod_groups_present_mnesia:select_sessions('_',ChatJid),
   AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
   UniqueOnline = lists:usort(AllUsersSession),
   Present = integer_to_binary(length(UniqueOnline)),
@@ -523,9 +523,9 @@ chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,M,ContactList,DomainLi
 detailed_chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,M,ContactList,DomainList,ParentChat) ->
   J = jid:from_string(ChatJid),
   Server = J#jid.lserver,
-  {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(Server,ChatJid),
+  {selected,_Ct,MembersC} = mod_groups_sql:count_users(Server,ChatJid),
   Members = list_to_binary(MembersC),
-  ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',ChatJid),
+  ChatSessions = mod_groups_present_mnesia:select_sessions('_',ChatJid),
   AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
   UniqueOnline = lists:usort(AllUsersSession),
   Present = integer_to_binary(length(UniqueOnline)),
@@ -656,9 +656,9 @@ parse_items(Items,Acc,UserRequester,Lang) ->
   JidEl = {xmlel,<<"jid">>,[],[{xmlcdata, Username}]},
   UserIdEl = {xmlel,<<"id">>,[],[{xmlcdata, UserId}]},
   RoleEl = {xmlel,<<"role">>,[],[{xmlcdata, Role}]},
-  AvatarEl = xmpp:encode(mod_groupchat_vcard:get_photo_meta(Server,Username,Chat)),
+  AvatarEl = xmpp:encode(mod_groups_vcard:get_photo_meta(Server,Username,Chat)),
   BadgeEl = badge(Badge),
-  S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
+  S = mod_groups_present_mnesia:select_sessions(Username,Chat),
   L = length(S),
   LastSeenEl = case L of
                  0 ->
@@ -706,7 +706,7 @@ parse_items_for_message(Items) ->
   NickNameEl = {xmlel,<<"nickname">>,[],[{xmlcdata, Nick}]},
   JidEl = {xmlel,<<"jid">>,[],[{xmlcdata, Username}]},
   UserIdEl = {xmlel,<<"id">>,[],[{xmlcdata, UserId}]},
-  AvatarEl = mod_groupchat_vcard:get_photo_meta(Server,Username,Chat),
+  AvatarEl = mod_groups_vcard:get_photo_meta(Server,Username,Chat),
   BadgeEl = badge(Badge),
   Role = calculate_role(UserRights),
   RoleEl = {xmlel,<<"role">>,[],[{xmlcdata, Role}]},

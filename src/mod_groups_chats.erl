@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_chats.erl
+%%% File    : mod_groups_chats.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose :  Work with group chats
 %%% Created : 19 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_chats).
+-module(mod_groups_chats).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -include("ejabberd.hrl").
@@ -32,20 +32,19 @@
 -include("ejabberd_sql_pt.hrl").
 -compile([{parse_transform, ejabberd_sql_pt}]).
 %% API
--export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1]).
--export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all/1, get_all_info/3, get_count_chats/1, get_depended_chats/2, get_detailed_information_of_chat/2]).
+-export([start/2, stop/1, depends/2, mod_options/1]).
+
+-export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all/1, get_all_info/3,
+  get_count_chats/1, get_depended_chats/2, get_detailed_information_of_chat/2]).
+
 -export([check_creator/4, check_user/4, check_chat/4,
   create_peer_to_peer/4, send_invite/4, check_if_users_invited/4,
   check_if_peer_to_peer_exist/4, groupchat_exist/2]).
--export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5, change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5,
-  get_chat_active/2,
-  get_information_of_chat/2,
-  count_users/2,
-  get_all_information_chat/2,
-  status_options/2,
-  get_name_desc/2,
-  get_status_label_name/3, is_value_changed/2, define_human_status/3
-  ]).
+
+-export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5,
+  change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5,
+  get_chat_active/2, get_information_of_chat/2, count_users/2, get_all_information_chat/2,
+  status_options/2, get_name_desc/2, get_status_label_name/3, is_value_changed/2, define_human_status/3]).
 
 -export([parse_status_query/2, filter_fixed_fields/1, define_human_status_and_show/3, update_pinned/3]).
 % Status hooks
@@ -99,10 +98,7 @@ stop(Host) ->
 
 depends(_Host, _Opts) ->  [].
 
-mod_opt_type(annihilation) ->
-  fun (B) when is_boolean(B) -> B end.
-
-mod_options(_Host) -> [{annihilation, true}].
+mod_options(_Host) -> [].
 
 % delete chat hook
 delete_chat_hook(_Acc, _LServer, _User, Chat) ->
@@ -175,14 +171,14 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
         "domains=%(Domains)s",
         "owner=%(Creator)s"])) of
     {updated,_N} ->
-      xabber_groups_sm:activate(Server,LocalPart),
-      mod_groupchat_inspector:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
+      groups_sm:activate(Server,LocalPart),
+      mod_groups_inspector:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
       Expires = <<"0">>,
       IssuedBy = <<"server">>,
       Permissions = get_permissions(Server),
       lists:foreach(fun(N)->
         {Rule} = N,
-        mod_groupchat_restrictions:insert_rule(Server,Chat,Creator,Rule,Expires,IssuedBy) end,
+        mod_groups_restrictions:insert_rule(Server,Chat,Creator,Rule,Expires,IssuedBy) end,
         Permissions
       ),
     {stop,{ok,create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,ContactList,DomainList),Chat,Creator}};
@@ -191,7 +187,7 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
   end.
 
 check_user_rights(_Acc,User,Chat,Server) ->
-  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
     true ->
       {stop, {ok,form_chat_information(Chat,Server,form)}};
     _ ->
@@ -201,7 +197,7 @@ check_user_rights(_Acc,User,Chat,Server) ->
 
 %% groupchat_info_change hook
 check_user_permission(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
     true ->
       ok;
     _ ->
@@ -271,7 +267,7 @@ is_value_changed(OldValue,NewValue) ->
 check_creator(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
   ?DEBUG("start fold ~p ~p ~p", [LServer,Creator, ChatJID]),
   Chat = jid:to_string(ChatJID),
-  case mod_groupchat_users:check_user(LServer, Creator, Chat) of
+  case mod_groups_users:check_user(LServer, Creator, Chat) of
     not_exist ->
       ?DEBUG("User not exist ~p",[Creator]),
       {stop,not_exist};
@@ -295,7 +291,7 @@ check_chat(_Acc, LServer, _Creator,  #xabbergroup_peer{jid = ChatJID}) ->
 
 check_user(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID, id = UserID}) ->
   Chat = jid:to_string(ChatJID),
-  case mod_groupchat_users:get_user_by_id_and_allow_to_invite(LServer,Chat,UserID) of
+  case mod_groups_users:get_user_by_id_and_allow_to_invite(LServer,Chat,UserID) of
     none ->
       ?DEBUG("User to invite not exist ~p",[UserID]),
       {stop,not_exist};
@@ -318,8 +314,8 @@ check_if_users_invited(Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID})
   case Acc of
     {exist,ExistedChat,User} ->
       Chat = jid:to_string(ChatJID),
-      CreatorSubscription = mod_groupchat_users:check_user_if_exist(LServer,Creator,ExistedChat),
-      UserSubscription = mod_groupchat_users:check_user_if_exist(LServer,User,ExistedChat),
+      CreatorSubscription = mod_groups_users:check_user_if_exist(LServer,Creator,ExistedChat),
+      UserSubscription = mod_groups_users:check_user_if_exist(LServer,User,ExistedChat),
       case UserSubscription of
         <<"both">> ->
           ok;
@@ -352,24 +348,24 @@ create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
   Localpart = list_to_binary(string:to_lower(binary_to_list(create_localpart()))),
   OldChat = jid:to_string(jid:remove_resource(ChatJID)),
   UserExist = ejabberd_auth:user_exists(Localpart,LServer),
-  case mod_groupchat_inspector_sql:check_jid(Localpart,LServer) of
+  case mod_groups_inspector_sql:check_jid(Localpart,LServer) of
     {selected,[]} when UserExist == false ->
       Chat = jid:to_string(jid:make(Localpart,LServer)),
-      User1Nick = mod_groupchat_users:get_nick_in_chat(LServer,Creator,OldChat),
-      User2Nick = mod_groupchat_users:get_nick_in_chat(LServer,User,OldChat),
+      User1Nick = mod_groups_users:get_nick_in_chat(LServer,Creator,OldChat),
+      User2Nick = mod_groups_users:get_nick_in_chat(LServer,User,OldChat),
       ChatName = <<User1Nick/binary," and ",User2Nick/binary, " chat">>,
       Desc = <<"Private chat">>,
       create_groupchat(LServer,Localpart,Creator,ChatName,Chat,
         <<"incognito">>,<<"none">>,<<"member-only">>,Desc,<<"0">>,<<"">>,<<"">>,OldChat),
-      xabber_groups_sm:activate(LServer,Localpart),
+      groups_sm:activate(LServer,Localpart),
       {AvatarID1,AvatarType1} = add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
       {AvatarID2,AvatarType2} = add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
       Expires = <<"0">>,
       IssuedBy = <<"server">>,
       Rule = <<"send-invitations">>,
-      mod_groupchat_restrictions:insert_rule(LServer,Chat,User,Rule,Expires,IssuedBy),
-      mod_groupchat_restrictions:insert_rule(LServer,Chat,Creator,Rule,Expires,IssuedBy),
-      mod_groupchat_vcard:create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2),
+      mod_groups_restrictions:insert_rule(LServer,Chat,User,Rule,Expires,IssuedBy),
+      mod_groups_restrictions:insert_rule(LServer,Chat,Creator,Rule,Expires,IssuedBy),
+      mod_groups_vcard:create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2),
       {User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, ChatJID};
     _ ->
       {stop, not_ok}
@@ -406,8 +402,8 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
   {stop,{ok,Created}}.
 
 send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
-  User1Nick = mod_groupchat_users:get_nick_in_chat(LServer,Creator,OldChat),
-  User2Nick = mod_groupchat_users:get_nick_in_chat(LServer,User,OldChat),
+  User1Nick = mod_groups_users:get_nick_in_chat(LServer,Creator,OldChat),
+  User2Nick = mod_groups_users:get_nick_in_chat(LServer,User,OldChat),
   ChatName = <<User1Nick/binary," and ",User2Nick/binary, " chat">>,
   Desc = <<"Private chat">>,
   OldChatJID = jid:from_string(OldChat),
@@ -440,7 +436,7 @@ send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
   ejabberd_router:route(Message).
 
 delete_chat(_Acc,{LServer,User,Chat,_UserCard,_Lang})->
-  DeleteIfEmpty = gen_mod:get_module_opt(LServer, ?MODULE, annihilation),
+  DeleteIfEmpty = gen_mod:get_module_opt(LServer, mod_groups, remove_empty),
   if
     DeleteIfEmpty ->
       case count_users(LServer,Chat) of
@@ -450,9 +446,9 @@ delete_chat(_Acc,{LServer,User,Chat,_UserCard,_Lang})->
     true ->
       pass
   end,
-  case mod_groupchat_restrictions:get_owners(LServer,Chat) of
+  case mod_groups_restrictions:get_owners(LServer,Chat) of
     [] ->
-      mod_groupchat_users:unsubscribe_all_participants([],LServer,User,Chat),
+      mod_groups_users:unsubscribe_all_participants([],LServer,User,Chat),
       delete(Chat);
     _ -> pass
   end,
@@ -618,18 +614,18 @@ check_if_not_duplicated(List) ->
 
 add_user_to_peer_to_peer_chat(LServer, User, NewChat,OldChat) ->
   {AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge} =
-    mod_groupchat_users:get_user_info_for_peer_to_peer(LServer,User,OldChat),
-  mod_groupchat_users:add_user_to_peer_to_peer_chat(LServer,User,NewChat,AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge),
+    mod_groups_users:get_user_info_for_peer_to_peer(LServer,User,OldChat),
+  mod_groups_users:add_user_to_peer_to_peer_chat(LServer,User,NewChat,AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge),
   {AvatarID,AvatarType}.
 
 delete(Chat) ->
   ChatJID = jid:from_string(Chat),
   {Localpart,LServer,_} = jid:tolower(ChatJID),
-  AllUserMeta = mod_groupchat_vcard:get_all_image_metadata(LServer,Chat),
-  mod_groupchat_vcard:check_old_meta(LServer,AllUserMeta),
+  AllUserMeta = mod_groups_vcard:get_all_image_metadata(LServer,Chat),
+  mod_groups_vcard:check_old_meta(LServer,AllUserMeta),
   delete_groupchat(LServer, Chat),
   delete_depended_chats(Chat, LServer),
-  xabber_groups_sm:deactivate(LServer,Localpart),
+  groups_sm:deactivate(LServer,Localpart),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL("delete from archive where username=%(Localpart)s and %(LServer)H")).
@@ -705,7 +701,7 @@ get_all_information_chat(Chat,Server) ->
 
 created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList) ->
   #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_GROUPCHAT_CREATE}],
-    children = mod_groupchat_inspector:chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)
+    children = mod_groups_inspector:chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)
   }.
 
 form_chat_information(Chat,LServer,Type) ->
@@ -993,7 +989,7 @@ get_status_label_name(LServer,Chat,Status) ->
   end.
 
 check_user_rights_to_change_status(_Acc,User,Chat,Server) ->
-  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
     true ->
       {stop, {ok, status_form(Chat,Server,'text-single')}};
     _ ->
@@ -1060,7 +1056,7 @@ parse_status_query(FS, Lang) ->
 
 %% Change status hook
 check_user_rights_to_change_status(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
     true ->
       ok;
     _ ->

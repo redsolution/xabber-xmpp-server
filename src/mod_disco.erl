@@ -141,7 +141,7 @@ process_local_iq_items(#iq{type = set, lang = Lang} = IQ) ->
     xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
 process_local_iq_items(#iq{type = get,
 	sub_els = [#disco_items{node = ?NS_GROUPCHAT}]} = IQ) ->
-	mod_groupchat_discovery:process_disco_items(IQ);
+	mod_groups_discovery:process_disco_items(IQ);
 process_local_iq_items(#iq{type = get, lang = Lang,
 			   from = From, to = To,
 			   sub_els = [#disco_items{node = Node}]} = IQ) ->

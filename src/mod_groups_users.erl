@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_users.erl
+%%% File    : mod_groups_users.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Manage users in groupchats
 %%% Created : 17 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_users).
+-module(mod_groups_users).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -include("ejabberd.hrl").
@@ -162,7 +162,7 @@ decline_hook_delete_invite(_Acc, User, Chat, Server) ->
 
 % kick hook
 check_if_user_can(_Acc,_LServer,Chat,Admin,_Kick,_Lang) ->
-  case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
     true ->
       ok;
     _ ->
@@ -198,7 +198,7 @@ kick_user(Acc, LServer, Chat, _Admin, _Kick, _Lang) ->
   Acc.
 
 validate_kick_request(LServer,Chat, User1, User2) when User1 =/= User2 ->
-  mod_groupchat_restrictions:validate_users(LServer,Chat,User1,User2);
+  mod_groups_restrictions:validate_users(LServer,Chat,User1,User2);
 validate_kick_request(_LServer,_Chat, _User1, _User2) ->
   not_ok.
 
@@ -208,8 +208,8 @@ kick_user_from_chat(LServer,Chat,User) ->
     ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc') where
          username=%(User)s and chatgroup=%(Chat)s and (subscription != 'none' or subscription !='wait')")) of
     {updated,1} ->
-      mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
-      mod_groupchat_sql:update_last_seen(LServer,User,Chat),
+      mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
+      mod_groups_sql:update_last_seen(LServer,User,Chat),
       UserJID = jid:from_string(User),
       ChatJID = jid:from_string(Chat),
       ejabberd_router:route(ChatJID,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
@@ -220,7 +220,7 @@ kick_user_from_chat(LServer,Chat,User) ->
 
 % delete groupchat hook
 check_if_user_owner(_Acc, LServer, User, Chat) ->
-  case mod_groupchat_restrictions:is_owner(LServer,Chat,User) of
+  case mod_groups_restrictions:is_owner(LServer,Chat,User) of
     yes ->
       ok;
     _ ->
@@ -281,7 +281,7 @@ check_if_request_user_exist(Acc, LServer, _User, Chat, ID, _Lang) ->
 
 get_user_rights(_Acc, LServer, User, Chat, ID, Lang) ->
   RequestUser = get_user_by_id(LServer,Chat,ID),
-  case mod_groupchat_restrictions:validate_users(LServer,Chat,User,RequestUser) of
+  case mod_groups_restrictions:validate_users(LServer,Chat,User,RequestUser) of
     ok ->
       {stop,{ok,create_right_form(LServer,User,Chat,RequestUser,ID, Lang)}};
     _ ->
@@ -301,7 +301,7 @@ validate_request(Acc, LServer, _User, Chat, ID, _Lang) ->
 
 change_user_rights(Acc, LServer, User, Chat, ID, Lang) ->
   RequestUser = get_user_by_id(LServer,Chat,ID),
-  case mod_groupchat_restrictions:validate_users(LServer,Chat,User,RequestUser) of
+  case mod_groups_restrictions:validate_users(LServer,Chat,User,RequestUser) of
     ok ->
       OldCard = form_user_card(RequestUser,Chat),
       change_rights(LServer,Chat,User,RequestUser,Acc),
@@ -342,25 +342,25 @@ get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
   From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   To = jid:remove_resource(UserJID),
   Nick = get_nick_in_chat(Server,User,Chat),
-  IsAnon = mod_groupchat_inspector:is_anonim(Server,Chat),
+  IsAnon = mod_groups_inspector:is_anonim(Server,Chat),
   case IsAnon of
     no when Status == not_exist ->
       add_user_pre_approval(Server,User,<<"member">>,Chat,<<"wait">>),
       add_wait_for_vcard(Server,User),
-      ejabberd_router:route(From,To,mod_groupchat_vcard:get_vcard()),
-      ejabberd_router:route(From,To,mod_groupchat_vcard:get_pubsub_meta()),
+      ejabberd_router:route(From,To, mod_groups_vcard:get_vcard()),
+      ejabberd_router:route(From,To, mod_groups_vcard:get_pubsub_meta()),
       {stop,ok};
     no ->
-      mod_groupchat_sql:set_update_status(Server,User,<<"true">>),
-      ejabberd_router:route(From,To,mod_groupchat_vcard:get_vcard()),
-      ejabberd_router:route(From,To,mod_groupchat_vcard:get_pubsub_meta()),
+      mod_groups_sql:set_update_status(Server,User,<<"true">>),
+      ejabberd_router:route(From,To, mod_groups_vcard:get_vcard()),
+      ejabberd_router:route(From,To, mod_groups_vcard:get_pubsub_meta()),
       ok;
     yes when Nick == <<>> ->
-      mod_groupchat_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),
+      mod_groups_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),
       insert_incognito_nickname(Server,User,Chat),
       ok;
     yes when Nick =/= <<>> ->
-      mod_groupchat_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),
+      mod_groups_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),
       ok;
     _ ->
       {stop,not_ok}
@@ -368,14 +368,14 @@ get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
 
 add_user_vcard(_Acc, {_Admin,Chat,Server,
   #xabbergroupchat_invite{invite_jid = User, reason = _Reason, send = _Send}}) ->
-  IsAnon = mod_groupchat_inspector:is_anonim(Server,Chat),
+  IsAnon = mod_groups_inspector:is_anonim(Server,Chat),
   case IsAnon of
     no ->
       add_wait_for_vcard(Server,User),
       From = jid:from_string(Chat),
       To = jid:from_string(User),
-      ejabberd_router:route(From,To,mod_groupchat_vcard:get_vcard()),
-      ejabberd_router:route(jid:replace_resource(From,<<"Group">>),jid:remove_resource(To),mod_groupchat_vcard:get_pubsub_meta()),
+      ejabberd_router:route(From,To, mod_groups_vcard:get_vcard()),
+      ejabberd_router:route(jid:replace_resource(From,<<"Group">>),jid:remove_resource(To), mod_groups_vcard:get_pubsub_meta()),
       ok;
     _ ->
       ok
@@ -444,11 +444,11 @@ is_exist(_Acc,{Server,To,Chat,_Lang}) ->
 
 is_owner(_Acc,{Server,To,Chat,_Lang}) ->
   User = jid:to_string(jid:remove_resource(To)),
-  case mod_groupchat_restrictions:is_owner(Server,Chat,User) of
+  case mod_groups_restrictions:is_owner(Server,Chat,User) of
     yes ->
       {stop,owner};
     _ ->
-      mod_groupchat_default_restrictions:set_restrictions(Server,User,Chat),
+      mod_groups_default_restrictions:set_restrictions(Server,User,Chat),
       ok
   end.
 
@@ -480,7 +480,7 @@ form_kicked(Users,Chat) ->
 
 % SQL functions
 add_user(Server,Member,Role,Groupchat,Subscription) ->
-  case mod_groupchat_sql:search_for_chat(Server,Member) of
+  case mod_groups_sql:search_for_chat(Server,Member) of
     {selected,[]} ->
       add_user_to_db(Server,Member,Role,Groupchat,Subscription),
       {stop,ok};
@@ -489,7 +489,7 @@ add_user(Server,Member,Role,Groupchat,Subscription) ->
   end.
 
 add_user_pre_approval(Server,Member,Role,Groupchat,Subscription) ->
-  case mod_groupchat_sql:search_for_chat(Server,Member) of
+  case mod_groups_sql:search_for_chat(Server,Member) of
     {selected,[]} ->
       add_user_to_db(Server,Member,Role,Groupchat,Subscription),
       ok;
@@ -668,15 +668,15 @@ insert_nickname(LServer,User,Chat,NickRaw) ->
     ?SQL("update groupchat_users set nickname = %(Nick)s, user_updated_at = (now() at time zone 'utc') where chatgroup=%(Chat)s and username=%(User)s")).
 
 insert_incognito_nickname(LServer,User,Chat) ->
-  Nickname = string:trim(mod_groupchat_users:get_nick_in_chat(LServer,User,Chat)),
+  Nickname = string:trim(mod_groups_users:get_nick_in_chat(LServer,User,Chat)),
   if
     Nickname == <<>> orelse Nickname == [] ->
       RandomNick =  case nick_generator:random_nick(LServer,User,Chat) of
                       {Nick,{_FileName, Bin}} ->
                         %% todo: make a function for this in vcard module
-                        case mod_groupchat_vcard:store_user_avatar_file(LServer, Bin) of
+                        case mod_groups_vcard:store_user_avatar_file(LServer, Bin) of
                           #avatar_info{bytes = Size, id = ID, type = Type, url = Url} ->
-                            mod_groupchat_vcard:update_avatar(LServer, User, Chat, ID, Type, Size, Url);
+                            mod_groups_vcard:update_avatar(LServer, User, Chat, ID, Type, Size, Url);
                           _ -> ok
                         end,
                         Nick;
@@ -787,7 +787,7 @@ convert_from_datetime_to_unix_time(DateTime) ->
 get_user_info(User,Chat) ->
   ChatJID = jid:from_string(Chat),
   Server = ChatJID#jid.lserver,
-  IsAnon = mod_groupchat_chats:is_anonim(Server,Chat),
+  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
   {selected,_Tables,Items} = get_user_rules(Server,User,Chat),
   [Item|_] = Items,
   [Username,Badge,UserId,Chat,_Rule,_RuleDesc,_Type,_Subscription,GV,FN,NickVcard,NickChat,_ValidFrom,_IssuedAt,_IssuedBy,_VcardImage,_Avatar,_LastSeen] = Item,
@@ -804,7 +804,7 @@ get_user_info(User,Chat) ->
          end,
   Role = calculate_role(UserRights),
   UserJID = jid:from_string(User),
-  AvatarEl = mod_groupchat_vcard:get_photo_meta(Server,Username,Chat),
+  AvatarEl = mod_groups_vcard:get_photo_meta(Server,Username,Chat),
   BadgeF = validate_badge_and_nick(Server,Chat,User,Nick,Badge),
   {Role,UserJID,BadgeF,UserId,Nick,AvatarEl,IsAnon}.
 
@@ -910,7 +910,7 @@ check_user(User) when is_binary(User) ->
 validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
   validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
 validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
-  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  SetNick = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
   case SetNick of
     true ->
       validate_unique(LServer,Chat,Admin,undefined,Badge,Lang);
@@ -919,7 +919,7 @@ validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
-  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  SetNick = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
   case SetNick of
     true ->
       validate_unique(LServer,Chat,Admin,Nickname,Badge,Lang);
@@ -928,8 +928,8 @@ validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickname =/= undefined ->
-  SetNick = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
-  IsValid = mod_groupchat_restrictions:validate_users(LServer,Chat,Admin,User),
+  SetNick = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  IsValid = mod_groups_restrictions:validate_users(LServer,Chat,Admin,User),
   case SetNick of
     true when IsValid == ok ->
       validate_unique(LServer,Chat,User,Nickname,undefined,Lang);
@@ -938,8 +938,8 @@ validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickn
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/= undefined ->
-  SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
-  IsValid = mod_groupchat_restrictions:validate_users(LServer,Chat,Admin,User),
+  SetBadge = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  IsValid = mod_groups_restrictions:validate_users(LServer,Chat,Admin,User),
   case SetBadge of
     true when IsValid == ok ->
       validate_unique(LServer,Chat,User,undefined,Badge,Lang);
@@ -948,8 +948,8 @@ validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) when Badge =/= undefined andalso Nickname =/= undefined ->
-  SetBadge = mod_groupchat_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
-  IsValid = mod_groupchat_restrictions:validate_users(LServer,Chat,Admin,User),
+  SetBadge = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
+  IsValid = mod_groups_restrictions:validate_users(LServer,Chat,Admin,User),
   case SetBadge of
     true when IsValid == ok ->
       validate_unique(LServer,Chat,User,Nickname,Badge,Lang);
@@ -1283,7 +1283,7 @@ create_empty_form(ID) ->
     ]}.
 
 make_fields_owner(LServer,RightsAndTime,Lang) ->
-  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  AllRights = mod_groups_restrictions:get_all_rights(LServer),
   ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
   Permissions = [{R,D}||{R,T,D} <- AllRights, T == <<"permission">>],
   Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
@@ -1310,7 +1310,7 @@ make_fields_owner(LServer,RightsAndTime,Lang) ->
   PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
 
 make_fields_owner_no_options(LServer,RightsAndTime,Lang,Type) ->
-  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  AllRights = mod_groups_restrictions:get_all_rights(LServer),
   ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
   Permissions = [{R,D}||{R,T,D} <- AllRights, T == <<"permission">>],
   Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
@@ -1335,7 +1335,7 @@ make_fields_owner_no_options(LServer,RightsAndTime,Lang,Type) ->
   PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
 
 make_fields_admin(LServer,RightsAndTime,Lang) ->
-  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  AllRights = mod_groups_restrictions:get_all_rights(LServer),
   ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
   Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
   RestrictionsFields = lists:map(fun(Right) ->
@@ -1351,7 +1351,7 @@ make_fields_admin(LServer,RightsAndTime,Lang) ->
   RestrictionSection ++ RestrictionsFields.
 
 make_fields_admin_no_options(LServer,RightsAndTime,Lang) ->
-  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  AllRights = mod_groups_restrictions:get_all_rights(LServer),
   ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
   ?INFO_MSG("Rights ~p~n",[ExistingRights]),
   Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
@@ -1435,7 +1435,7 @@ filter_fixed_fields(FS) ->
 
 -spec get_and_validate(binary(),binary(),list()) -> binary().
 get_and_validate(LServer,RightName,Value) ->
-  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  AllRights = mod_groups_restrictions:get_all_rights(LServer),
   case lists:keyfind(RightName,1,AllRights) of
     {RightName,Type,_Desc} ->
       {RightName,Type,Value};
@@ -1473,7 +1473,7 @@ change_rights(LServer,Chat,Admin,RequestUser,Rights) ->
   lists:foreach(fun(Right) ->
     {Rule,_Type,ExpireOption} = Right,
     Expires = set_expires(ExpireOption),
-    mod_groupchat_restrictions:set_rule(LServer,Rule,Expires,RequestUser,Chat,Admin)
+    mod_groups_restrictions:set_rule(LServer,Rule,Expires,RequestUser,Chat,Admin)
                 end, Rights).
 
 set_expires([]) ->
@@ -1487,7 +1487,7 @@ set_expires(ExpireOption) ->
   integer_to_binary(Sum).
 
 current_values(LServer,User,Chat) ->
-  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  AllRights = mod_groups_restrictions:get_all_rights(LServer),
   RightsAndTime = user_rights_and_time(LServer,Chat,User),
   lists:map(fun(El) ->
     {Name,Type,_Desc} = El,
@@ -1527,7 +1527,7 @@ get_user_from_chat(LServer,Chat,User,ID) ->
   case Result of
     {selected, _, []} -> [];
     {selected, _, [UserInfo]}->
-      IsAnon = mod_groupchat_chats:is_anonim(LServer,Chat),
+      IsAnon = mod_groups_chats:is_anonim(LServer,Chat),
       [Username,Id,Badge,NickChat,Subscription,GF,FullName,NickVcard,LastSeen] = UserInfo,
       Nick = case nick(GF,FullName,NickVcard,NickChat,IsAnon) of
                empty when IsAnon == no->
@@ -1540,9 +1540,9 @@ get_user_from_chat(LServer,Chat,User,ID) ->
                  <<>>
              end,
       Role = calculate_role(LServer,Username,Chat),
-      AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
+      AvatarEl = mod_groups_vcard:get_photo_meta(LServer,Username,Chat),
       BadgeF = validate_badge_and_nick(LServer,Chat,Username,Nick,Badge),
-      S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
+      S = mod_groups_present_mnesia:select_sessions(Username,Chat),
       L = length(S),
       Present = case L of
                   0 ->
@@ -1684,15 +1684,15 @@ get_max_direction_item(RSM) ->
   end.
 
 make_query(LServer,RawData,RequesterUser,Chat) ->
-  IsAnon = mod_groupchat_chats:is_anonim(LServer,Chat),
+  IsAnon = mod_groups_chats:is_anonim(LServer,Chat),
   RequesterUserRole = calculate_role(LServer,RequesterUser,Chat),
   lists:map(
     fun(UserInfo) ->
       [Username,Id,Badge,LastSeen,Subscription,Nick] = UserInfo,
       Role = calculate_role(LServer,Username,Chat),
-      AvatarEl = mod_groupchat_vcard:get_photo_meta(LServer,Username,Chat),
+      AvatarEl = mod_groups_vcard:get_photo_meta(LServer,Username,Chat),
       BadgeF = validate_badge_and_nick(LServer,Chat,Username,Nick,Badge),
-      S = mod_groupchat_present_mnesia:select_sessions(Username,Chat),
+      S = mod_groups_present_mnesia:select_sessions(Username,Chat),
       L = length(S),
       Present = case L of
                      0 ->

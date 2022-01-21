@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_present_mnesia.erl
+%%% File    : mod_groups_present_mnesia.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Watch for online activity in group chats
 %%% Created : 05 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,23 +23,21 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_present_mnesia).
+-module(mod_groups_present_mnesia).
 -author('andrey.gagarin@redsolution.com').
 -behaviour(gen_mod).
 -behaviour(gen_server).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 %% gen_mod callbacks
--export([stop/1,start/2,depends/2,mod_options/1, mod_opt_type/1,
-  init/0,start_link/0
-]).
+-export([stop/1,start/2,depends/2,mod_options/1, init/0,start_link/0]).
 %% API
 -export([
   get_chat_sessions/0,set_session/3,delete_session/1, select_sessions/2, delete_session/3, delete_all_user_sessions/2
 ]).
 -record(state, {}).
 -include("xmpp.hrl").
--include("mod_groupchat_present.hrl").
+-include("mod_groups_present.hrl").
 -include("logger.hrl").
 %%====================================================================
 %% gen_mod callbacks
@@ -53,15 +51,9 @@ stop(Host) ->
   supervisor:delete_child(ejabberd_sup, ?MODULE),
   gen_mod:stop_child(?MODULE, Host).
 
-depends(_Host, _Opts) ->
-  [].
+depends(_Host, _Opts) -> [].
 
-mod_opt_type(session_lifetime) ->
-  fun(I) when is_integer(I), I > 0 -> I end.
-
-mod_options(_Host) -> [
-  {session_lifetime, 45}
-].
+mod_options(_Host) -> [].
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -88,10 +80,10 @@ set_session(Resource, User, ChatJid) ->
   From = jid:replace_resource(jid:from_string(User),Resource),
   To = jid:from_string(ChatJid),
   LServer = To#jid.lserver,
-  Timeout = gen_mod:get_module_opt(LServer, ?MODULE, session_lifetime) * 1000,
+  Timeout = gen_mod:get_module_opt(LServer, mod_groups, session_lifetime) * 1000,
   case select_session(Resource,User,ChatJid) of
     [] ->
-      PID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, Timeout]),
+      PID = spawn(mod_groups_presence, delete_session_from_counter_after, [To, From, Timeout]),
       Session = #chat_session{
         id = PID,
         resource =  Resource,
@@ -101,7 +93,7 @@ set_session(Resource, User, ChatJid) ->
       mnesia:dirty_write(Session);
     [#chat_session{} = SS] ->
       delete_session(SS),
-      NEWPID = spawn(mod_groupchat_presence, delete_session_from_counter_after, [To, From, Timeout]),
+      NEWPID = spawn(mod_groups_presence, delete_session_from_counter_after, [To, From, Timeout]),
       Session = #chat_session{
         id = NEWPID,
         resource =  Resource,

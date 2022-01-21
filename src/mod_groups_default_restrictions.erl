@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_default_restrictions.erl
+%%% File    : mod_groups_default_restrictions.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Default restrinctions for group chats
 %%% Created : 23 Aug 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_default_restrictions).
+-module(mod_groups_default_restrictions).
 -author('andrey.gagarin@redsolution.com').
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -65,7 +65,7 @@ depends(_Host, _Opts) ->  [].
 mod_options(_Opts) -> [].
 
 check_if_exist(Acc, User, Chat, LServer, _Lang) ->
-  case mod_groupchat_users:check_user_if_exist(LServer,User,Chat) of
+  case mod_groups_users:check_user_if_exist(LServer,User,Chat) of
     not_exist ->
       {stop,not_ok};
     _ ->
@@ -73,7 +73,7 @@ check_if_exist(Acc, User, Chat, LServer, _Lang) ->
   end.
 
 check_if_has_rights(_Acc, User, Chat, LServer, Lang) ->
-  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
     true ->
       {stop, {ok,create_default_right_form(Chat, LServer, Lang)}};
     _ ->
@@ -82,7 +82,7 @@ check_if_has_rights(_Acc, User, Chat, LServer, Lang) ->
 
 check_values(Acc, User, Chat, LServer, _Lang) ->
   FS = decode(LServer,Acc),
-  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
     true when FS =/= not_ok ->
       {ok,Values} = FS,
       NewValues = Values -- get_default_current_rights(LServer,Chat),
@@ -129,7 +129,7 @@ filter_fixed_fields(FS) ->
 
 -spec get_and_validate(binary(),binary(),list()) -> binary().
 get_and_validate(LServer,RightName,Value) ->
-  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  AllRights = mod_groups_restrictions:get_all_rights(LServer),
   Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
   case lists:keyfind(RightName,1,Restrictions) of
     {RightName,_Desc} ->
@@ -210,7 +210,7 @@ create_result_right_form(Chat,LServer,Lang) ->
 
 default_rights_no_options(LServer, Chat, Lang) ->
   DefaultRights = get_default_rights(LServer,Chat),
-  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  AllRights = mod_groups_restrictions:get_all_rights(LServer),
   Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
   RestrictionsFields = lists:map(fun(Right) ->
     {Name,Desc} = Right,
@@ -225,7 +225,7 @@ default_rights_no_options(LServer, Chat, Lang) ->
 
 default_rights(LServer, Chat, Lang) ->
   DefaultRights = get_default_rights(LServer,Chat),
-  AllRights = mod_groupchat_restrictions:get_all_rights(LServer),
+  AllRights = mod_groups_restrictions:get_all_rights(LServer),
   Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
   RestrictionsFields = lists:map(fun(Right) ->
     {Name,Desc} = Right,
@@ -302,7 +302,7 @@ set_restrictions(Server,User,Chat) ->
       lists:map(fun(N) ->
         {Rule,Time} = N,
         ActionTime = set_time(Time),
-      mod_groupchat_restrictions:upsert_rule(Server,Chat,User,Rule,ActionTime,<<"server">>) end, Restrictions),
+      mod_groups_restrictions:upsert_rule(Server,Chat,User,Rule,ActionTime,<<"server">>) end, Restrictions),
         ok;
     _ ->
       ok

@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_domains.erl
+%%% File    : mod_groups_domains.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Check if group chat has access by domain policy
 %%% Created : 14 Aug 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_domains).
+-module(mod_groups_domains).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -include("ejabberd.hrl").

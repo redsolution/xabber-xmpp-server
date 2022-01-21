@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_service_message.erl
+%%% File    : mod_groups_service_message.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Service messages for groupchats
 %%% Created : 16 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_service_message).
+-module(mod_groups_system_message).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -include("ejabberd.hrl").
@@ -81,8 +81,8 @@ mod_options(_Opts) -> [].
 
 groupchat_avatar_changed(LServer, Chat, User) ->
   ChatJID = jid:from_string(Chat),
-  Version = mod_groupchat_users:current_chat_version(LServer,Chat),
-  ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
+  Version = mod_groups_users:current_chat_version(LServer,Chat),
+  ByUserCard = mod_groups_users:form_user_card(User,Chat),
   UserID = case anon(ByUserCard) of
              public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
                ByUserCard#xabbergroupchat_user_card.nickname;
@@ -101,7 +101,7 @@ groupchat_avatar_changed(LServer, Chat, User) ->
 
 groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
   ChatJID = jid:from_string(Chat),
-  Version = mod_groupchat_users:current_chat_version(LServer,Chat),
+  Version = mod_groups_users:current_chat_version(LServer,Chat),
   IsNameChanged = proplists:get_value(name_changed, ChatProperties),
   IsDescChanged = proplists:get_value(desc_changed, ChatProperties),
   IsStatusChanged =  proplists:get_value(status_changed, ChatProperties),
@@ -112,8 +112,8 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
       andalso IsPinnedChanged == false andalso IsOtherChanged == false ->
       ok;
     _ ->
-      %%  Label = mod_groupchat_chats:get_status_label_name(LServer,Chat,Status),
-      ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
+      %%  Label = mod_groups_chats:get_status_label_name(LServer,Chat,Status),
+      ByUserCard = mod_groups_users:form_user_card(User,Chat),
       UserID = case anon(ByUserCard) of
                  public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
                    ByUserCard#xabbergroupchat_user_card.nickname;
@@ -143,7 +143,7 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
                    <<UserID/binary, " pinned a message">>;
                  _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged =/= true
                    andalso IsStatusChanged == true andalso IsPinnedChanged =/= true ->
-                   HumanStatus = mod_groupchat_chats:define_human_status(LServer, Chat, Status),
+                   HumanStatus = mod_groups_chats:define_human_status(LServer, Chat, Status),
                    <<UserID/binary, " changed group status to ", HumanStatus/binary>>;
                  _ ->
                    <<UserID/binary, " updated group properties">>
@@ -153,10 +153,10 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
       By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
 
       {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,Status}]} =
-        mod_groupchat_chats:get_information_of_chat(Chat,LServer),
+        mod_groups_chats:get_information_of_chat(Chat,LServer),
       Group_X = #xabbergroupchat_x{
         xmlns = ?NS_GROUPCHAT,
-        members = integer_to_binary(mod_groupchat_chats:count_users(LServer,Chat)),
+        members = integer_to_binary(mod_groups_chats:count_users(LServer,Chat)),
         sub_els =
         [
           #xabbergroupchat_name{cdata = Name},
@@ -171,8 +171,8 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
 
 user_change_avatar(User, Server, Chat, OtherUser) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
-  ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
-  UpdatedUser = mod_groupchat_users:form_user_card(OtherUser,Chat),
+  ByUserCard = mod_groups_users:form_user_card(User,Chat),
+  UpdatedUser = mod_groups_users:form_user_card(OtherUser,Chat),
   UpdatedUserID = case anon(UpdatedUser) of
                     public when UpdatedUser#xabbergroupchat_user_card.nickname =/= undefined andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<" ">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<"">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(UpdatedUser#xabbergroupchat_user_card.nickname) > 1 ->
                       UpdatedUser#xabbergroupchat_user_card.nickname;
@@ -189,7 +189,7 @@ user_change_avatar(User, Server, Chat, OtherUser) ->
              anonim ->
                ByUserCard#xabbergroupchat_user_card.nickname
            end,
-  Version = mod_groupchat_users:current_chat_version(Server,Chat),
+  Version = mod_groups_users:current_chat_version(Server,Chat),
   MsgTxt = <<UserID/binary, " updated avatar of ", UpdatedUserID/binary>>,
   Body = [#text{lang = <<>>,data = MsgTxt}],
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
@@ -201,7 +201,7 @@ user_change_avatar(User, Server, Chat, OtherUser) ->
 
 user_change_own_avatar(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
-  ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
+  ByUserCard = mod_groups_users:form_user_card(User,Chat),
   UserID = case anon(ByUserCard) of
              public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
                ByUserCard#xabbergroupchat_user_card.nickname;
@@ -210,7 +210,7 @@ user_change_own_avatar(User, Server, Chat) ->
              anonim ->
                ByUserCard#xabbergroupchat_user_card.nickname
            end,
-  Version = mod_groupchat_users:current_chat_version(Server,Chat),
+  Version = mod_groups_users:current_chat_version(Server,Chat),
   MsgTxt = <<UserID/binary, " updated avatar">>,
   Body = [#text{lang = <<>>,data = MsgTxt}],
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard], type = <<"update">>},
@@ -222,7 +222,7 @@ user_change_own_avatar(User, Server, Chat) ->
 
 
 chat_created(LServer,User,Chat,Lang) ->
-  X = mod_groupchat_users:form_user_card(User,Chat),
+  X = mod_groups_users:form_user_card(User,Chat),
   UserID = case anon(X) of
              public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
                X#xabbergroupchat_user_card.nickname;
@@ -232,7 +232,7 @@ chat_created(LServer,User,Chat,Lang) ->
                X#xabbergroupchat_user_card.nickname
            end,
   {selected,[{Name,Anonymous,Search,Model,Desc,_Message,_ContactList,_DomainList,_ParentChat}]} =
-    mod_groupchat_chats:get_detailed_information_of_chat(Chat,LServer),
+    mod_groups_chats:get_detailed_information_of_chat(Chat,LServer),
   Txt =  <<"created ",Anonymous/binary," group">>,
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
@@ -251,14 +251,14 @@ chat_created(LServer,User,Chat,Lang) ->
   SubEls = [XEl,By],
   M = form_message(jid:from_string(Chat),Body,SubEls),
   ChatJID = jid:from_string(Chat),
-  Pkt1 = mod_groupchat_messages:strip_stanza_id(M,LServer),
+  Pkt1 = mod_groups_messages:strip_stanza_id(M,LServer),
   ejabberd_hooks:run_fold(
     user_send_packet, LServer, {Pkt1, #{jid => ChatJID}}, []).
 
 users_blocked(Acc, #iq{lang = Lang,to = To, from = From}) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Admin = jid:to_string(jid:remove_resource(From)),
-  X = mod_groupchat_users:form_user_card(Admin,Chat),
+  X = mod_groups_users:form_user_card(Admin,Chat),
   UserID = case anon(X) of
              public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
                X#xabbergroupchat_user_card.nickname;
@@ -296,8 +296,8 @@ users_blocked(Acc, #iq{lang = Lang,to = To, from = From}) ->
   {stop,ok}.
 
 users_kicked(Acc,LServer,Chat,Admin,_Kick,Lang) ->
-  UsersCard = lists:map(fun(User) -> mod_groupchat_users:form_user_card(User,Chat) end, Acc),
-  X = mod_groupchat_users:form_user_card(Admin,Chat),
+  UsersCard = lists:map(fun(User) -> mod_groups_users:form_user_card(User,Chat) end, Acc),
+  X = mod_groups_users:form_user_card(Admin,Chat),
   UserID = case anon(X) of
              public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
                X#xabbergroupchat_user_card.nickname;
@@ -326,7 +326,7 @@ users_kicked(Acc,LServer,Chat,Admin,_Kick,Lang) ->
   end,
   MsgTxt = text_for_msg(Lang,Txt,UserID,KickedUsers,AddTxt),
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  Version = mod_groupchat_users:current_chat_version(LServer,Chat),
+  Version = mod_groups_users:current_chat_version(LServer,Chat),
   XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = UsersCard, type = <<"kick">>, version = Version},
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
   SubEls = [XEl,By],
@@ -349,7 +349,7 @@ user_left(_Acc,{Server,_User,Chat,X,Lang})->
            end,
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  Version = mod_groupchat_users:current_chat_version(Server,Chat),
+  Version = mod_groups_users:current_chat_version(Server,Chat),
   XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"left">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
   SubEls = [XEl,By],
@@ -360,7 +360,7 @@ user_left(_Acc,{Server,_User,Chat,X,Lang})->
 
 user_join(_Acc,{Server,To,Chat,Lang}) ->
   User = jid:to_string(jid:remove_resource(To)),
-  ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
+  ByUserCard = mod_groups_users:form_user_card(User,Chat),
   Txt = <<"joined chat">>,
   ChatJID = jid:from_string(Chat),
   UserID = case anon(ByUserCard) of
@@ -373,7 +373,7 @@ user_join(_Acc,{Server,To,Chat,Lang}) ->
            end,
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  Version = mod_groupchat_users:current_chat_version(Server,Chat),
+  Version = mod_groups_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"join">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
@@ -383,8 +383,8 @@ user_join(_Acc,{Server,To,Chat,Lang}) ->
   ok.
 
 user_updated({User,OldCard}, LServer,Chat, Admin,_ID,Nick,_Badge,Lang) ->
-  ByUserCard = mod_groupchat_users:form_user_card(Admin,Chat),
-  UpdatedUser = mod_groupchat_users:form_user_card(User,Chat),
+  ByUserCard = mod_groups_users:form_user_card(Admin,Chat),
+  UpdatedUser = mod_groups_users:form_user_card(User,Chat),
   OldName = case anon(UpdatedUser) of
               public when OldCard#xabbergroupchat_user_card.nickname =/= undefined andalso OldCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso OldCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso OldCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(OldCard#xabbergroupchat_user_card.nickname) > 1 ->
                 OldCard#xabbergroupchat_user_card.nickname;
@@ -446,7 +446,7 @@ user_updated({User,OldCard}, LServer,Chat, Admin,_ID,Nick,_Badge,Lang) ->
 maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt) ->
   ChatJID = jid:from_string(Chat),
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  Version = mod_groupchat_users:current_chat_version(LServer,Chat),
+  Version = mod_groups_users:current_chat_version(LServer,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
@@ -454,8 +454,8 @@ maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt) ->
   send_to_all(Chat,M).
 
 user_rights_changed({OldCard,RequestUser,Permission,Restriction,Form}, LServer, Admin, Chat, _ID, Lang) ->
-  ByUserCard = mod_groupchat_users:form_user_card(Admin,Chat),
-  UpdatedUser = mod_groupchat_users:form_user_card(RequestUser,Chat),
+  ByUserCard = mod_groups_users:form_user_card(Admin,Chat),
+  UpdatedUser = mod_groups_users:form_user_card(RequestUser,Chat),
   ChatJID = jid:from_string(Chat),
   Acc = case anon(UpdatedUser) of
           public when UpdatedUser#xabbergroupchat_user_card.nickname =/= undefined andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<" ">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<"">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(UpdatedUser#xabbergroupchat_user_card.nickname) > 1 ->
@@ -489,7 +489,7 @@ user_rights_changed({OldCard,RequestUser,Permission,Restriction,Form}, LServer, 
         text_for_msg(Lang,Txt,Acc,UserID,[])
     end,
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  Version = mod_groupchat_users:current_chat_version(LServer,Chat),
+  Version = mod_groups_users:current_chat_version(LServer,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
@@ -544,23 +544,23 @@ new_restriction_text(Restrictions) ->
 
 send_presences(Server,Chat) ->
   To = jid:from_string(Chat),
-  Users = mod_groupchat_users:user_list_to_send(Server,Chat),
+  Users = mod_groups_users:user_list_to_send(Server,Chat),
   FromChat = jid:replace_resource(To,<<"Group">>),
-  mod_groupchat_presence:send_presence(mod_groupchat_presence:form_presence(Chat),Users,FromChat).
+  mod_groups_presence:send_presence(mod_groups_presence:form_presence(Chat),Users,FromChat).
 
 -spec send_to_all(binary(), binary()) -> ok.
 send_to_all(Chat,Stanza) ->
   ChatJID = jid:from_string(Chat),
   FromChat = jid:replace_resource(ChatJID,<<"Group">>),
   Server = ChatJID#jid.lserver,
-  Pkt1 = mod_groupchat_messages:strip_stanza_id(Stanza,Server),
+  Pkt1 = mod_groups_messages:strip_stanza_id(Stanza,Server),
   {Pkt2, _State2} = ejabberd_hooks:run_fold(
     user_send_packet, Server, {Pkt1, #{jid => ChatJID}}, []),
   #message{meta = #{stanza_id := TS}} = Pkt2,
   #origin_id{id = OriginID} = xmpp:get_subtag(Pkt2,#origin_id{}),
-  mod_groupchat_messages:set_displayed(ChatJID,ChatJID,TS,OriginID),
-  ListAll = mod_groupchat_users:user_list_to_send(Server,Chat),
-  {selected, NoReaders} = mod_groupchat_users:user_no_read(Server,Chat),
+  mod_groups_messages:set_displayed(ChatJID,ChatJID,TS,OriginID),
+  ListAll = mod_groups_users:user_list_to_send(Server,Chat),
+  {selected, NoReaders} = mod_groups_users:user_no_read(Server,Chat),
   ListTo = ListAll -- NoReaders,
   case ListTo of
     [] ->

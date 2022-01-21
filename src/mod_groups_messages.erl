@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_messages.erl
+%%% File    : mod_groups_messages.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Work with message in group chats
 %%% Created : 17 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_messages).
+-module(mod_groups_messages).
 -author('andrey.gagarin@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
@@ -35,11 +35,9 @@
 -export([
   message_hook/1,
   check_permission_write/2,
-  check_permission_media/2,
-  add_path/3,
   strip_stanza_id/2,
   send_displayed/3,
-  get_items_from_pep/3, check_invite/2, get_actual_user_info/2, get_displayed_msg/4, shift_references/2, binary_length/1, set_displayed/4
+  check_invite/2, get_actual_user_info/2, get_displayed_msg/4, shift_references/2, binary_length/1, set_displayed/4
 ]).
 -export([get_last/1, seconds_since_epoch/1]).
 
@@ -55,7 +53,7 @@
 ).
 
 -record(groupchat_blocked_user, {user :: binary(), timestamp :: integer() }).
--export([form_groupchat_message_body/5,send_service_message/3, send_received/4]).
+-export([send_received/4]).
 -include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
@@ -114,9 +112,9 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  UserExits = mod_groupchat_inspector_sql:check_user(User,Server,Chat),
+  UserExits = mod_groups_inspector_sql:check_user(User,Server,Chat),
   Result = ejabberd_hooks:run_fold(groupchat_message_hook, Server, Pkt, [{User,Chat,UserExits,Els}]),
-  ChatStatus = mod_groupchat_chats:get_chat_active(Server,Chat),
+  ChatStatus = mod_groups_chats:get_chat_active(Server,Chat),
   case Result of
     not_ok ->
       Text = <<"You have no permission to write in this chat">>,
@@ -126,7 +124,7 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
       ElsSer = [#xabbergroupchat_x{no_permission = <<>>}],
       MetaSer = #{},
       MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
-      UserID = mod_groupchat_inspector:get_user_id(Server,User,Chat),
+      UserID = mod_groups_inspector:get_user_id(Server,User,Chat),
       Err = xmpp:err_not_allowed(),
       ejabberd_router:route_error(Pkt, Err),
       send_message_no_permission_to_write(UserID,MessageNew);
@@ -135,7 +133,7 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
       IdSer = randoms:get_string(),
       TypeSer = chat,
       BodySer = [#text{lang = <<>>,data = Text}],
-      UserID = mod_groupchat_inspector:get_user_id(Server,User,Chat),
+      UserID = mod_groups_inspector:get_user_id(Server,User,Chat),
       UserJID = jid:from_string(User),
       UserCard = #xabbergroupchat_user_card{id = UserID, jid = UserJID},
       ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = [UserCard]}],
@@ -155,7 +153,7 @@ message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, m
       ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}],
       MetaSer = #{},
       MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
-      UserID = mod_groupchat_inspector:get_user_id(Server,User,Chat),
+      UserID = mod_groups_inspector:get_user_id(Server,User,Chat),
       Err = xmpp:err_not_allowed(),
       ejabberd_router:route_error(Pkt, Err),
       send_message_no_permission_to_write(UserID,MessageNew);
@@ -178,8 +176,8 @@ check_permission_write(_Acc, {User,Chat,UserExits,Els}) ->
   UserJId =  jid:from_string(User),
   Domain = UserJId#jid.lserver,
   Server = ChatJID#jid.lserver,
-  Block = mod_groupchat_block:check_block(Server,Chat,User,Domain),
-  case mod_groupchat_restrictions:is_restricted(<<"send-messages">>,User,Chat) of
+  Block = mod_groups_block:check_block(Server,Chat,User,Domain),
+  case mod_groups_restrictions:is_restricted(<<"send-messages">>,User,Chat) of
     false when UserExits == exist ->
       {stop,{ok,Els}};
     _  when UserExits == exist->
@@ -190,70 +188,19 @@ check_permission_write(_Acc, {User,Chat,UserExits,Els}) ->
       {stop, do_nothing}
   end.
 
-check_permission_media(_Acc,{User,Chat,_UserExits,Els}) ->
-  X = [Children || {xmlel,<<"x">>,_Attrs,Children} <- Els],
-  case length(X) of
-    0 ->
-      {stop,{ok,Els}};
-    _ ->
-      [Field] = X,
-      MediaList = [Children || {xmlel,<<"field">>,_Attrs,Children} <- Field],
-      case length(MediaList) of
-        0 ->
-          {stop,{ok,Els}};
-        _ ->
-          [Med|_Another] = MediaList,
-          [Media|_Rest] = Med,
-          M = xmpp:decode(Media),
-          MediaUriRare = M#media.uri,
-          [MediaUri|_Re] = MediaUriRare,
-          case check_permissions(MediaUri#media_uri.type,User,Chat) of
-            true ->
-              {stop,not_ok};
-            false ->
-              {stop,{ok,Els}}
-          end
-      end
-  end.
-
-check_permissions(Media,User,Chat) ->
-  [Type,_F] =  binary:split(Media,<<"/">>),
-  Allowed = case Type of
-              <<"audio">> ->
-                mod_groupchat_restrictions:is_restricted(<<"send-audio">>,User,Chat);
-              <<"image">> ->
-                mod_groupchat_restrictions:is_restricted(<<"send-images">>,User,Chat);
-              _ ->
-                false
-            end,
-  Allowed.
-
 send_received_and_message(Pkt, From, To, OriginID, Users) ->
   {Pkt2, _State2} = mod_mam:user_send_packet({Pkt,#{jid => To}}),
   send_received(Pkt2,From,OriginID,To),
   send_message(Pkt2,Users,To).
 
 send_message(Message,[],From) ->
-  mod_groupchat_presence:send_message_to_index(From, Message),
+  mod_groups_presence:send_message_to_index(From, Message),
   ok;
 send_message(Message,Users,From) ->
   [{User}|RestUsers] = Users,
   To = jid:from_string(User),
   ejabberd_router:route(From,To,Message),
   send_message(Message,RestUsers,From).
-
-send_service_message(To,Chat,Text) ->
-  Jid = jid:to_string(To),
-  From = jid:from_string(Chat),
-  FromChat = jid:replace_resource(From,<<"Group">>),
-  Id = randoms:get_string(),
-  Type = chat,
-  Body = [#text{lang = <<>>,data = Text}],
-  {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(From#jid.lserver,Chat),
-  Users = AllUsers -- [{Jid}],
-  Els = [service_message(Chat,Text)],
-  Meta = #{},
-  send_message(construct_message(Id,Type,Body,Els,Meta),Users,FromChat).
 
 %%--------------------------------------------------------------------
 %% Sub process.
@@ -286,22 +233,22 @@ do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headlin
       [El|_R] = Decoded,
       case El of
         {nick,Nickname} when Node == <<"http://jabber.org/protocol/nick">> ->
-          mod_groupchat_vcard:change_nick_in_vcard(From#jid.luser,From#jid.lserver,Nickname),
-          {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(From#jid.lserver,Chat),
+          mod_groups_vcard:change_nick_in_vcard(From#jid.luser,From#jid.lserver,Nickname),
+          {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
           [AvatarI|_RestInfo] = AvatarInfo,
           IdAvatar = AvatarI#avatar_info.id,
-          {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(From#jid.lserver,Chat),
+          {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat),
-          mod_groupchat_inspector:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar),
-          Presence = mod_groupchat_presence:form_presence_vcard_update(IdAvatar),
-          mod_groupchat_presence:send_presence(Presence,AllUsers,FromChat);
+          mod_groups_inspector:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar),
+          Presence = mod_groups_presence:form_presence_vcard_update(IdAvatar),
+          mod_groups_presence:send_presence(Presence,AllUsers,FromChat);
         {avatar_meta,_AvatarInfo,_Smth} ->
-          {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(From#jid.lserver,Chat),
+          {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         {nick,_Nickname} ->
-          {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(From#jid.lserver,Chat),
+          {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         _ ->
           ok
@@ -326,12 +273,12 @@ do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline}
         {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
           [AvatarI|_RestInfo] = AvatarInfo,
           IdAvatar = AvatarI#avatar_info.id,
-          OldID = mod_groupchat_vcard:get_image_id(LServer,User, Chat),
+          OldID = mod_groups_vcard:get_image_id(LServer,User, Chat),
           case OldID of
             IdAvatar ->
               ok;
             _ ->
-              ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_pubsub_meta())
+              ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From), mod_groups_vcard:get_pubsub_meta())
           end;
         _ ->
           ok
@@ -384,8 +331,8 @@ send_displayed_to_all(ChatJID,StanzaID,MessageID) ->
   Displayed = #message_displayed{id = MessageID, sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  ListAll = mod_groupchat_users:user_list_to_send(Server,Chat),
-  {selected, NoReaders} = mod_groupchat_users:user_no_read(Server,Chat),
+  ListAll = mod_groups_users:user_list_to_send(Server,Chat),
+  {selected, NoReaders} = mod_groups_users:user_no_read(Server,Chat),
   ListTo = ListAll -- NoReaders,
   case ListTo of
     [] ->
@@ -461,14 +408,14 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
   LUser = To#jid.luser,
   Chat = jid:to_string(jid:remove_resource(To)),
   Jid = jid:to_string(jid:remove_resource(From)),
-  UserCard = mod_groupchat_users:form_user_card(Jid,Chat),
-  User = mod_groupchat_users:choose_name(UserCard),
+  UserCard = mod_groups_users:form_user_card(Jid,Chat),
+  User = mod_groups_users:choose_name(UserCard),
   Username = <<User/binary, ":", "\n">>,
   Length = binary_length(Username),
   Reference = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, 'begin' = 0, 'end' = Length, sub_els = [UserCard]}]},
   NewBody = [#text{lang = <<>>,data = <<Username/binary, Text/binary >>}],
-  {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(Server,Chat),
-  {selected, NoReaders} = mod_groupchat_users:user_no_read(Server,Chat),
+  {selected, AllUsers} = mod_groups_sql:user_list_to_send(Server,Chat),
+  {selected, NoReaders} = mod_groups_users:user_no_read(Server,Chat),
   UsersWithoutSender = AllUsers -- [{Jid}],
   Users = UsersWithoutSender -- NoReaders,
   PktSanitarized1 = strip_x_elements(Pkt),
@@ -520,95 +467,12 @@ get_origin_id(OriginId) ->
 message_for_archive(Id,Type,Body,Els,Meta,From,To)->
   #message{id = Id,from = From, to = To, type = Type, body = Body, sub_els = Els, meta = Meta}.
 
-construct_message(Id,Type,Body,Els,Meta) ->
-  M = #message{id = Id, type = Type, body = Body, sub_els = Els, meta = Meta},
-  M.
-
 construct_message(From,To,Id,Type,Body,Els,Meta) ->
-  M = #message{from = From, to = To, id = Id, type = Type, body = Body, sub_els = Els, meta = Meta},
-  M.
+  #message{from = From, to = To, id = Id, type = Type, body = Body, sub_els = Els, meta = Meta}.
 
 
 change_message(Id,Type,Body,Els,Meta,To,From) ->
   #message{id = Id, type = Type, body = Body, sub_els = Els, meta = Meta, to = To, from = From}.
-
-form_groupchat_message_body(Server,Jid,Chat,Text,Lang) ->
-  Request = mod_groupchat_restrictions:get_user_rules(Server,Jid,Chat),
-  case Request of
-    {selected,_Tables,[]} ->
-      not_ok;
-    {selected,_Tables,Items} ->
-      {Nick,Badge,A} = mod_groupchat_inspector:parse_items_for_message(Items),
-      Children = A ++ [body(Text,Lang)],
-      {Nick,Badge,#xmlel{
-        name = <<"x">>,
-        attrs = [
-          {<<"xmlns">>,?NS_GROUPCHAT}
-        ],
-        children = Children
-      }};
-    _ ->
-      not_ok
-  end.
-
-body(Data,Lang) ->
-   Attrs = [{<<"xml:lang">>,Lang},{<<"xmlns">>,<<"urn:ietf:params:xml:ns:xmpp-streams">>}],
-  #xmlel{name = <<"body">>, attrs = Attrs, children = [{xmlcdata, Data}]}.
-
-parse_item(#iq{sub_els = Sub}) ->
-  Pubsub = lists:keyfind(pubsub,1,Sub),
-  #pubsub{items = ItemList} = Pubsub,
-  #ps_items{items = Items} = ItemList,
-  Item = lists:keyfind(ps_item,1,Items),
-  case Item of
-    false ->
-      <<>>;
-    _ ->
-      #ps_item{sub_els = Els} = Item,
-      Decoded = lists:map(fun(N) -> xmpp:decode(N) end, Els),
-      Result = case Decoded of
-                 [{nick,Nickname}] ->
-                   Nickname;
-                 [{avatar_meta,AvatarInfo,_Smth}] ->
-                   AvatarInfo;
-                 _ ->
-                   <<>>
-               end,
-      Result
-  end.
-
-
-iq_get_item_from_pubsub(Chat,Node,ItemId) ->
-  Item = #ps_item{id = ItemId},
-  Items = #ps_items{items = [Item],node = Node},
-  Pubsub = #pubsub{items = Items},
-  #iq{type = get, id = randoms:get_string(), to = Chat, from = Chat, sub_els = [Pubsub]}.
-
-get_items_from_pep(User,Chat,Hash) ->
-  ChatJid = jid:from_string(Chat),
-  UserMetadataNode = <<"urn:xmpp:avatar:metadata#",User/binary>>,
-  UserNickNode = <<"http://jabber.org/protocol/nick#",User/binary>>,
-  Avatar = parse_item(mod_pubsub:iq_sm(iq_get_item_from_pubsub(ChatJid,UserMetadataNode,Hash))),
-  Nick = parse_item(mod_pubsub:iq_sm(iq_get_item_from_pubsub(ChatJid,UserNickNode,<<"0">>))),
-  {Avatar,Nick}.
-
-add_path(Server,Photo,JID) ->
-  case bit_size(Photo) of
-    0 ->
-      mod_groupchat_sql:set_update_status(Server,JID,<<"true">>),
-      <<>>;
-    _ ->
-      <<Server/binary, ":5280/pictures/", Photo/binary>>
-  end.
-
-service_message(JID,Text) ->
-  #xmlel{
-    name = <<"groupchat">>,
-    attrs = [
-      {<<"from">>, JID}
-    ],
-    children = [{xmlcdata, Text}]
-  }.
 
 -spec strip_reference_elements(stanza()) -> stanza().
 strip_reference_elements(Pkt) ->
@@ -740,12 +604,12 @@ get_actual_user_info(Server, Msgs) ->
       _ ->
         Users = [U ||{C,U} <- UniqUsersIDs ,C == Chat],
         AllUserCards = lists:map(fun(UsID) ->
-          User = mod_groupchat_users:get_user_by_id(Server,Chat,UsID),
+          User = mod_groups_users:get_user_by_id(Server,Chat,UsID),
           case User of
             none ->
               {none,none};
             _ ->
-              UserCard = mod_groupchat_users:form_user_card(User,Chat),
+              UserCard = mod_groups_users:form_user_card(User,Chat),
               {UsID, UserCard}
           end end, Users),
         UserCards = [{UID,Card}|| {UID,Card} <- AllUserCards, UID =/= none],

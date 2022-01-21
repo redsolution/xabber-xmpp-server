@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_present_sql.erl
+%%% File    : mod_groups_present_sql.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Watch for online activity in group chats
 %%% Created : 05 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_present_sql).
+-module(mod_groups_present_sql).
 -author('andrey.gagarin@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -include("ejabberd.hrl").

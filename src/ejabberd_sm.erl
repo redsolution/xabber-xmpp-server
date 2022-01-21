@@ -650,7 +650,7 @@ do_route(#presence{to = To, type = T} = Packet)
     ?DEBUG("processing subscription:~n~s", [xmpp:pp(Packet)]),
 	#jid{luser = LUser, lserver = LServer} = To,
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
-		group -> mod_groupchat_presence:process_presence(Packet);
+		group -> mod_groups_presence:process_presence(Packet);
 		channel -> mod_channel_presence:process_presence(Packet);
 		_ ->
 			case is_privacy_allow(Packet) andalso

@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_iq_handler.erl
+%%% File    : mod_groups_iq_handler.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Handle iq for group chats
 %%% Created : 9 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,14 +23,15 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_iq_handler).
+-module(mod_groups_iq_handler).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -behavior(gen_server).
 -include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
--export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, disco_sm_features/5, init/1, handle_call/3, handle_cast/2, terminate/2]).
+-export([start/2, stop/1, depends/2, mod_options/1, disco_sm_features/5,
+  init/1, handle_call/3, handle_cast/2, terminate/2]).
 -export([process_groupchat/1,process_iq/1,make_action/1]).
 
 %% records
@@ -45,12 +46,7 @@ stop(Host) ->
 depends(_Host, _Opts) ->
   [].
 
-mod_opt_type(xabber_global_indexs) ->
-  fun (L) -> lists:map(fun iolist_to_binary/1, L) end.
-
-mod_options(_Host) -> [
-  {xabber_global_indexs, []}
-].
+mod_options(_Host) -> [].
 
 init([Host, _Opts]) ->
   register_iq_handlers(Host),
@@ -84,7 +80,7 @@ handle_call(_Request, _From, _State) ->
 handle_cast({groupchat_created,Server,User,Chat,Lang}, State) ->
   case nick_generator:get_avatar_file(Server) of
     {ok, FileName, Bin} ->
-      mod_groupchat_vcard:publish_avatar(Chat, Bin, FileName);
+      mod_groups_vcard:publish_avatar(Chat, Bin, FileName);
     _ ->
       ok
   end,
@@ -94,7 +90,7 @@ handle_cast(_Request, State) ->
   {noreply, State}.
 
 process_iq(#iq{to = To} = Iq) ->
-  process_iq(mod_groupchat_sql:search_for_chat(To#jid.server,To#jid.user),Iq).
+  process_iq(mod_groups_sql:search_for_chat(To#jid.server,To#jid.user),Iq).
 
 process_iq({selected,[]},Iq) ->
   Iq;
@@ -146,7 +142,7 @@ process_groupchat(#iq{type=get, to= To, from = From,
   Server = To#jid.lserver,
   UserHost = From#jid.lserver,
   UserJid = jid:to_string(jid:remove_resource(From)),
-  Query = mod_groupchat_inspector:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
+  Query = mod_groups_inspector:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
   xmpp:make_iq_result(Iq,Query);
 process_groupchat(#iq{from = From, to = To, type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DELETE, cdata = Localpart}]} = IQ) ->
   Server = To#jid.lserver,
@@ -170,10 +166,10 @@ make_action(#iq{lang = Lang, to = To, from = From, type = get, sub_els = [#xmlel
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
   User = jid:to_string(jid:remove_resource(From)),
-  RightToBlock = mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,User,Chat),
-  case mod_groupchat_inspector_sql:check_user(User,Server,Chat) of
+  RightToBlock = mod_groups_restrictions:is_permitted(<<"set-restrictions">>,User,Chat),
+  case mod_groups_inspector_sql:check_user(User,Server,Chat) of
     exist when RightToBlock == true ->
-      ejabberd_router:route(xmpp:make_iq_result(Iq,mod_groupchat_block:query(To)));
+      ejabberd_router:route(xmpp:make_iq_result(Iq, mod_groups_block:query(To)));
     _ ->
       ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed("You do not have permission to see the list of blocked users.",Lang)))
   end;
@@ -199,11 +195,11 @@ make_action(#iq{to = To, type = set, sub_els = [#xmlel{name = <<"block">>,
   end;
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"jabber:iq:version">>}]}]} = Iq) ->
-  Result = mod_groupchat_vcard:give_client_vesrion(),
+  Result = mod_groups_vcard:give_client_vesrion(),
   ejabberd_router:route(xmpp:make_iq_result(Iq,Result));
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"jabber:iq:last">>}]}]} = Iq) ->
-  Result = mod_groupchat_vcard:iq_last(),
+  Result = mod_groups_vcard:iq_last(),
   ejabberd_router:route(xmpp:make_iq_result(Iq,Result));
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"time">>,
   attrs = [{<<"xmlns">>,<<"urn:xmpp:time">>}]}]} = Iq) ->
@@ -211,21 +207,21 @@ make_action(#iq{type = get, sub_els = [#xmlel{name = <<"time">>,
   ejabberd_router:route(R);
 make_action(#iq{type = result, sub_els = [#xmlel{name = <<"vCard">>,
   attrs = [{<<"xmlns">>,<<"vcard-temp">>}], children = _Children}]} = Iq) ->
-  mod_groupchat_vcard:handle(Iq);
+  mod_groups_vcard:handle(Iq);
 make_action(#iq{type = set, to = To, from = From,
   sub_els = [#xmlel{name = <<"update">>, attrs = [
   {<<"xmlns">>,?NS_GROUPCHAT}], children = _Children} = X]} = Iq) ->
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
   ChatJid = jid:to_string(jid:remove_resource(To)),
-  IsOwner = mod_groupchat_restrictions:is_owner(Server,ChatJid,User),
-  case mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,ChatJid) of
+  IsOwner = mod_groups_restrictions:is_owner(Server,ChatJid,User),
+  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,ChatJid) of
     true ->
       Xa = xmpp:decode(X),
       NewOwner = Xa#xabbergroupchat_update.owner,
       case NewOwner of
         undefined ->
-          case mod_groupchat_inspector:update_chat(Server,To,ChatJid,User,Xa) of
+          case mod_groups_inspector:update_chat(Server,To,ChatJid,User,Xa) of
             ok ->
               ejabberd_router:route(xmpp:make_iq_result(Iq));
             {error, Err} ->
@@ -235,19 +231,19 @@ make_action(#iq{type = set, to = To, from = From,
           Expires = <<"0">>,
           Rule1 = <<"owner">>,
           IssuedBy = User,
-          mod_groupchat_restrictions:insert_rule(Server,ChatJid,NewOwner,Rule1,Expires,IssuedBy),
-          mod_groupchat_restrictions:delete_rule(Server,ChatJid,User,<<"owner">>)
+          mod_groups_restrictions:insert_rule(Server,ChatJid,NewOwner,Rule1,Expires,IssuedBy),
+          mod_groups_restrictions:delete_rule(Server,ChatJid,User,<<"owner">>)
       end;
     _ ->
       ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed()))
   end;
 make_action(#iq{type = set, sub_els = [#xmlel{name = <<"pubsub">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}]}]} = Iq) ->
-  R = mod_groupchat_vcard:handle_pubsub(xmpp:decode_els(Iq)),
+  R = mod_groups_vcard:handle_pubsub(xmpp:decode_els(Iq)),
   ejabberd_router:route(R);
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"pubsub">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}]}]} = Iq) ->
-  R = mod_groupchat_vcard:handle_request(Iq),
+  R = mod_groups_vcard:handle_request(Iq),
   ejabberd_router:route(R);
 make_action(#iq{type = set, sub_els = [#xmlel{name = <<"invite">>,
   attrs = [{<<"xmlns">>,<<"https://xabber.com/protocol/groups#invite">>}]}]} = Iq) ->
@@ -287,11 +283,11 @@ make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
-  Query = case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>, User, Chat) of
+  Query = case mod_groups_restrictions:is_permitted(<<"set-restrictions">>, User, Chat) of
             true ->
-              mod_groupchat_inspector:get_invited_users(Server, Chat);
+              mod_groups_inspector:get_invited_users(Server, Chat);
             _ ->
-              mod_groupchat_inspector:get_invited_users(Server, Chat, User)
+              mod_groups_inspector:get_invited_users(Server, Chat, User)
           end,
   ResIq = xmpp:make_iq_result(Iq,Query),
   ejabberd_router:route(ResIq);
@@ -313,7 +309,7 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"revoke">>,
   DecEls = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
   Revoke = lists:keyfind(xabbergroupchat_revoke,1,DecEls),
   #xabbergroupchat_revoke{jid = User} = Revoke,
-  case mod_groupchat_inspector:revoke(Server,User,Chat,Admin) of
+  case mod_groups_inspector:revoke(Server,User,Chat,Admin) of
     ok ->
       ejabberd_hooks:run(revoke_invite, Server, [Chat, User]),
       ResIq = xmpp:make_iq_result(Iq),
@@ -327,7 +323,7 @@ make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
   ChatJID = jid:to_string(jid:tolower(jid:remove_resource(To))),
   Server = To#jid.lserver,
   {selected,[{Name,Anonymous,_Search,Model,Desc,_Message,_ContactList,_DomainList}]} =
-    mod_groupchat_sql:get_information_of_chat(ChatJID,Server),
+    mod_groups_sql:get_information_of_chat(ChatJID,Server),
   Identity = #xmlel{name = <<"identity">>,
   attrs = [{<<"category">>,<<"conference">>},{<<"type">>,<<"groupchat">>},{<<"name">>,Name}]},
   FeatureList = [<<"urn:xmpp:avatar:metadata">>,<<"urn:xmpp:avatar:data">>,
@@ -370,7 +366,7 @@ make_action(#iq{from = UserJID, to = ChatJID, type = result, sub_els = [#pubsub{
   try
     MD = lists:map(fun(E) -> xmpp:decode(E) end, Subs),
     Meta = lists:keyfind(avatar_meta,1,MD),
-    mod_groupchat_vcard:handle_pubsub(ChatJID,UserJID,Meta)
+    mod_groups_vcard:handle_pubsub(ChatJID,UserJID,Meta)
   catch _:_ ->
     ok
   end;
@@ -379,7 +375,7 @@ make_action(#iq{from = UserJID, to = ChatJID, type = result, sub_els = [#pubsub{
   try
     MD = lists:map(fun(E) -> xmpp:decode(E) end, Subs),
     Data = lists:keyfind(avatar_data,1,MD),
-    mod_groupchat_vcard:handle_pubsub(ChatJID,UserJID,Hash,Data)
+    mod_groups_vcard:handle_pubsub(ChatJID,UserJID,Hash,Data)
   catch _:_ ->
     ok
   end;
@@ -402,12 +398,12 @@ process_groupchat_iq(#iq{from = From, to = To, type = get,
   sub_els = [#xabber_retract_query{version = undefined, 'less-than' = undefined}]} = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  CheckUser = mod_groupchat_users:check_user(Server,jid:to_string(jid:remove_resource(From)),Chat),
+  CheckUser = mod_groups_users:check_user(Server,jid:to_string(jid:remove_resource(From)),Chat),
   case CheckUser of
     not_exist ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()));
     _ ->
-      Version = mod_groupchat_retract:get_version(Server,Chat),
+      Version = mod_groups_retract:get_version(Server,Chat),
       ejabberd_router:route(xmpp:make_iq_result(IQ, #xabber_retract_query{version=Version}))
   end,
   ignore;
@@ -422,7 +418,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = get,
         ejabberd_router:route(xmpp:make_iq_result(IQ)),
         ignore;
       too_much ->
-        CurrentVersion = mod_groupchat_retract:get_version(Server,Chat),
+        CurrentVersion = mod_groups_retract:get_version(Server,Chat),
         Invalidate = #xabber_retract_invalidate{version = CurrentVersion},
         ejabberd_router:route(#message{from = FromChat, to = From, id = randoms:get_string(), type = headline, sub_els = [Invalidate]}),
         ejabberd_router:route(xmpp:make_iq_result(IQ)),
@@ -448,10 +444,10 @@ process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergro
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   LServer = To#jid.lserver,
-  IsInChat = mod_groupchat_users:is_in_chat(LServer,Chat,User),
+  IsInChat = mod_groups_users:is_in_chat(LServer,Chat,User),
   case IsInChat of
     true ->
-      Res = mod_groupchat_users:get_user_from_chat(LServer,Chat,User,ID),
+      Res = mod_groups_users:get_user_from_chat(LServer,Chat,User,ID),
       ejabberd_router:route(xmpp:make_iq_result(IQ,Res));
     _ ->
       Err = xmpp:make_error(IQ,xmpp:err_not_allowed()),
@@ -461,10 +457,10 @@ process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergro
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   LServer = To#jid.lserver,
-  IsInChat = mod_groupchat_users:is_in_chat(LServer,Chat,User),
+  IsInChat = mod_groups_users:is_in_chat(LServer,Chat,User),
   case IsInChat of
     true ->
-      Res = mod_groupchat_users:get_users_from_chat(LServer,Chat,User,RSM,Version),
+      Res = mod_groups_users:get_users_from_chat(LServer,Chat,User,RSM,Version),
       ejabberd_router:route(xmpp:make_iq_result(IQ,Res));
     _ ->
       Err = xmpp:make_error(IQ,xmpp:err_not_allowed()),
@@ -485,11 +481,11 @@ end;
 process_groupchat_iq(#iq{to = To, type = get, sub_els = [#vcard_temp{}]} = IQ) ->
   LUser = To#jid.luser,
   Server = To#jid.lserver,
-  Vcard = mod_groupchat_vcard:get_vcard(LUser,Server),
+  Vcard = mod_groups_vcard:get_vcard(LUser,Server),
   ejabberd_router:route(xmpp:make_iq_result(IQ,Vcard));
 process_groupchat_iq(#iq{lang = Lang, type = get, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = []}]} = IQ) ->
     Chat = jid:to_string(jid:remove_resource(To)),
-  {selected,_Tables,Permissions} = mod_groupchat_restrictions:show_permissions(To#jid.lserver,Chat),
+  {selected,_Tables,Permissions} = mod_groups_restrictions:show_permissions(To#jid.lserver,Chat),
   TranslatedPermissions = lists:map(fun(N) ->
     [Name,Desc,Type,Action] = N,
     [Name,translate:translate(Lang,Desc),Type,Action] end, Permissions
@@ -498,10 +494,10 @@ process_groupchat_iq(#iq{lang = Lang, type = get, to = To, sub_els = [#xabbergro
 process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = Restrictions } = Query]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
-  Permission = mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat),
+  Permission = mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat),
   Result = case Permission of
              true when Restrictions =/= [] ->
-               mod_groupchat_default_restrictions:restrictions(Query,IQ);
+               mod_groups_default_restrictions:restrictions(Query,IQ);
              _ ->
                xmpp:err_not_allowed()
            end,
@@ -560,7 +556,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Version = mod_groupchat_retract:get_version(Server,Chat) + 1,
+  Version = mod_groups_retract:get_version(Server,Chat) + 1,
   Retract = #xabber_retract_message{
     symmetric = true,
     id = ID,
@@ -582,7 +578,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Version = mod_groupchat_retract:get_version(Server,Chat) + 1,
+  Version = mod_groups_retract:get_version(Server,Chat) + 1,
   Retract = #xabber_retract_user{
     id = ID,
     symmetric = true,
@@ -604,7 +600,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Version = mod_groupchat_retract:get_version(Server,Chat) + 1,
+  Version = mod_groups_retract:get_version(Server,Chat) + 1,
   Retract = #xabber_retract_all{
     symmetric = true,
     conversation = jid:remove_resource(To),
@@ -623,7 +619,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Version = mod_groupchat_retract:get_version(Server,Chat) + 1,
+  Version = mod_groups_retract:get_version(Server,Chat) + 1,
   NewEls = filter_from_server_stanzas(SubEls),
   Replaced = #replaced{stamp = erlang:timestamp()},
   StanzaID = #stanza_id{id = ID, by = jid:remove_resource(To)},
@@ -683,8 +679,8 @@ process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els 
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
-  FS1 = mod_groupchat_chats:filter_fixed_fields(FSRaw),
-  DecodedFS = mod_groupchat_chats:parse_status_query(FS1,Lang),
+  FS1 = mod_groups_chats:filter_fixed_fields(FSRaw),
+  DecodedFS = mod_groups_chats:parse_status_query(FS1,Lang),
   case DecodedFS of
     {ok,FS} ->
       Result = ejabberd_hooks:run_fold(group_status_change, Server, [], [User,Chat,Server,FS]),
@@ -839,16 +835,16 @@ process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
-  GlobalIndexs = mod_groupchat_presence:get_global_index(Server),
+  GlobalIndexs = mod_groups_presence:get_global_index(Server),
   IsIndex = lists:member(User,GlobalIndexs),
-  IsRestrictedToRead = mod_groupchat_restrictions:is_restricted(<<"read-messages">>,User,Chat),
-  IsAnon = mod_groupchat_chats:is_anonim(Server,Chat),
-  IsGlobalIndexed = mod_groupchat_chats:is_global_indexed(Server,Chat),
+  IsRestrictedToRead = mod_groups_restrictions:is_restricted(<<"read-messages">>,User,Chat),
+  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
+  IsGlobalIndexed = mod_groups_chats:is_global_indexed(Server,Chat),
   SubElD = xmpp:decode(SubEl),
   IQDecoded = #iq{from = To, lang = Lang, to = From, meta = Meta, sub_els = [SubElD], type = Type, id = Id},
   Query = get_query(SubElD,Lang),
   With = proplists:is_defined(with, Query),
-  case mod_groupchat_inspector_sql:check_user(User,Server,Chat) of
+  case mod_groups_inspector_sql:check_user(User,Server,Chat) of
     exist when IsRestrictedToRead == false andalso With =/= false ->
       WithValue = jid:to_string(proplists:get_value(with, Query)),
       M1 = change_id_to_jid(SubElD,Server,Chat,WithValue),
@@ -875,7 +871,7 @@ get_query(SubEl,Lang)->
 
 
 change_id_to_jid(Query,Server,Chat,ID) ->
-  JID = mod_groupchat_users:get_user_by_id(Server,Chat,ID),
+  JID = mod_groups_users:get_user_by_id(Server,Chat,ID),
   OldXData = Query#mam_query.xdata,
   NewFields = [
     #xdata_field{type = 'hidden', var = <<"FORM_TYPE">>, values = [Query#mam_query.xmlns]},

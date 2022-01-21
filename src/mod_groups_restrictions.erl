@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_restrictions.erl
+%%% File    : mod_groups_restrictions.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Manage restrictions and permissions in group chats
 %%% Created : 02 Jul 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_restrictions).
+-module(mod_groups_restrictions).
 -author('andrey.gagarin@redsolution.com').
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -73,7 +73,7 @@ set_rule(Server,Rule,Expires,User,Chat,Admin) ->
     true ->
       case validate_users(Server,Chat,Admin,User) of
         ok ->
-          mod_groupchat_users:update_user_status(Server,User,Chat),
+          mod_groups_users:update_user_status(Server,User,Chat),
           upsert_rule(Server,Chat,User,Rule,Expires,Admin),
           ok;
         _ ->

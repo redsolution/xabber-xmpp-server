@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_discovery.erl
+%%% File    : mod_groups_discovery.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Discovery for group chats on server
 %%% Created : 09 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,14 +23,14 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_discovery).
+-module(mod_groups_discovery).
 -author('andrey.gagarin@redsolution.com').
 -behaviour(gen_mod).
 
 %% API
 -export([start/2, stop/1, reload/3, process_disco_info/1, process_disco_items/1]).
 -export([disco_local_items/5, get_local_items/5, get_local_identity/5, get_local_features/5,
-  depends/2, mod_options/1, mod_opt_type/1]).
+  depends/2, mod_options/1]).
 -export([get_xabber_group_servers/1]).
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -66,16 +66,10 @@ reload(_Host, _NewOpts, _OldOpts) ->
 depends(_Host, _Opts) ->
   [{mod_adhoc, hard}, {mod_last, soft}].
 
-mod_opt_type(xabber_group_servers) ->
-  fun (L) -> lists:map(fun iolist_to_binary/1, L) end.
-
-mod_options(Host) -> [
-  {xabber_group_servers, [Host]}
-].
+mod_options(_Host) -> [].
 
 get_xabber_group_servers(LServer) ->
-  Servers = gen_mod:get_module_opt(LServer, ?MODULE,
-    xabber_group_servers),
+  Servers = gen_mod:get_module_opt(LServer, mod_groups, group_servers),
   lists:map(fun(JID) ->
   #disco_item{jid = jid:make(JID),
     node = ?NS_GROUPCHAT,
@@ -83,7 +77,7 @@ get_xabber_group_servers(LServer) ->
 
 get_local_items(Acc, _From, #jid{lserver = LServer} = _To,
     <<"">>, _Lang) ->
-  case gen_mod:is_loaded(LServer, mod_groupchat_discovery) of
+  case gen_mod:is_loaded(LServer, ?MODULE) of
     false -> Acc;
     _ ->
       Items = case Acc of

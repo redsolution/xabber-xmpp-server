@@ -488,10 +488,10 @@ sum(Acc,[F|R]) ->
   sum(Acc + F, R).
 
 xabber_registered_chats(Host,Limit,Page) ->
-  mod_groupchat_chats:get_all_info(Host,Limit,Page).
+  mod_groups_chats:get_all_info(Host,Limit,Page).
 
 xabber_registered_chats_count(Host) ->
-  mod_groupchat_chats:get_count_chats(Host).
+  mod_groups_chats:get_count_chats(Host).
 
 xabber_registered_users_count(Host) ->
   length(xabber_registered_users(Host)).
@@ -499,7 +499,7 @@ xabber_registered_users_count(Host) ->
 xabber_register_chat(Server,Creator,Host,Name,LocalJid,Anon,Searchable,Model,Description) ->
   case validate(Anon,Searchable,Model) of
     ok ->
-      case mod_groupchat_inspector:create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,Model,undefined,undefined,undefined) of
+      case mod_groups_inspector:create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,Model,undefined,undefined,undefined) of
         {ok, _Created} ->
           ok;
         _ ->

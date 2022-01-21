@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_block.erl
+%%% File    : mod_groups_block.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Check if user was blocked in group chat
 %%% Created : 16 Jul 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_block).
+-module(mod_groups_block).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -include("ejabberd.hrl").
@@ -87,14 +87,14 @@ validate_data(D, #iq{from = From, to = To}) ->
   UserContainsHimself = lists:member({block_jid,Admin},UserJID),
   ValidateUserJIDList = lists:map(fun(UserByJID) ->
     {_Type, UserJ} = UserByJID,
-    mod_groupchat_restrictions:validate_users(Server,Chat,Admin,UserJ) end, UserJID
+    mod_groups_restrictions:validate_users(Server,Chat,Admin,UserJ) end, UserJID
   ),
   ValidateUserIDList = case IDsContainsNonExistedUsers of
                          true ->
                            [not_ok];
                          _ ->
                            lists:map(fun(UserByID) ->
-                             mod_groupchat_restrictions:validate_users(Server,Chat,Admin,UserByID) end, UsersToBlock)
+                             mod_groups_restrictions:validate_users(Server,Chat,Admin,UserByID) end, UsersToBlock)
                        end,
   NotValidJIDs = lists:member(not_ok,ValidateUserJIDList),
   NotValidIDs = lists:member(not_ok,ValidateUserIDList),
@@ -120,7 +120,7 @@ block_iq_handler(D, #iq{to = To, from = From}) ->
   OJ = check(jid,OwnerJIDs,D#xabbergroup_block.jid),
   OS = check(domain,OwnerDomains,D#xabbergroup_block.domain),
   OId = check(id,OwnerIDS,D#xabbergroup_block.id),
-  case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
     true when OJ == false andalso OS == false andalso OId == false ->
       D;
     _ ->
@@ -134,7 +134,7 @@ unblock_iq_handler(_Acc, #iq{to = To, from = From, sub_els = Sub}) ->
   [El] = Sub,
   D = xmpp:decode(El),
   Elements = D#xabbergroup_unblock.domain ++ D#xabbergroup_unblock.jid ++ D#xabbergroup_unblock.id,
-  case mod_groupchat_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
+  case mod_groups_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
     true ->
       unblock_elements(Elements,Server,Chat);
     _ ->
@@ -218,11 +218,11 @@ show_elements(Server,Chat) ->
 %%%%
 check_if_exist(Server,User,Chat,Admin) ->
   block(Server,User,<<"user">>,Admin,Chat),
-  case mod_groupchat_users:check_user(Server,User,Chat) of
+  case mod_groups_users:check_user(Server,User,Chat) of
     not_exist ->
       false;
     _ ->
-      Card = mod_groupchat_users:form_user_card(User,Chat),
+      Card = mod_groups_users:form_user_card(User,Chat),
       {true,Card}
   end.
 
@@ -245,7 +245,7 @@ block_elements(D, #iq{to = To, from = From} = Iq)->
           no_id ->
             false;
           _ ->
-            Card = mod_groupchat_users:form_user_card(UserName,Chat),
+            Card = mod_groups_users:form_user_card(UserName,Chat),
             {true,Card}
         end;
       _ ->
@@ -260,7 +260,7 @@ block_elements(D, #iq{to = To, from = From} = Iq)->
       block_domain when Cdata =/= OwnerServer->
         block(Server,Cdata,<<"domain">>,Admin,Chat);
       block_jid when Cdata =/= Owner->
-        mod_groupchat_inspector:kick_user(Server,Cdata,Chat);
+        mod_groups_inspector:kick_user(Server,Cdata,Chat);
       block_id when Cdata =/= OwnerId ->
         UserName = get_name_by_id(Server,Cdata),
         case UserName of
@@ -268,12 +268,12 @@ block_elements(D, #iq{to = To, from = From} = Iq)->
             ok;
           _ ->
             block_by_id(Server,Cdata,Admin,Chat),
-            mod_groupchat_inspector:kick_user(Server,UserName,Chat)
+            mod_groups_inspector:kick_user(Server,UserName,Chat)
         end;
       _ ->
         {stop,not_ok}
     end end, Elements),
-  mod_groupchat_service_message:users_blocked(Kicked, Iq),
+  mod_groups_system_message:users_blocked(Kicked, Iq),
   D.
 
 unblock_elements([],_Server,_Chat)->

@@ -6,7 +6,7 @@
 %%% @end
 %%% Created : 20. нояб. 2020 11:48
 %%%-------------------------------------------------------------------
--module(xabber_groups_sm).
+-module(groups_sm).
 -author("andrey.gagarin@redsolution.ru").
 
 -behaviour(gen_server).
@@ -86,17 +86,17 @@ handle_cast(_Request, State = #xabber_sm_state{}) ->
   {noreply, NewState :: #xabber_sm_state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #xabber_sm_state{}}).
 handle_info({route, #presence{} = Packet}, State = #xabber_sm_state{}) ->
-  mod_groupchat_presence:process_presence(Packet),
+  mod_groups_presence:process_presence(Packet),
   {noreply, State};
 handle_info({route, #iq{} = Packet}, State = #xabber_sm_state{}) ->
-  mod_groupchat_iq_handler:make_action(Packet),
+  mod_groups_iq_handler:make_action(Packet),
   {noreply, State};
 handle_info({route, #message{} = Packet}, State = #xabber_sm_state{}) ->
   {LUser, LServer, _} = jid:tolower(Packet#message.to),
   ProcName = binary_to_atom(<<LUser/binary,$_,LServer/binary,"_messages">>, utf8),
   Proc = case whereis(ProcName) of
            undefined ->
-             PID = spawn(mod_groupchat_messages,process_messages,[]),
+             PID = spawn(mod_groups_messages,process_messages,[]),
              register(ProcName, PID),
              PID;
             PID ->
@@ -131,7 +131,7 @@ code_change(_OldVsn, State = #xabber_sm_state{}, _Extra) ->
 
 start_entities(Pid) ->
   lists:map(fun(Host) ->
-    Groups = mod_groupchat_chats:get_all(Host),
+    Groups = mod_groups_chats:get_all(Host),
     start_entities(Groups,Host,Pid,<<"Group">>)
             end, ?MYHOSTS
   ).

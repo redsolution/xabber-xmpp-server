@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_presence.erl
+%%% File    : mod_groups_presence.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Work with presence in group chats
 %%% Created : 17 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,15 +23,15 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_presence).
+-module(mod_groups_presence).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -behavior(gen_server).
 -include("logger.hrl").
 -include("xmpp.hrl").
--include("mod_groupchat_present.hrl").
+-include("mod_groups_present.hrl").
 -export([init/1, handle_call/3, handle_cast/2, terminate/2]).
--export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1]).
+-export([start/2, stop/1, depends/2, mod_options/1]).
 -export([
          form_presence/2, form_presence/1,
          form_presence_unavailable/0,
@@ -59,12 +59,7 @@ stop(Host) ->
 
 depends(_Host, _Opts) ->  [].
 
-mod_opt_type(xabber_global_indexs) ->
-  fun (L) -> lists:map(fun iolist_to_binary/1, L) end.
-
-mod_options(_Host) -> [
-  {xabber_global_indexs, []}
-].
+mod_options(_Host) -> [].
 
 init([Host, _Opts]) ->
   register_hooks(Host),
@@ -90,7 +85,7 @@ handle_call(_Request, _From, _State) ->
 handle_cast(#presence{to = To} = Presence, State) ->
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
-  process_presence(mod_groupchat_chats:get_chat_active(Server,Chat),Presence),
+  process_presence(mod_groups_chats:get_chat_active(Server,Chat),Presence),
   {noreply, State};
 handle_cast(_Request, State) ->
   {noreply, State}.
@@ -119,16 +114,16 @@ revoke_invite(Chat,User) ->
 groupchat_changed(LServer, Chat, _User, ChatProperties, Status) ->
   ChatJID = jid:from_string(Chat),
   FromChat = jid:replace_resource(ChatJID,<<"Group">>),
-  Users = mod_groupchat_users:user_list_to_send(LServer,Chat),
+  Users = mod_groups_users:user_list_to_send(LServer,Chat),
   case Status of
     <<"inactive">> ->
       maybe_send_to_index(LServer, Chat, ChatProperties),
-      Ss = mod_groupchat_present_mnesia:select_sessions('_', ChatJID),
+      Ss = mod_groups_present_mnesia:select_sessions('_', ChatJID),
       lists:foreach(fun(Session) ->
-        mod_groupchat_present_mnesia:delete_session(Session) end, Ss),
+        mod_groups_present_mnesia:delete_session(Session) end, Ss),
       send_presence(form_presence_unavailable(Chat),Users,FromChat);
     _ ->
-      {HumanStatus, Show} = mod_groupchat_chats:define_human_status_and_show(LServer, Chat, Status),
+      {HumanStatus, Show} = mod_groups_chats:define_human_status_and_show(LServer, Chat, Status),
       maybe_send_to_index(LServer, Chat, ChatProperties),
       send_presence(form_presence(Chat,Show,HumanStatus),Users,FromChat)
   end.
@@ -162,11 +157,11 @@ form_presence_with_type(LServer, User, Chat, Type) ->
   From = jid:replace_resource(ChatJID,<<"Group">>),
   To = jid:from_string(User),
   {selected,[{Name,Anonymous,_Search,_Model,_Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
-    mod_groupchat_chats:get_all_information_chat(Chat,LServer),
-  {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(LServer,Chat),
+    mod_groups_chats:get_all_information_chat(Chat,LServer),
+  {selected,_Ct,MembersC} = mod_groups_sql:count_users(LServer,Chat),
   Members = list_to_binary(MembersC),
-  {CollectState,P2PState} = mod_groupchat_inspector:get_collect_state(Chat,User),
-  Hash = mod_groupchat_inspector:get_chat_avatar_id(Chat),
+  {CollectState,P2PState} = mod_groups_inspector:get_collect_state(Chat,User),
+  Hash = mod_groups_inspector:get_chat_avatar_id(Chat),
   VcardX = #vcard_xupdate{hash = Hash},
   SubEls = case ParentChat of
              <<"0">> ->
@@ -199,7 +194,7 @@ form_presence_with_type(LServer, User, Chat, Type) ->
            end,
   {HumanStatus, Show} = case ParentChat of
                   <<"0">> ->
-                    mod_groupchat_chats:define_human_status_and_show(LServer, Chat, Status);
+                    mod_groups_chats:define_human_status_and_show(LServer, Chat, Status);
                   _ ->
                     {[#text{data = <<"Private chat">>}],undefined}
                 end,
@@ -208,7 +203,7 @@ form_presence_with_type(LServer, User, Chat, Type) ->
 process_presence(#presence{to=To} = Presence) ->
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
-  process_presence(mod_groupchat_chats:get_chat_active(Server,Chat),Presence).
+  process_presence(mod_groups_chats:get_chat_active(Server,Chat),Presence).
 
 process_presence({selected,[]},Packet) ->
   Packet;
@@ -244,7 +239,7 @@ answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
       Server = To#jid.lserver,
       Chat = jid:to_string(jid:remove_resource(To)),
       User = jid:to_string(jid:remove_resource(From)),
-      case mod_groupchat_inspector_sql:delete_user_from_chat(User,Server,Chat) of
+      case mod_groups_inspector_sql:delete_user_from_chat(User,Server,Chat) of
         ok ->
           ejabberd_router:route(To,From,#presence{type = unsubscribe});
         _ ->
@@ -266,12 +261,12 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
       {collect,Status} = Collect,
       case Status of
         <<"false">> ->
-          mod_groupchat_inspector:block_parse_chat(Server,User,ChatJid);
+          mod_groups_inspector:block_parse_chat(Server,User,ChatJid);
         <<"true">> ->
-          mod_groupchat_inspector:unblock_parse_chat(Server,User,ChatJid)
+          mod_groups_inspector:unblock_parse_chat(Server,User,ChatJid)
       end
   end,
-  IsAnon = mod_groupchat_inspector:is_anonim(Server,ChatJid),
+  IsAnon = mod_groups_inspector:is_anonim(Server,ChatJid),
   PeerToPeer = lists:keyfind(xabbergroup_peer,1,Decoded),
   case PeerToPeer of
     false ->
@@ -281,7 +276,7 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
       ValidStates = [<<"true">>,<<"false">>],
       case lists:member(PeerState,ValidStates) of
         true when IsAnon == yes ->
-          mod_groupchat_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
+          mod_groups_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
         _ ->
           ?DEBUG("Not change state",[])
       end
@@ -294,7 +289,7 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
     _ ->
       ejabberd_router:route(form_presence_with_type(Server, User, ChatJid, subscribed)),
       ejabberd_router:route(form_presence_with_type(Server, User, ChatJid, subscribe)),
-      ejabberd_router:route(FromChat,From,mod_groupchat_vcard:get_pubsub_meta())
+      ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta())
   end;
 answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) ->
   Server = To#jid.lserver,
@@ -305,7 +300,7 @@ answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) -
     ok ->
       User = jid:to_string(jid:remove_resource(From)),
       ejabberd_router:route(form_presence_with_type(Server, User, Chat, subscribed)),
-      ejabberd_router:route(FromChat,From,mod_groupchat_vcard:get_pubsub_meta());
+      ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta());
     not_ok ->
       ejabberd_router:route(FromChat,From,form_unsubscribed_presence());
     _ ->
@@ -315,12 +310,12 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
-  UserCard = mod_groupchat_users:form_user_card(User,Chat),
+  UserCard = mod_groups_users:form_user_card(User,Chat),
   ChatJIDRes = jid:replace_resource(ChatJID,<<"Group">>),
   Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
   case Result of
     ok ->
-      mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
+      mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
     alone ->
@@ -332,15 +327,15 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
-  Exist = mod_groupchat_inspector_sql:check_user(User,Server,Chat),
+  Exist = mod_groups_inspector_sql:check_user(User,Server,Chat),
   case Exist of
     exist ->
-      UserCard = mod_groupchat_users:form_user_card(User,Chat),
+      UserCard = mod_groups_users:form_user_card(User,Chat),
       ChatJIDRes = jid:replace_resource(ChatJID,<<"Group">>),
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
       case Result of
         ok ->
-          mod_groupchat_present_mnesia:delete_all_user_sessions(User,Chat),
+          mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
         alone ->
@@ -361,7 +356,7 @@ answer_presence(From, To, SubEls)->
   Resource = From#jid.lresource,
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
-  Status = mod_groupchat_inspector_sql:check_user(User,Server,ChatJid),
+  Status = mod_groups_inspector_sql:check_user(User,Server,ChatJid),
   Key = lists:keyfind(vcard_xupdate,1, SubEls),
   Collect = lists:keyfind(collect,1, SubEls),
   case Collect of
@@ -371,14 +366,14 @@ answer_presence(From, To, SubEls)->
       {collect,CStatus} = Collect,
       case CStatus of
         <<"false">> ->
-          mod_groupchat_inspector:block_parse_chat(Server,User,ChatJid);
+          mod_groups_inspector:block_parse_chat(Server,User,ChatJid);
         <<"true">> ->
-          mod_groupchat_inspector:unblock_parse_chat(Server,User,ChatJid)
+          mod_groups_inspector:unblock_parse_chat(Server,User,ChatJid)
       end
   end,
   NewHash = search_for_hash(Key),
-  OldHash = mod_groupchat_sql:get_hash(Server,User),
-  IsAnon = mod_groupchat_inspector:is_anonim(Server,ChatJid),
+  OldHash = mod_groups_sql:get_hash(Server,User),
+  IsAnon = mod_groups_inspector:is_anonim(Server,ChatJid),
   case NewHash of
     OldHash ->
       ok;
@@ -387,7 +382,7 @@ answer_presence(From, To, SubEls)->
     undefined ->
       ok;
     _ when IsAnon == no->
-      ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From),mod_groupchat_vcard:get_vcard());
+      ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From), mod_groups_vcard:get_vcard());
     _ ->
       ok
   end,
@@ -400,7 +395,7 @@ answer_presence(From, To, SubEls)->
       ValidStates = [<<"true">>,<<"false">>],
       case lists:member(PeerState,ValidStates) of
         true when IsAnon == yes ->
-          mod_groupchat_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
+          mod_groups_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
         _ ->
           ok
       end
@@ -411,17 +406,17 @@ answer_presence(From, To, SubEls)->
   PresentNum = get_present(ChatJid),
   if
     Present == false andalso NotPresent == false andalso Status == exist ->
-      mod_groupchat_vcard:make_chat_notification_message(Server,ChatJid,From),
+      mod_groups_vcard:make_chat_notification_message(Server,ChatJid,From),
       ejabberd_router:route(FromChat,From,form_presence(ChatJid,User)),
       if
         IsAnon == no ->
-          mod_groupchat_vcard:maybe_update_avatar(From,To,Server);
+          mod_groups_vcard:maybe_update_avatar(From,To,Server);
         true -> ok
       end;
     Present =/= false andalso NotPresent == false andalso Status == exist ->
-      mod_groupchat_sql:update_last_seen(Server,User,ChatJid),
-      Result = mod_groupchat_present_mnesia:set_session(Resource, User, ChatJid),
-      Sessions = mod_groupchat_present_mnesia:select_sessions(User, ChatJid),
+      mod_groups_sql:update_last_seen(Server,User,ChatJid),
+      Result = mod_groups_present_mnesia:set_session(Resource, User, ChatJid),
+      Sessions = mod_groups_present_mnesia:select_sessions(User, ChatJid),
       LS = length(Sessions),
       if
         LS > 1 -> ignore;
@@ -435,7 +430,7 @@ answer_presence(From, To, SubEls)->
   end.
 
 get_present(Chat) ->
-  ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',Chat),
+  ChatSessions = mod_groups_present_mnesia:select_sessions('_',Chat),
   AllUsersSession = [{X,Y}||{chat_session,_ID,_Z,X,Y} <- ChatSessions],
   UniqueOnline = lists:usort(AllUsersSession),
   Present = integer_to_binary(length(UniqueOnline)),
@@ -447,8 +442,8 @@ change_present_state(To,From) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Username = jid:to_string(jid:remove_resource(From)),
   PresentNum = get_present(Chat),
-  mod_groupchat_present_mnesia:delete_session(Resource,Username,Chat),
-  mod_groupchat_sql:update_last_seen(Server,Username,Chat),
+  mod_groups_present_mnesia:delete_session(Resource,Username,Chat),
+  mod_groups_sql:update_last_seen(Server,Username,Chat),
   send_notification(From, To, PresentNum).
 
 send_notification(From, To, PresentNum) ->
@@ -465,7 +460,7 @@ send_notification(From, To, PresentNum) ->
   end.
 
 get_users_with_session(Chat) ->
-  SS = mod_groupchat_present_mnesia:select_sessions('_',Chat),
+  SS = mod_groups_present_mnesia:select_sessions('_',Chat),
   Users = [{U,R}||{chat_session,_ID,R,U,_C} <- SS],
   lists:map(fun(UR) ->
     {U,R} = UR,
@@ -476,13 +471,12 @@ get_users_with_session(Chat) ->
   ).
 
 get_global_index(Server) ->
-  gen_mod:get_module_opt(Server, ?MODULE,
-    xabber_global_indexs).
+  gen_mod:get_module_opt(Server, mod_groups, global_indexs).
 
 send_message_to_index(ChatJID, Message) ->
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  IsGlobalIndexed = mod_groupchat_chats:is_global_indexed(Server,Chat),
+  IsGlobalIndexed = mod_groups_chats:is_global_indexed(Server,Chat),
   case IsGlobalIndexed of
     yes ->
       GlobalIndexs = get_global_index(Server),
@@ -497,7 +491,7 @@ send_message_to_index(ChatJID, Message) ->
   end.
 
 send_info_to_index(Server,Chat) ->
-  IsGlobalIndexed = mod_groupchat_chats:is_global_indexed(Server,Chat),
+  IsGlobalIndexed = mod_groups_chats:is_global_indexed(Server,Chat),
   case IsGlobalIndexed of
     yes ->
       send_presence_to_index(Server, Chat);
@@ -510,10 +504,10 @@ send_presence_to_index(Server, Chat) ->
   ChatJID = jid:from_string(Chat),
   lists:foreach(fun(Index) ->
     {selected,[{Name,Anonymous,IndexValue,Model,Desc,Message,_ContactList,_DomainList,ParentChat,Status}]} =
-      mod_groupchat_chats:get_all_information_chat(Chat,Server),
+      mod_groups_chats:get_all_information_chat(Chat,Server),
     {HumanStatus, Show} =  case ParentChat of
                              <<"0">> ->
-                               mod_groupchat_chats:define_human_status_and_show(Server, Chat, Status);
+                               mod_groups_chats:define_human_status_and_show(Server, Chat, Status);
                              _ ->
                                {[#text{data = <<"Private chat">>}],undefined}
                            end,
@@ -525,7 +519,7 @@ send_presence_to_index(Server, Chat) ->
              end,
     Groupchat_x = #xabbergroupchat_x{
       xmlns = ?NS_GROUPCHAT,
-      members = integer_to_binary(mod_groupchat_chats:count_users(Server,Chat)),
+      members = integer_to_binary(mod_groups_chats:count_users(Server,Chat)),
       parent = Parent,
       sub_els =
       [
@@ -576,11 +570,11 @@ form_presence(Chat,User) ->
   ChatJID = jid:from_string(Chat),
   LServer = ChatJID#jid.lserver,
   {selected,[{Name,Anonymous,_Search,_Model,_Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
-    mod_groupchat_chats:get_all_information_chat(Chat,LServer),
-  {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(LServer,Chat),
+    mod_groups_chats:get_all_information_chat(Chat,LServer),
+  {selected,_Ct,MembersC} = mod_groups_sql:count_users(LServer,Chat),
   Members = list_to_binary(MembersC),
-  {CollectState,P2PState} = mod_groupchat_inspector:get_collect_state(Chat,User),
-  Hash = mod_groupchat_inspector:get_chat_avatar_id(Chat),
+  {CollectState,P2PState} = mod_groups_inspector:get_collect_state(Chat,User),
+  Hash = mod_groups_inspector:get_chat_avatar_id(Chat),
   VcardX = #vcard_xupdate{hash = Hash},
   SubEls = case ParentChat of
              <<"0">> ->
@@ -613,7 +607,7 @@ form_presence(Chat,User) ->
            end,
   {HumanStatus, Show} = case ParentChat of
                   <<"0">> ->
-                    mod_groupchat_chats:define_human_status_and_show(LServer, Chat, Status);
+                    mod_groups_chats:define_human_status_and_show(LServer, Chat, Status);
                   _ ->
                     {[#text{data = <<"Private chat">>}],undefined}
                 end,
@@ -625,8 +619,8 @@ info_about_chat(ChatJid) ->
   S = jid:from_string(ChatJid),
   Server = S#jid.lserver,
   {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,ParentChat,Status}]} =
-    mod_groupchat_chats:get_all_information_chat(ChatJid,Server),
-  ChatSessions = mod_groupchat_present_mnesia:select_sessions('_',ChatJid),
+    mod_groups_chats:get_all_information_chat(ChatJid,Server),
+  ChatSessions = mod_groups_present_mnesia:select_sessions('_',ChatJid),
   AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
   UniqueOnline = lists:usort(AllUsersSession),
   Present = case Status of
@@ -637,7 +631,7 @@ info_about_chat(ChatJid) ->
             end,
   {HumanStatus, Show} =  case ParentChat of
                    <<"0">> ->
-                     mod_groupchat_chats:define_human_status_and_show(Server, ChatJid, Status);
+                     mod_groups_chats:define_human_status_and_show(Server, ChatJid, Status);
                    _ ->
                      {[#text{data = <<"Private chat">>}],undefined}
                  end,
@@ -649,7 +643,7 @@ info_about_chat(ChatJid) ->
            end,
   {#xabbergroupchat_x{
       xmlns = ?NS_GROUPCHAT,
-      members = integer_to_binary(mod_groupchat_chats:count_users(Server,ChatJid)),
+      members = integer_to_binary(mod_groups_chats:count_users(Server,ChatJid)),
       present = Present,
       parent = Parent,
       sub_els =

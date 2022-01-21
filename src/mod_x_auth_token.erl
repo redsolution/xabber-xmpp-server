@@ -342,7 +342,7 @@ uri(User) ->
   #xabber_groupchat_mention{cdata = XMPP}.
 
 bin_len(Bin) ->
-  mod_groupchat_messages:binary_length(Bin).
+  mod_groups_messages:binary_length(Bin).
 
 newtokenmsg(ClientInfo,DeviceInfo,UID,BareJID,IP) ->
   User = jid:to_string(BareJID),

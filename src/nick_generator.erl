@@ -72,8 +72,7 @@ mod_options(_Host) ->
     pre_generated_images_count
   ].
 
-depends(_, _) ->
-  [{mod_groupchat_vcard, hard}].
+depends(_, _) -> [].
 
 init([Host, _Opts]) ->
   pre_generation(Host),

@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_vcard.erl
+%%% File    : mod_groups_vcard.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Storage vcard of group chat users
 %%% Created : 17 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_vcard).
+-module(mod_groups_vcard).
 -behavior(gen_mod).
 -author('andrey.gagarin@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
@@ -92,7 +92,7 @@ handle_decoded_request(Iq) ->
   Server = To#jid.lserver,
   UserJid = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
-  UserId = mod_groupchat_inspector:get_user_id(Server,UserJid,Chat),
+  UserId = mod_groups_inspector:get_user_id(Server,UserJid,Chat),
   NewIq = #iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = Decoded},
   Result = case Node of
     <<"urn:xmpp:avatar:data">> ->
@@ -151,13 +151,13 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Permission = mod_groupchat_restrictions:is_permitted(<<"change-group">>,User,Chat),
-  CanChangeAva = mod_groupchat_restrictions:is_permitted(<<"change-users">>,User,Chat),
+  Permission = mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat),
+  CanChangeAva = mod_groups_restrictions:is_permitted(<<"change-users">>,User,Chat),
   Pubsub = lists:keyfind(pubsub,1,Decoded),
   #pubsub{publish = Publish} = Pubsub,
   #ps_publish{node = Node, items = Items} = Publish,
   Item = lists:keyfind(ps_item,1,Items),
-  UserId = mod_groupchat_inspector:get_user_id(Server,User,Chat),
+  UserId = mod_groups_inspector:get_user_id(Server,User,Chat),
   UserDataNodeId = <<"urn:xmpp:avatar:data#",UserId/binary>>,
   UserMetadataNodeId = <<"urn:xmpp:avatar:metadata#",UserId/binary>>,
   UserNickNodeId = <<"http://jabber.org/protocol/nick#",UserId/binary>>,
@@ -257,8 +257,8 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                NewDecoded = [NewPubsub],
                mod_pubsub:iq_sm(#iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = NewDecoded});
              <<"urn:xmpp:avatar:data#",SomeUserId/binary>> when CanChangeAva == true ->
-               SomeUser = mod_groupchat_inspector:get_user_by_id(Server,Chat,SomeUserId),
-               case mod_groupchat_restrictions:validate_users(Server,Chat,User,SomeUser) of
+               SomeUser = mod_groups_inspector:get_user_by_id(Server,Chat,SomeUserId),
+               case mod_groups_restrictions:validate_users(Server,Chat,User,SomeUser) of
                  ok when SomeUser =/= none ->
                    #ps_item{id = ItemId,sub_els = [Sub]} = Item,
                    #avatar_data{data = Data} = xmpp:decode(Sub),
@@ -268,11 +268,11 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                    xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,Lang))
                end;
              <<"urn:xmpp:avatar:metadata#",SomeUserId/binary>> when CanChangeAva == true ->
-               SomeUser = mod_groupchat_inspector:get_user_by_id(Server,Chat,SomeUserId),
+               SomeUser = mod_groups_inspector:get_user_by_id(Server,Chat,SomeUserId),
                #ps_item{id = IdItem} = Item,
                case IdItem of
                  <<>> when SomeUser =/= none->
-                   case mod_groupchat_restrictions:validate_users(Server,Chat,User,SomeUser) of
+                   case mod_groups_restrictions:validate_users(Server,Chat,User,SomeUser) of
                      ok ->
                        update_metadata_user_put_by_id(Server, SomeUserId, IdItem, <<>>, <<>>, Chat),
                        ItemsD = lists:map(fun(E) -> xmpp:decode(E) end, Items),
@@ -290,7 +290,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                        xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,Lang))
                    end;
                  _  when SomeUser =/= none ->
-                   case mod_groupchat_restrictions:validate_users(Server,Chat,User,SomeUser) of
+                   case mod_groups_restrictions:validate_users(Server,Chat,User,SomeUser) of
                      ok ->
                        SomeUserMetadataNodeId = <<"urn:xmpp:avatar:metadata#",SomeUserId/binary>>,
                        #ps_item{sub_els = [Sub]} = Item,
@@ -333,8 +333,8 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
 notificate_all(ChatJID,Message) ->
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   FromChat = jid:replace_resource(ChatJID,?RESOURCE),
-  {selected, AllUsers} = mod_groupchat_sql:user_list_to_send(ChatJID#jid.lserver,Chat),
-  mod_groupchat_messages:send_message(Message,AllUsers,FromChat).
+  {selected, AllUsers} = mod_groups_sql:user_list_to_send(ChatJID#jid.lserver,Chat),
+  mod_groups_messages:send_message(Message,AllUsers,FromChat).
 
 change_nick_in_vcard(LUser,LServer,NewNick) ->
   [OldVcard|_R] = mod_vcard:get_vcard(LUser,LServer),
@@ -425,7 +425,7 @@ maybe_update_avatar(User, Chat, Server) ->
     chatgroup not in (select jid from groupchats where anonymous = 'incognito')")) of
     {selected, [{<<"yes">>}]} ->
       From = jid:replace_resource(Chat, ?RESOURCE),
-      ejabberd_router:route(From,jid:remove_resource(User),mod_groupchat_vcard:get_pubsub_meta());
+      ejabberd_router:route(From,jid:remove_resource(User), mod_groups_vcard:get_pubsub_meta());
     _ ->
       ok
   end.
@@ -493,7 +493,7 @@ handle_pubsub(_C,_U,_I,false) ->
   ok.
 
 update_vcard(Server,User,D,_Chat) ->
-  Status = mod_groupchat_sql:get_update_status(Server,User),
+  Status = mod_groups_sql:get_update_status(Server,User),
 %%  Photo = set_value(D#vcard_temp.photo),
   FN = set_value(D#vcard_temp.fn),
   LF = get_lf(D#vcard_temp.n),
@@ -578,18 +578,18 @@ send_notifications_about_nick_change(Server,User) ->
   lists:foreach(fun(El) ->
     {Chat} = El,
     M = notification_message_about_nick(User, Server, Chat),
-    mod_groupchat_service_message:send_to_all(Chat,M) end, ChatAndIds).
+    mod_groups_system_message:send_to_all(Chat,M) end, ChatAndIds).
 
 send_notifications(ChatAndIds,User,Server) ->
   lists:foreach(fun(El) ->
     {Chat,_Hash} = El,
     M = notification_message(User, Server, Chat),
-    mod_groupchat_service_message:send_to_all(Chat,M) end, ChatAndIds).
+    mod_groups_system_message:send_to_all(Chat,M) end, ChatAndIds).
 
 notification_message(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),?RESOURCE),
-  ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
-  Version = mod_groupchat_users:current_chat_version(Server,Chat),
+  ByUserCard = mod_groups_users:form_user_card(User,Chat),
+  Version = mod_groups_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
@@ -600,8 +600,8 @@ notification_message(User, Server, Chat) ->
 
 notification_message_about_nick(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),?RESOURCE),
-  ByUserCard = mod_groupchat_users:form_user_card(User,Chat),
-  Version = mod_groupchat_users:current_chat_version(Server,Chat),
+  ByUserCard = mod_groups_users:form_user_card(User,Chat),
+  Version = mod_groups_users:current_chat_version(Server,Chat),
   X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
@@ -699,7 +699,7 @@ get_photo_data(Server,Hash,UserNode,_User,Chat) ->
   end.
 
 get_vcard_avatar(Server,Hash,UserID,UserNode,Chat) ->
-  IsAnon = mod_groupchat_chats:is_anonim(Server,Chat),
+  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(username)s from groupchat_users
@@ -851,7 +851,7 @@ get_image_metadata_by_id(Server, UserID, Chat) ->
   end.
 
 get_vcard_avatar(Server,Chat,User) ->
-  IsAnon = mod_groupchat_chats:is_anonim(Server,Chat),
+  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(image)s,@(hash)s,@(image_type)s from groupchat_users_vcard
@@ -1115,13 +1115,13 @@ delete_file(Server, Hash, AvatarType) ->
 get_vcard(LUser,Server) ->
   Chat = jid:to_string(jid:make(LUser,Server)),
   {selected,[{Name,Privacy,Index,Membership,Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
-    mod_groupchat_chats:get_all_information_chat(Chat,Server),
+    mod_groups_chats:get_all_information_chat(Chat,Server),
   Parent = define_parent_chat(ParentChat),
-  {selected,_Ct,MembersC} = mod_groupchat_sql:count_users(Server,Chat),
+  {selected,_Ct,MembersC} = mod_groups_sql:count_users(Server,Chat),
   Members = list_to_binary(MembersC),
   HumanStatus = case ParentChat of
                   <<"0">> ->
-                    mod_groupchat_chats:define_human_status(Server, Chat, Status);
+                    mod_groups_chats:define_human_status(Server, Chat, Status);
                   _ ->
                     <<"Private chat">>
                 end,

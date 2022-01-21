@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_retract.erl
+%%% File    : mod_groups_retract.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Retract messages in group chats
 %%% Created : 06 Nov 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_retract).
+-module(mod_groups_retract).
 -author('andrey.gagarin@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
@@ -106,7 +106,7 @@ mod_options(_Opts) -> [].
 
 %% replace hook
 check_user_replace(_Acc, {Server,User,Chat,_ID,_X,_Replace,_V}) ->
-  Status = mod_groupchat_users:check_user(Server,User,Chat),
+  Status = mod_groups_users:check_user(Server,User,Chat),
   case Status of
     not_exist ->
       {stop,not_ok};
@@ -139,7 +139,7 @@ send_notifications_replace(Acc, {Server,_User,Chat,_ID,_X,  _Replace, _Version})
 
 %% retract_all hook
 check_user_before_all(_Acc, {Server,User,Chat,_ID,_X,_V}) ->
-  Status = mod_groupchat_users:check_user(Server,User,Chat),
+  Status = mod_groups_users:check_user(Server,User,Chat),
   case Status of
     not_exist ->
       {stop,not_ok};
@@ -148,7 +148,7 @@ check_user_before_all(_Acc, {Server,User,Chat,_ID,_X,_V}) ->
   end.
 
 check_user_permission_to_delete_all(_Acc, {_Server,User,Chat,_ID,_X,_V}) ->
-  IsPermitted = mod_groupchat_restrictions:is_permitted(<<"delete-messages">>,User,Chat),
+  IsPermitted = mod_groups_restrictions:is_permitted(<<"delete-messages">>,User,Chat),
   case IsPermitted of
     true ->
       ok;
@@ -160,7 +160,7 @@ check_user_permission_to_delete_all(_Acc, {_Server,User,Chat,_ID,_X,_V}) ->
 check_pinned_messages(_Acc, {Server,_User,Chat,_ID,_X,_V}) ->
   case find_and_delete_pinned_message(Server,Chat) of
     {updated,1} ->
-      P = mod_groupchat_presence:form_presence(Chat),
+      P = mod_groups_presence:form_presence(Chat),
       notificate(Server,Chat,P),
       ok;
     _ ->
@@ -174,8 +174,8 @@ delete_messages(_Acc, {Server,_User,Chat,_ID,_X,_V}) ->
 %% retract_user hook
 
 check_user_permission_to_delete_messages(_Acc, {Server,User,Chat,ID,_X,_V}) ->
-  IsPermitted = mod_groupchat_restrictions:is_permitted(<<"delete-messages">>,User,Chat),
-  OwnerOfMessage = mod_groupchat_inspector:get_user_by_id(Server,Chat,ID),
+  IsPermitted = mod_groups_restrictions:is_permitted(<<"delete-messages">>,User,Chat),
+  OwnerOfMessage = mod_groups_inspector:get_user_by_id(Server,Chat,ID),
   case OwnerOfMessage of
     User ->
       ok;
@@ -186,10 +186,10 @@ check_user_permission_to_delete_messages(_Acc, {Server,User,Chat,ID,_X,_V}) ->
   end.
 
 check_and_unpin_message(_Acc, {Server,_U,Chat,ID,_X,_V}) ->
-  User = mod_groupchat_inspector:get_user_by_id(Server,Chat,ID),
+  User = mod_groups_inspector:get_user_by_id(Server,Chat,ID),
   case find_and_delete_pinned_message(Server,Chat,User) of
     {updated,1} ->
-      P = mod_groupchat_presence:form_presence(Chat),
+      P = mod_groups_presence:form_presence(Chat),
       notificate(Server,Chat,P),
       ok;
     _ ->
@@ -197,14 +197,14 @@ check_and_unpin_message(_Acc, {Server,_U,Chat,ID,_X,_V}) ->
   end.
 
 delete_user_messages(_Acc, {Server,_User,Chat,ID,_X,_V}) ->
-  User = mod_groupchat_inspector:get_user_by_id(Server,Chat,ID),
+  User = mod_groups_inspector:get_user_by_id(Server,Chat,ID),
   delete_user_messages_from_archive(Server,Chat,User),
   ok.
 
 %% retract_message hook
 
 check_user(_Acc, {Server,User,Chat,_ID,_X,_V}) ->
-  Status = mod_groupchat_users:check_user(Server,User,Chat),
+  Status = mod_groups_users:check_user(Server,User,Chat),
   case Status of
     not_exist ->
       {stop,not_ok};
@@ -213,7 +213,7 @@ check_user(_Acc, {Server,User,Chat,_ID,_X,_V}) ->
   end.
 
 check_user_permission(_Acc, {Server,User,Chat,ID,_X,_V}) ->
-  IsPermitted = mod_groupchat_restrictions:is_permitted(<<"delete-messages">>,User,Chat),
+  IsPermitted = mod_groups_restrictions:is_permitted(<<"delete-messages">>,User,Chat),
   OwnerOfMessage = get_owner_of_message(Server,Chat,ID),
   case OwnerOfMessage of
     User ->
@@ -238,7 +238,7 @@ check_if_message_pinned(_Acc, {Server,_User,Chat,ID,_X,_V}) ->
       ok;
     _ ->
       delete_pinned_message(Server,Chat,ID),
-      Presence = mod_groupchat_presence:form_presence(Chat),
+      Presence = mod_groups_presence:form_presence(Chat),
       notificate(Server,Chat,Presence),
       ok
   end.
@@ -261,7 +261,7 @@ send_notifications(_Acc, {Server,_User,Chat,_ID,Retract,_Version}) ->
 
 user_in_chat(_Acc, {Server,UserJID,Chat,_Version,_Less}) ->
   User = jid:to_string(jid:remove_resource(UserJID)),
-  Status = mod_groupchat_users:check_user(Server,User,Chat),
+  Status = mod_groups_users:check_user(Server,User,Chat),
   case Status of
     not_exist ->
       {stop,not_ok};
@@ -312,7 +312,7 @@ send_query(_Acc,{Server,UserJID,Chat,Version,_Less}) ->
 notificate(Server,Chat,Stanza) ->
   From = jid:from_string(Chat),
   FromChat = jid:replace_resource(From,<<"Group">>),
-  UserList = mod_groupchat_users:user_list_to_send(Server,Chat),
+  UserList = mod_groups_users:user_list_to_send(Server,Chat),
   lists:foreach(fun(U) ->
     {Member} = U,
     To = jid:from_string(Member),
@@ -350,11 +350,11 @@ replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
   NewSubFiltered = filter_els(NewEls),
   UserCard = xmpp:get_subtag(Reference, #xabbergroupchat_user_card{}),
   UserID = UserCard#xabbergroupchat_user_card.id,
-  UserJID = mod_groupchat_users:get_user_by_id(Server,Chat,UserID),
-  ActualCard = mod_groupchat_users:form_user_card(UserJID,Chat),
-  UserChoose = mod_groupchat_users:choose_name(ActualCard),
+  UserJID = mod_groups_users:get_user_by_id(Server,Chat,UserID),
+  ActualCard = mod_groups_users:form_user_card(UserJID,Chat),
+  UserChoose = mod_groups_users:choose_name(ActualCard),
   Username = <<UserChoose/binary, ":", "\n">>,
-  Length = mod_groupchat_messages:binary_length(Username),
+  Length = mod_groups_messages:binary_length(Username),
   NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [ActualCard], 'begin' = 0, 'end' = Length}]},
   Els1 = strip_els(Sub),
   NewSubRefShift = shift_references(NewSubFiltered, Length),

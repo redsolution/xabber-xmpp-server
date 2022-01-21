@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groupchat_sql.erl
+%%% File    : mod_groups_sql.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : Old module - will be removed soon
 %%% Created : 17 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groupchat_inspector_sql).
+-module(mod_groups_inspector_sql).
 -author('andrey.gagarin@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
 

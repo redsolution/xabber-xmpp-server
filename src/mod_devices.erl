@@ -461,8 +461,13 @@ uri(User) ->
   XMPP = <<"xmpp:",User/binary>>,
   #xabber_groupchat_mention{cdata = XMPP}.
 
-bin_len(Bin) ->
-  mod_groupchat_messages:binary_length(Bin).
+bin_len(Binary) ->
+  B1 = binary:replace(Binary,<<"&">>,<<"&amp;">>,[global]),
+  B2 = binary:replace(B1,<<">">>,<<"&gt;">>,[global]),
+  B3 = binary:replace(B2,<<"<">>,<<"&lt;">>,[global]),
+  B4 = binary:replace(B3,<<"\"">>,<<"&quot;">>,[global]),
+  B5 = binary:replace(B4,<<"\'">>,<<"&apos;">>,[global]),
+  string:len(unicode:characters_to_list(B5)).
 
 new_device_msg(<<>>, Info, DeviceID, BareJID, IP) ->
   new_device_msg(<<"Unknow client">>, Info, DeviceID, BareJID, IP);
@@ -732,21 +737,6 @@ sql_revoke_long_unused_devices(Days,LServer) ->
     _ ->
       error
   end.
-
-%%user_token_info(LServer, Token) ->
-%%  case ejabberd_sql:sql_query(
-%%    LServer,
-%%    ?SQL("select @(jid)s,@(token_uid)s"
-%%    " from xabber_token where token=%(Token)s")) of
-%%    {selected, []} ->
-%%      empty;
-%%    {selected, [<<>>]} ->
-%%      empty;
-%%    {selected, Tokens} ->
-%%      {ok,Tokens};
-%%    _ ->
-%%      error
-%%  end.
 
 %%%% END SQL Functions
 revoke_all(Server,User) ->

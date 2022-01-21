@@ -438,7 +438,7 @@ init_stanza_id(Pkt, LServer) ->
     ID = TimeStamp,
 	  To = xmpp:get_from(Pkt),
 		Chat = jid:to_string(jid:remove_resource(To)),
-	case mod_groupchat_sql:search_for_chat(LServer,Chat) of
+	case mod_groups_sql:search_for_chat(LServer,Chat) of
 		{selected,[]} ->
 			Pkt1 = strip_my_stanza_id(Pkt, LServer),
 			Pkt2 = xmpp:put_meta(Pkt1, unique_time, TimeStamp),
@@ -454,7 +454,7 @@ init_stanza_id_incoming(Pkt, LServer) ->
 	ID = TimeStamp,
 	To = xmpp:get_from(Pkt),
 	Chat = jid:to_string(jid:remove_resource(To)),
-	case mod_groupchat_sql:search_for_chat(LServer,Chat) of
+	case mod_groups_sql:search_for_chat(LServer,Chat) of
 		{selected,[]} ->
 			Receiver = jid:remove_resource(xmpp:get_to(Pkt)),
 			Pkt1 = strip_my_stanza_id_new_incoming(Pkt, Receiver),
@@ -483,7 +483,7 @@ pre_process_iq_v0_2(#iq{
 	to = #jid{luser = LUser, lserver = LServer},
 	type = set, sub_els = [#mam_query{}]} = IQ) ->
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
-		group -> mod_groupchat_iq_handler:make_action(IQ);
+		group -> mod_groups_iq_handler:make_action(IQ);
 		channel -> mod_channels_iq_handler:process_iq(IQ);
 		_ -> process_iq_v0_2(IQ)
 	end;
@@ -495,7 +495,7 @@ pre_process_iq_v0_3(#iq{
 	type = set, sub_els = [#mam_query{}]} = IQ) ->
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
 		group ->
-			mod_groupchat_iq_handler:make_action(IQ);
+			mod_groups_iq_handler:make_action(IQ);
 		channel -> mod_channels_iq_handler:process_iq(IQ);
 		_ -> process_iq_v0_3(IQ)
 	end;
@@ -1098,7 +1098,7 @@ select_and_send(LServer, Query, RSM, FlipPage, #iq{from = From, to = To} = IQ, M
 										true -> lists:reverse(SortedMsgs);
 										false -> SortedMsgs
 									end,
-		NewSortedMsgs = mod_groupchat_messages:get_actual_user_info(LServer,SortedMsgs2),
+		NewSortedMsgs = mod_groups_messages:get_actual_user_info(LServer,SortedMsgs2),
     send(NewSortedMsgs, Count, IsComplete, IQ).
 
 select(_LServer, JidRequestor, JidArchive, Query, RSM,
@@ -1195,7 +1195,7 @@ maybe_update_from_to(#message{sub_els = Els} = Pkt, JidRequestor, JidArchive,
 maybe_update_from_to(Pkt, JidRequestor, _JidArchive, _Peer, chat, _Nick) ->
 	Chat = jid:to_string(jid:remove_resource(JidRequestor)),
 	LServer =  JidRequestor#jid.lserver,
-	case mod_groupchat_sql:search_for_chat(LServer,Chat) of
+	case mod_groups_sql:search_for_chat(LServer,Chat) of
 		{selected,[]} ->
 			Pkt;
 		_ ->
@@ -1209,7 +1209,7 @@ send(Msgs, Count, IsComplete,
 	 sub_els = [#mam_query{id = QID, xmlns = NS}]} = IQ) ->
 	#jid{lserver = LServer, luser = LUser} = From,
 	Chat = jid:to_string(jid:make(LUser,LServer,<<>>)),
-	case mod_groupchat_sql:search_for_chat(LServer,Chat) of
+	case mod_groups_sql:search_for_chat(LServer,Chat) of
 		{selected,[]} ->
 			Hint = #hint{type = 'no-store'},
 			Els = lists:map(

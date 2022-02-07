@@ -77,7 +77,7 @@ get_xabber_group_servers(LServer) ->
 
 get_local_items(Acc, _From, #jid{lserver = LServer} = _To,
     <<"">>, _Lang) ->
-  case gen_mod:is_loaded(LServer, ?MODULE) of
+  case gen_mod:is_loaded(LServer, mod_groups) of
     false -> Acc;
     _ ->
       Items = case Acc of

@@ -497,13 +497,7 @@ update_vcard(Server,User,D,_Chat) ->
 %%  Photo = set_value(D#vcard_temp.photo),
   FN = set_value(D#vcard_temp.fn),
   LF = get_lf(D#vcard_temp.n),
-  NickName = case D#vcard_temp.nickname of
-               undefined ->
-                 #jid{luser = LUser} = jid:from_string(User),
-                 LUser;
-               N ->
-                 N
-             end,
+  NickName = set_value(D#vcard_temp.nickname),
   case Status of
     null ->
       set_update_status(Server,User,<<"true">>);

@@ -753,13 +753,9 @@ generate_image(_Host,_Count) ->
 
 generate_image(Host) ->
   Path = filename:absname(gen_mod:get_module_opt(Host,?MODULE,pre_generated_images)),
-  CMD = binary_to_list(<<"python3 generateavatar.py ", Path/binary>>),
-  Result = list_to_binary(os:cmd(CMD)),
-  FileName = re:replace(Result, "(^\\s+)|(\\s+$)", "", [global,{return,binary}]),
-  File = filename:join(Path,FileName),
-  case file:read_file(File) of
-    {ok,_F} ->
-      ok;
+  case eavatartools:make_avatar() of
+    {ok, FileName, Data} ->
+      do_store_file(filename:join(Path,FileName), Data, undefined, undefined);
     _ ->
       ?ERROR_MSG("Problem to generate image",[])
   end.
@@ -767,16 +763,37 @@ generate_image(Host) ->
 
 %% Merge avatars
 
-merge_avatar(Avatar1, Avatar2, Host) ->
-  Path1 = filename:absname(gen_mod:get_module_opt(Host,?MODULE,pre_generated_images)),
-  Path = filename:join(Path1, <<"p2p">>),
-  CMD = binary_to_list(<<"python3 mergeavatars.py ", "'", Avatar1/binary, "' '", Avatar2/binary, "' ", "'",Path/binary,"'">>),
-  FileName = string:chomp(list_to_binary(os:cmd(CMD))),
-  File = filename:join(Path,FileName),
-  case file:read_file(File) of
-    {ok, Data} ->
-      {ok, FileName, Data};
-    _ ->
-      ?ERROR_MSG("Problem to generate image",[]),
-      error
+merge_avatar(Avatar1, Avatar2, _Host) ->
+ eavatartools:merge_avatars(Avatar1,Avatar2).
+
+
+-spec do_store_file(file:filename_all(), binary(),
+    integer() | undefined,
+    integer() | undefined)
+      -> ok | {error, term()}.
+do_store_file(Path, Data, FileMode, DirMode) ->
+  try
+    ok = filelib:ensure_dir(Path),
+    {ok, Io} = file:open(Path, [write, exclusive, raw]),
+    Ok = file:write(Io, Data),
+    ok = file:close(Io),
+    if is_integer(FileMode) ->
+      ok = file:change_mode(Path, FileMode);
+      FileMode == undefined ->
+        ok
+    end,
+    if is_integer(DirMode) ->
+      RandDir = filename:dirname(Path),
+      UserDir = filename:dirname(RandDir),
+      ok = file:change_mode(RandDir, DirMode),
+      ok = file:change_mode(UserDir, DirMode);
+      DirMode == undefined ->
+        ok
+    end,
+    ok = Ok % Raise an exception if file:write/2 failed.
+  catch
+    _:{badmatch, {error, Error}} ->
+      {error, Error};
+    _:Error ->
+      {error, Error}
   end.

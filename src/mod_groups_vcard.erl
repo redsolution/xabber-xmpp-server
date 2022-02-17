@@ -497,7 +497,13 @@ update_vcard(Server,User,D,_Chat) ->
 %%  Photo = set_value(D#vcard_temp.photo),
   FN = set_value(D#vcard_temp.fn),
   LF = get_lf(D#vcard_temp.n),
-  NickName = set_value(D#vcard_temp.nickname),
+  NickName = case D#vcard_temp.nickname of
+               undefined ->
+                 #jid{luser = LUser} = jid:from_string(User),
+                 LUser;
+               N ->
+                 N
+             end,
   case Status of
     null ->
       set_update_status(Server,User,<<"true">>);
@@ -1258,7 +1264,7 @@ create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2)
       Name2 = <<AvatarID2/binary, ".", Type2/binary >>,
       File1 = filename:join([Path, ?AVATARS_PATH, Name1]),
       File2 = filename:join([Path, ?AVATARS_PATH, Name2]),
-      case nick_generator:merge_avatar(File1, File2, LServer) of
+      case eavatartools:merge_avatars(File1,File2) of
         {ok, Filename, Data} ->
           publish_avatar(Chat, Data, Filename);
         _ ->

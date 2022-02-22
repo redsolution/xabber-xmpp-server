@@ -451,8 +451,7 @@ INSERT INTO groupchat_rights (name,description,type) values
 ('owner','Owner','permission'),
 ('change-group','Change group','permission'),
 ('change-users','Change users','permission'),
-('set-restrictions','Set restrictions','permission'),
-('set-permissions','Set permissions','permission')
+('set-restrictions','Set restrictions','permission')
 ;
 
 CREATE TABLE groupchat_block (

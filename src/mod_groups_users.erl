@@ -1196,7 +1196,7 @@ user_rights_and_time(LServer,Chat,User) ->
 create_right_form(LServer,User,Chat,RequestUser,ID, Lang) ->
   UserRights = user_rights(LServer,Chat,User),
   IsOwner = lists:member({<<"owner">>},UserRights),
-  CanRestrictUsers = lists:member({<<"restrict-participants">>},UserRights),
+  CanRestrictUsers = lists:member({<<"set-restrictions">>},UserRights),
   ?INFO_MSG("User ~p~nIs owner ~p~nCan restrict ~p~n",[User,IsOwner,CanRestrictUsers]),
   case IsOwner of
     true ->

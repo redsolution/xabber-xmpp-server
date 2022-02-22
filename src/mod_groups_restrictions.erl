@@ -98,24 +98,16 @@ validate_users(Server,Chat,User1,User2) ->
     _ -> not_ok
   end.
 
+indetify_user([]) ->
+  member;
 indetify_user(UserPermissions) ->
-  IsOwner = lists:member(<<"owner">>,UserPermissions),
-  Restrict = lists:member(<<"set-restrictions">>,UserPermissions),
-  Block = lists:member(<<"set-restrictions">>,UserPermissions),
-  Admin = lists:member(<<"change-group">>,UserPermissions),
-  Badge = lists:member(<<"change-users">>,UserPermissions),
-  Nick = lists:member(<<"change-users">>,UserPermissions),
-  Delete = lists:member(<<"delete-messages">>,UserPermissions),
-  case length(UserPermissions) of
-    0 ->
-      member;
-    _ when IsOwner == true ->
-      owner;
-    _ when Restrict == true orelse Block == true orelse Admin == true orelse Badge == true orelse
-      Nick == true orelse Delete == true ->
-      admin;
+  case lists:member(<<"owner">>,UserPermissions) of
+    true -> owner;
     _ ->
-      member
+      case get_permission_level(UserPermissions) of
+        0 -> member;
+        _ -> admin
+      end
   end.
 
 %% SQL Functions
@@ -165,7 +157,7 @@ check_if_permitted(Server,User,Chat,Action) ->
     ?SQL("select @(right_name)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
     and (valid_until = 0 or valid_until > %(TS)d)")) of
     {selected, RightsRaw} when length(RightsRaw) > 0 ->
-      Rights = lists:map(fun(R) -> {R0} = R, R0 end, RightsRaw),
+      Rights = [R || {R} <- RightsRaw],
       check_permission_level(Action, Rights);
     _ ->
       false
@@ -175,22 +167,19 @@ check_permission_level(Right, Rights) ->
   RightsAndLevels = rights_and_levels(),
   RequiredLevel = proplists:get_value(Right, RightsAndLevels),
   PermissionLevel = get_permission_level(Rights),
-  case RequiredLevel of
-    _ when is_integer(RequiredLevel) andalso
-      is_integer(PermissionLevel) andalso PermissionLevel >= RequiredLevel ->
-      true;
-    _ ->
-      false
+  if
+    PermissionLevel < RequiredLevel ->
+      false;
+    true ->
+      true
   end.
 
 get_permission_level(Rights) ->
   RightsAndLevels = rights_and_levels(),
-  RightsLevels = lists:map(
+  lists:max(lists:map(
     fun(Right) ->
-      proplists:get_value(Right, RightsAndLevels, 0) end, Rights
-  ),
-  Level = hd(lists:reverse(lists:sort(RightsLevels))),
-  Level.
+      proplists:get_value(Right, RightsAndLevels, 0)
+    end, Rights)).
 
 rights_and_levels() ->
   [
@@ -267,7 +256,7 @@ upsert_rule(Server,Chat,Username,Rule,Expires,IssuedBy) ->
   case ?SQL_UPSERT(Server, "groupchat_policy",
     ["!username=%(Username)s",
       "!chatgroup=%(Chat)s",
-      "right_name=%(Rule)s",
+      "!right_name=%(Rule)s",
       "valid_until=%(Expires)d",
       "issued_by=%(IssuedBy)s",
       "issued_at = CURRENT_TIMESTAMP"

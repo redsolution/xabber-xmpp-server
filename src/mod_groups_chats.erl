@@ -525,14 +525,14 @@ get_all_info(LServer,Limit,Page) ->
             true ->
               [<<"select localpart,owner,(select count(*)
               from groupchat_users where chatgroup = t.jid) as count,
-              (select count(*) from groupchats where parent_chat = t.jid
-              and server_host = '">>,LServer,<<"')
-              as private_chats from groupchats t
+              anonymous from groupchats t
               where t.parent_chat = '0' and server_host = '">>,LServer,<<"'
               order by localpart limit ">>,
                 integer_to_binary(Limit),<<" offset ">>,integer_to_binary(Offset),<<";">>];
             _ ->
-              [<<"select localpart,owner,(select count(*) from groupchat_users where chatgroup = t.jid) as count, (select count(*) from groupchats where parent_chat = t.jid) as private_chats from groupchats t where t.parent_chat = '0' order by localpart limit ">>,
+              [<<"select localpart,owner,
+              (select count(*) from groupchat_users where chatgroup = t.jid) as count,
+               anonymous from groupchats t where t.parent_chat = '0' order by localpart limit ">>,
                 integer_to_binary(Limit),<<" offset ">>,integer_to_binary(Offset),<<";">>]
           end,
   ChatInfo = case ejabberd_sql:sql_query(
@@ -543,10 +543,9 @@ get_all_info(LServer,Limit,Page) ->
     _ -> []
   end,
   lists:map(
-    fun(Chat) ->
-      [Name,Owner,Number,Private] = Chat,
-      {binary_to_list(Name),binary_to_list(Owner),binary_to_integer(Number),binary_to_integer(Private)} end, ChatInfo
-  ).
+    fun([Name,Owner,Number,Privacy]) ->
+      {Name,Owner,binary_to_integer(Number),Privacy}
+    end, ChatInfo).
 
 get_count_chats(LServer) ->
   case ejabberd_sql:sql_query(

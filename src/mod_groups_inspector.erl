@@ -330,37 +330,41 @@ user_rights(Server,Id,Chat,UserRequester,Lang) ->
 
 
 create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,ModelRare,ChatMessage,Contacts,Domains) ->
-  Anonymous = set_value(<<"public">>,Anon),
   LocalpartBad = set_value(create_jid(),LocalJid),
   Localpart = list_to_binary(string:to_lower(binary_to_list(LocalpartBad))),
-  Search = set_value(<<"local">>,Searchable),
-  Desc = set_value(<<>>,Description),
-  Model = set_value(<<"open">>,ModelRare),
-  Message = set_value(<<"0">>,ChatMessage),
-  ChatJid = jid:to_string(jid:make(Localpart,Server,<<>>)),
-  ContactList = set_contacts(<<>>,Contacts),
-  DomainList = set_domains(<<>>,Domains),
-  UserExist = ejabberd_auth:user_exists(Localpart,Server),
-  case mod_groups_inspector_sql:check_jid(Localpart,Server) of
-    {selected,[]} when UserExist == false ->
-      CreatorJid = jid:to_string(jid:make(Creator,Host,<<>>)),
-      mod_groups_inspector_sql:create_groupchat(Server,Localpart,CreatorJid,Name,ChatJid,
-        Anonymous,Search,Model,Desc,Message,ContactList,DomainList),
-      add_user(Server,CreatorJid,<<"owner">>,ChatJid,<<"wait">>,<<>>),
-      mod_admin_extra:set_nickname(Localpart,Host,Name),
-      Expires = <<"0">>,
-      IssuedBy = <<"server">>,
-      Permissions = get_permissions(Server),
-      lists:foreach(fun(N)->
-        {Rule} = N,
-        mod_groups_restrictions:insert_rule(Server,ChatJid,CreatorJid,Rule,Expires,IssuedBy) end,
-        Permissions
-      ),
-      {ok,created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)};
-    {selected,[{_Chat}]} ->
-      exist;
-    _ ->
-      fail
+  case ejabberd_auth:user_exists(Localpart,Server) of
+    false ->
+      case mod_groups_inspector_sql:check_jid(Localpart,Server) of
+        {selected,[]} ->
+          Anonymous = set_value(<<"public">>,Anon),
+          Search = set_value(<<"local">>,Searchable),
+          Desc = set_value(<<>>,Description),
+          Model = set_value(<<"open">>,ModelRare),
+          Message = set_value(<<"0">>,ChatMessage),
+          ChatJid = jid:to_string(jid:make(Localpart,Server,<<>>)),
+          ContactList = set_contacts(<<>>,Contacts),
+          DomainList = set_domains(<<>>,Domains),
+          CreatorJid = jid:to_string(jid:make(Creator,Host,<<>>)),
+          mod_groups_inspector_sql:create_groupchat(Server,Localpart,CreatorJid,Name,ChatJid,
+            Anonymous,Search,Model,Desc,Message,ContactList,DomainList),
+          add_user(Server,CreatorJid,<<"owner">>,ChatJid,<<"wait">>,<<>>),
+          mod_admin_extra:set_nickname(Localpart,Host,Name),
+          Expires = <<"0">>,
+          IssuedBy = <<"server">>,
+          Permissions = get_permissions(Server),
+          lists:foreach(fun(N)->
+            {Rule} = N,
+            mod_groups_restrictions:insert_rule(Server,ChatJid,CreatorJid,Rule,Expires,IssuedBy) end,
+            Permissions
+          ),
+          {ok,created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)};
+        {selected,[{_Chat}]} ->
+          exist;
+        _ ->
+          fail
+      end;
+    _->
+      exist
   end.
 
 set_contacts(Default,Contacts) ->

@@ -163,6 +163,32 @@ handle_reuest('POST',[<<"revoke_token">>], #request{data = Data}, _Perms, User, 
     Args ->
       revoke_token(User, Server, proplists:get_value(token, Args))
   end;
+handle_reuest('GET',[<<"registration">>,<<"keys">>], #request{q = Q}, {true, _}, _User, _Server) ->
+  Args = check_args(Q, [host]),
+  case check_args(Q, [host]) of
+    error ->
+      badrequest_response();
+    Args ->
+      get_reg_keys(Args)
+  end;
+handle_reuest('POST',[<<"registration">>,<<"keys">>], #request{data = Data}, {true, _}, _User, _Server) ->
+  case extract_args(Data, [host, expire, description]) of
+    error -> badrequest_response();
+    Args ->
+      make_reg_key(Args)
+  end;
+handle_reuest('PUT',[<<"registration">>,<<"keys">>,Key], #request{data = Data}, {true, _}, _User, _Server) ->
+  case extract_args(Data, [host, expire, description]) of
+    error -> badrequest_response();
+    Args ->
+      update_reg_key(Key,Args)
+  end;
+handle_reuest('DELETE',[<<"registration">>,<<"keys">>,Key], #request{data = Data}, {true, _}, _User, _Server) ->
+  case extract_args(Data, [host]) of
+    error -> badrequest_response();
+    Args ->
+      remove_reg_key(Key, Args)
+  end;
 handle_reuest('POST',[<<"permissions">>], #request{data = Data}, {true, _}, _User, _Server) ->
   case extract_args(Data, [username, host, permissions]) of
     error -> badrequest_response();
@@ -521,6 +547,52 @@ remove_admin(Args) ->
     ok -> {201, <<>>};
     _ -> {500, <<>>}
   end.
+
+get_reg_keys(Args) ->
+  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Keys = mod_registration_keys:get_keys(Host),
+  case mod_registration_keys:get_keys(Host) of
+    error ->
+      {500, <<>>};
+    Keys ->
+      Result = {[{keys,[{[{key,K},{expire,E},{description,D}]} || {K, E, D} <- Keys]}]},
+      {200, Result}
+  end.
+
+make_reg_key(Args) ->
+  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Expire = case proplists:get_value(expire,Args) of
+             V when is_integer(V) -> V;
+             V -> binary_to_integer(V)
+           end,
+  Desc = proplists:get_value(description,Args,<<>>),
+  case mod_registration_keys:make_key(Host, Expire, Desc) of
+    {K, E, D} ->
+      {201, {[{key,K},{expire,E},{description,D}]}};
+    _ ->
+      {500, <<>>}
+  end.
+
+update_reg_key(Key, Args) ->
+  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Expire = case proplists:get_value(expire,Args) of
+             V when is_integer(V) -> V;
+             V -> binary_to_integer(V)
+           end,
+  Desc = proplists:get_value(description,Args,<<>>),
+  case mod_registration_keys:update_key(Host, Key, Expire, Desc) of
+    ok ->
+      {200, <<>>};
+    notfound ->
+      {404, <<>>};
+    _ ->
+      {500, <<>>}
+  end.
+
+remove_reg_key(Key, Args) ->
+  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  mod_registration_keys:remove_key(Host,Key),
+  {200, <<>>}.
 
 create_user(Args) ->
   Username = jid:nameprep(proplists:get_value(username,Args)),

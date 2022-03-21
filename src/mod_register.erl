@@ -250,7 +250,7 @@ try_register_or_set_password(User, Server, Password,
 	#jid{user = User, lserver = Server} ->
 	    try_set_password(User, Server, Password, IQ);
 	_ when CaptchaSucceed ->
-	    case check_from(From, Server) of
+	    case check_secret_and_from(From, Server, IQ) of
 		allow ->
 		    case try_register(User, Server, Password, Source, Lang) of
 			ok ->
@@ -408,6 +408,18 @@ send_registration_notifications(Mod, UJID, Source) ->
 				 body = xmpp:mk_text(Body)})
               end, JIDs)
     end.
+
+check_secret_and_from(JID, Server, IQ) ->
+  case gen_mod:is_loaded(Server, mod_registration_keys) of
+    true ->
+      #iq{sub_els = [#register{key = Key}]} = IQ,
+      case mod_registration_keys:check_key(Server, Key) of
+        allow -> check_from(JID, Server);
+        _ -> deny
+      end;
+    _ ->
+      check_from(JID, Server)
+  end.
 
 check_from(#jid{user = <<"">>, server = <<"">>},
 	   _Server) ->

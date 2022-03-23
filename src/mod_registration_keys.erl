@@ -87,6 +87,8 @@ remove_key(Server, Key) ->
   sql_remove_key(Server, Key),
   ok.
 
+check_key(_LServer, Key) when Key == <<>> orelse Key == undefined ->
+  deny;
 check_key(LServer, Key) ->
   case sql_check_key(LServer, Key) of
     ok -> allow;

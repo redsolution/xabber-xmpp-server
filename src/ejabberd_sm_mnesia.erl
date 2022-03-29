@@ -142,22 +142,20 @@ update_tables() ->
       [ur, user, pid] -> mnesia:delete_table(session);
       [usr, us, pid] -> mnesia:delete_table(session);
       [usr, us, sid, priority, info] -> mnesia:delete_table(session);
-      [sid,usr,us,priority,info] -> mnesia:delete_table(session);
-      [sid, usr, us, priority] ->
-	  mnesia:delete_table(session);
-      [sid, usr, us, priority, info, token_uid] -> ok;
+      [sid, usr, us, priority, info] -> ok;
+      [sid, usr, us, priority] -> mnesia:delete_table(session);
+      [sid, usr, us, priority, info, token_uid] -> mnesia:delete_table(session);
       {'EXIT', _} -> ok
     end,
-    case lists:member(presence, mnesia:system_info(tables))
-	of
+    case lists:member(presence, mnesia:system_info(tables))	of
       true -> mnesia:delete_table(presence);
       false -> ok
     end,
     case lists:member(local_session, mnesia:system_info(tables)) of
-	true ->
-	    mnesia:delete_table(local_session);
-	false ->
-	    ok
+      true ->
+        mnesia:delete_table(local_session);
+      false ->
+        ok
     end.
 
 delete_group_sessions([]) -> [];

@@ -346,8 +346,8 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
     _ ->
       ok
   end;
-answer_presence(#presence{to = To, from = From, type = unavailable}) ->
-change_present_state(To,From);
+%%answer_presence(#presence{to = To, from = From, type = unavailable}) ->
+%%change_present_state(To,From);
 answer_presence(Presence) ->
   ?DEBUG("Drop presence ~p",[Presence]).
 

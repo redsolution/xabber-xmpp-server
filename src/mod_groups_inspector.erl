@@ -116,7 +116,7 @@ update_chat(Server,To,Chat,User,Xa) ->
       IsPinnedChanged = {pinned_changed, mod_groups_chats:is_value_changed(ChatMessage,NewMessage)},
       Properties = [IsPinnedChanged],
       ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
-      {selected, AllUsers} = mod_groups_sql:user_list_of_channel(Server,Chat),
+      AllUsers = mod_groups_users:user_list_to_send(Server,Chat),
       FromChat = jid:replace_resource(To,<<"Group">>),
       mod_groups_presence:send_presence(UpdatePresence,AllUsers,FromChat)
   end.

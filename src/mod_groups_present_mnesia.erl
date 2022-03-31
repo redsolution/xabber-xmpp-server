@@ -33,7 +33,9 @@
 -export([stop/1,start/2,depends/2,mod_options/1, init/0,start_link/0]).
 %% API
 -export([
-  get_chat_sessions/0,set_session/3,delete_session/1, select_sessions/2, delete_session/3, delete_all_user_sessions/2
+  get_chat_sessions/0,set_session/3,delete_session/1,
+  select_sessions/2, select_session/3, delete_session/3,
+  delete_all_user_sessions/2
 ]).
 -record(state, {}).
 -include("xmpp.hrl").

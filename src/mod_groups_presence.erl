@@ -97,11 +97,15 @@ delete_session_from_counter_after(GroupJID, UserJID, Timeout) ->
     none ->
       ok;
     _ ->
-      User = [{jid:to_string(UserJID)}],
+      Resource = UserJID#jid.lresource,
+      Server = GroupJID#jid.lserver,
       Chat = jid:to_string(jid:remove_resource(GroupJID)),
-      FromChat = jid:replace_resource(GroupJID,<<"Group">>),
-      change_present_state(GroupJID, UserJID),
-      send_presence(form_presence(Chat),User,FromChat)
+      Username = jid:to_string(jid:remove_resource(UserJID)),
+      PresentNum = get_present(Chat),
+      Ss = mod_groups_present_mnesia:select_session(Resource,Username,Chat),
+      lists:foreach(fun(S) -> mnesia:dirty_delete_object(S) end, Ss),
+      mod_groups_sql:update_last_seen(Server,Username,Chat),
+      send_notification(UserJID, GroupJID, PresentNum, not_present)
   end.
 
 revoke_invite(Chat,User) ->
@@ -346,8 +350,8 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
     _ ->
       ok
   end;
-%%answer_presence(#presence{to = To, from = From, type = unavailable}) ->
-%%change_present_state(To,From);
+answer_presence(#presence{to = To, from = From, type = unavailable}) ->
+change_present_state(To,From);
 answer_presence(Presence) ->
   ?DEBUG("Drop presence ~p",[Presence]).
 
@@ -415,13 +419,11 @@ answer_presence(From, To, SubEls)->
       end;
     Present =/= false andalso NotPresent == false andalso Status == exist ->
       mod_groups_sql:update_last_seen(Server,User,ChatJid),
-      Result = mod_groups_present_mnesia:set_session(Resource, User, ChatJid),
-      Sessions = mod_groups_present_mnesia:select_sessions(User, ChatJid),
-      LS = length(Sessions),
-      if
-        LS > 1 -> ignore;
-        Result =/= ok -> ignore;
-        true -> send_notification(From, To, PresentNum)
+      case mod_groups_present_mnesia:set_session(Resource, User, ChatJid) of
+        ok ->
+          send_notification(From, To, PresentNum, present);
+        _ ->
+          ignore
       end;
     Present == false andalso NotPresent =/= false andalso Status == exist ->
       change_present_state(To,From);
@@ -444,17 +446,22 @@ change_present_state(To,From) ->
   PresentNum = get_present(Chat),
   mod_groups_present_mnesia:delete_session(Resource,Username,Chat),
   mod_groups_sql:update_last_seen(Server,Username,Chat),
-  send_notification(From, To, PresentNum).
+  send_notification(From, To, PresentNum, not_present).
 
-send_notification(From, To, PresentNum) ->
+send_notification(From, To, PresentNum, PresentType) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   FromChat = jid:replace_resource(To,<<"Group">>),
   ActualPresentNum = get_present(Chat),
   case ActualPresentNum of
-    PresentNum ->
+    PresentNum  when PresentType == present ->
+      %% notify only the connecting device about the actual count
       User = [{jid:to_string(From)}],
       send_presence(form_presence(Chat),User,FromChat);
+    PresentNum ->
+      %% someone left, but the counter didn't change
+      ok;
     _ ->
+      %% notify everyone about the counter change
       Users = get_users_with_session(Chat),
       send_presence(form_presence(Chat),Users,FromChat)
   end.

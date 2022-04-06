@@ -456,7 +456,10 @@ handle_pubsub(ChatJID,UserJID,#avatar_meta{info = AvatarINFO}) ->
     [] ->
       OldMeta = get_image_metadata(LServer, User, Chat),
       check_old_meta(LServer, OldMeta);
-    [#avatar_info{bytes = Size, id = ID, type = Type, url = Url}] ->
+    [#avatar_info{bytes = Size, id = ID, type = Type0, url = Url}] ->
+      %% set default type
+      Type = case Type0 of <<>> -> <<"image/png">>; _-> Type0 end,
+      %% todo: get rid of the dependency on the file type
       OldMeta = get_image_metadata(LServer, User, Chat),
       case OldMeta of
         [{ID,_Size,_ImageType,_Url}] ->

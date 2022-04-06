@@ -141,7 +141,6 @@ revoke_token(Token) ->
 
 find_host() ->
   DefaultHost = ejabberd_config:get_option(oauth_default_server),
-  ?INFO_MSG("Host from config ~p",[DefaultHost]),
   case DefaultHost of
     undefined ->
       ?MYNAME;

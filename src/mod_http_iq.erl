@@ -190,7 +190,6 @@ process(Path, #request{method = 'GET', data = Data, q = Q, headers = Headers} = 
           {401, [],[atom_to_binary(Reason, latin1)]};
         Auth when is_map(Auth) ->
           {User, Server, <<"">>} = maps:get(usr, Auth),
-          IsLoaded = gen_mod:is_loaded(Host, ?MODULE),
           if
             Server == Host ->
               handle_reuest(Path, Req, User, Server);

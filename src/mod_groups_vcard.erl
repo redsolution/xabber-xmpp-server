@@ -866,7 +866,7 @@ get_vcard_avatar(Server,Chat,User) ->
         {ok,Binary} ->
           Size = byte_size(Binary),
           UrlDir = get_root_url(Server),
-          Url = <<UrlDir/binary, $/, ?AVATARS_PATH/binary, $/, File/binary>>,
+          Url = <<UrlDir/binary, $/, ?AVATARS_PATH/binary, $/, Image/binary>>,
           [{Hash,Size,ImageType,Url}];
         _ ->
           not_filed

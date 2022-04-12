@@ -181,21 +181,22 @@ process_iq(#iq{type = set, to = To,
     end;
 process_iq(#iq{type = set} = IQ, _Source, _IsCaptchaEnabled, _AllowRemove) ->
     xmpp:make_error(IQ, xmpp:err_bad_request());
-process_iq(#iq{type = get, from = From, to = To, id = ID, lang = Lang} = IQ,
+process_iq(#iq{type = get, from = From, to = To, id = ID, lang = Lang, sub_els = SubEls} = IQ,
 	   Source, IsCaptchaEnabled, _AllowRemove) ->
     Server = To#jid.lserver,
-    {IsRegistered, Username} =
-	case From of
-	    #jid{user = User, lserver = Server} ->
-		case ejabberd_auth:user_exists(User, Server) of
-		    true ->
-			{true, User};
-		    false ->
-			{false, User}
-		end;
-	    _ ->
-		{false, <<"">>}
-	end,
+    Username =
+      case From of
+        #jid{user = User, lserver = Server} ->
+          User;
+         _ ->
+          case SubEls of
+            [#register{username = User}] when User =/= 'undefined' ->
+              User;
+            _->
+              <<"">>
+          end
+      end,
+    IsRegistered = ejabberd_auth:user_exists(Username, Server),
     Instr = translate:translate(
 	      Lang, <<"Choose a username and password to register "
 		      "with this server">>),

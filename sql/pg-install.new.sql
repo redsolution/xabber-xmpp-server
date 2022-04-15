@@ -685,3 +685,12 @@ CREATE TABLE registration_keys (
     removed boolean NOT NULL DEFAULT false,
     PRIMARY KEY (server_host, key)
 );
+
+CREATE TABLE blocked_users (
+    username text NOT NULL,
+    server_host text NOT NULL,
+    message text  DEFAULT ''::text,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (server_host, username),
+    FOREIGN KEY (server_host, username) REFERENCES users (server_host, username) ON DELETE CASCADE
+);

@@ -234,6 +234,14 @@ handle_reuest('PUT',[<<"users">>,<<"set_password">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, password]),
   check_and_run(Adm, Server, Args, fun set_password/1);
+handle_reuest('POST',[<<"users">>,<<"block">>], #request{data = Data},
+    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [username, host, reason]),
+  check_and_run(Adm, Server, Args, fun block_user/1);
+handle_reuest('DELETE',[<<"users">>,<<"block">>], #request{data = Data},
+    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [username, host]),
+  check_and_run(Adm, Server, Args, fun unblock_user/1);
 handle_reuest(_,[<<"users">>], _, _, _, _) ->
   forbidden_response();
 handle_reuest(_,[<<"users">>| _], _, _, _, _) ->
@@ -514,8 +522,7 @@ revoke_token(User, Server, Token) ->
   {200, <<>>}.
 
 set_permissions(Args) ->
-  Username = jid:nameprep(proplists:get_value(username,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  {Username, Host} = extract_user_host(Args),
   {PermsPL} = proplists:get_value(permissions,Args,{[]}),
   Perms = parse_permissions(PermsPL),
   Result = case Perms of
@@ -528,8 +535,7 @@ set_permissions(Args) ->
   end.
 
 set_admin(Args) ->
-  Username = jid:nameprep(proplists:get_value(username,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  {Username, Host} = extract_user_host(Args),
   case sql_set_permissions(Username, Host, true, <<>>) of
     ok -> {201, <<>>};
     _ -> {500, <<>>}
@@ -541,8 +547,7 @@ set_admin(Username, Host) ->
   sql_set_permissions(Username, Host, true, <<>>).
 
 remove_admin(Args) ->
-  Username = jid:nameprep(proplists:get_value(username,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  {Username, Host} = extract_user_host(Args),
   case sql_remove_permissions(Username, Host) of
     ok -> {201, <<>>};
     _ -> {500, <<>>}
@@ -595,8 +600,7 @@ remove_reg_key(Key, Args) ->
   {200, <<>>}.
 
 create_user(Args) ->
-  Username = jid:nameprep(proplists:get_value(username,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  {Username, Host} = extract_user_host(Args),
   Password = proplists:get_value(password, Args),
   case check_host(Host) of
     {ok, _} ->
@@ -616,8 +620,7 @@ create_user(Username, Host, Password) ->
   end.
 
 remove_user(Args) ->
-  Username = jid:nameprep(proplists:get_value(username,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  {Username, Host} = extract_user_host(Args),
   ejabberd_auth:remove_user(Username, Host),
   case ejabberd_auth:user_exists(Username, Host) of
     true ->
@@ -627,8 +630,7 @@ remove_user(Args) ->
   end.
 
 set_password(Args) ->
-  Username = jid:nameprep(proplists:get_value(username,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  {Username, Host} = extract_user_host(Args),
   Password = proplists:get_value(password, Args),
   case ejabberd_auth:user_exists(Username, Host) of
     true ->
@@ -640,6 +642,27 @@ set_password(Args) ->
       end;
     false ->
       {404, <<"unknown user">>}
+  end.
+
+block_user(Args) ->
+  {Username, Host} = extract_user_host(Args),
+  Reason = proplists:get_value(reason, Args),
+  case gen_mod:is_loaded(Host, mod_block_users) of
+    true ->
+      mod_block_users:block_user(Username, Host, Reason),
+      {200, <<>>};
+    _ ->
+      {503, <<"feature not implemented">>}
+  end.
+
+unblock_user(Args) ->
+  {Username, Host} = extract_user_host(Args),
+  case gen_mod:is_loaded(Host, mod_block_users) of
+    true ->
+      mod_block_users:unblock_user(Username, Host),
+      {200, <<>>};
+    _ ->
+      {503, <<"feature not implemented">>}
   end.
 
 get_users(Args) ->
@@ -746,8 +769,7 @@ get_groups_count(Args) ->
   {200, {[{count, Count}]}}.
 
 update_vcard(Args) ->
-  Username = jid:nameprep(proplists:get_value(username,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  {Username, Host} = extract_user_host(Args),
   VCard = proplists:get_value(vcard,Args),
   update_vcard(Username, Host, <<>>, VCard).
 
@@ -764,8 +786,7 @@ update_vcard(Username, Host, Ancestor, {List}) ->
   {200, <<>>}.
 
 get_vcard(Args) ->
-  Username = jid:nameprep(proplists:get_value(username,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  {Username, Host} = extract_user_host(Args),
   case check_user(Username, Host) of
     #jid{luser = LUser, lserver = LServer} ->
       case convert_vcard(mod_vcard:get_vcard(LUser, LServer)) of
@@ -872,6 +893,11 @@ check_token_old(Token) ->
     [UserServer] -> {ok, UserServer};
     _ -> {false, not_found}
   end.
+
+extract_user_host(PropList)->
+  Username = jid:nameprep(proplists:get_value(username,PropList)),
+  Host = jid:nodeprep(proplists:get_value(host,PropList)),
+  {Username, Host}.
 
 -spec seconds_since_epoch(integer()) -> non_neg_integer().
 seconds_since_epoch(Diff) ->

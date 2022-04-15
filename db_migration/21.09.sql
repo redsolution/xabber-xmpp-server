@@ -23,3 +23,8 @@ UPDATE conversation_metadata SET group_info=concat_ws(',', 'incognito', subquery
 
 ALTER TABLE conversation_metadata DROP COLUMN incognito;
 ALTER TABLE conversation_metadata DROP COLUMN p2p;
+ALTER TABLE conversation_metadata drop CONSTRAINT uc_conversation_metadata;
+ALTER TABLE conversation_metadata add CONSTRAINT uc_conversation_metadata UNIQUE (username, server_host, conversation, type, conversation_thread);
+
+--Old schema
+--ALTER TABLE conversation_metadata add CONSTRAINT uc_conversation_metadata UNIQUE (username, conversation, type, conversation_thread);

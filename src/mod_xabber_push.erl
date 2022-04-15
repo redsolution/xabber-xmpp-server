@@ -641,7 +641,7 @@ delete_sessions(LUser, LServer, LookupFun, Mod) ->
 		    ok
 	    end,
 	    lists:foreach(
-	      fun({TS, _, _, _}) ->
+	      fun({TS, _, _, _,_,_}) ->
 		      ok = Mod:delete_session(LUser, LServer, TS),
 		      case use_cache(Mod, LServer) of
 			  true ->

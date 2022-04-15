@@ -74,8 +74,8 @@ store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key) ->
 			"!timestamp=%(TS)d",
 			"!service=%(Service)s",
 			"!node=%(Node)s",
-			"!cipher=%(Cipher)s",
-			"!key=%(KeyString)s",
+			"cipher=%(Cipher)s",
+			"key=%(KeyString)s",
 			"xml=%(XML)s"]) of
 		ok ->
 			?INFO_MSG("Save session for ~p",[LUser]),

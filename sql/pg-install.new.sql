@@ -514,7 +514,7 @@ CREATE TABLE conversation_metadata(
     pinned bigint NOT NULL DEFAULT 0,
     mute bigint NOT NULL DEFAULT 0,
     group_info text NOT NULL DEFAULT '',
-    CONSTRAINT uc_conversation_metadata UNIQUE (username, server_host, conversation, conversation_thread, encrypted)
+    CONSTRAINT uc_conversation_metadata UNIQUE (username, server_host, conversation, type, conversation_thread)
     );
 
 ALTER TABLE archive ADD CONSTRAINT unique_timestamp UNIQUE (timestamp, server_host);
@@ -544,6 +544,7 @@ CREATE TABLE foreign_message_stanza_id(
     our_username text,
     foreign_stanza_id bigint UNIQUE,
     our_stanza_id bigint,
+    FOREIGN KEY (server_host,our_stanza_id) REFERENCES archive(server_host,"timestamp") ON DELETE CASCADE,
     PRIMARY KEY (server_host, our_stanza_id)
 );
 

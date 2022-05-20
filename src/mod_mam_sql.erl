@@ -154,23 +154,36 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
 is_encrypted(LServer,StanzaID) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(encrypted)b
+    ?SQL("select @(encrypted)b,@(xml)s
        from archive where timestamp=%(StanzaID)d")) of
-    {selected,[{Encrypted}]} ->
-      Encrypted;
+    {selected,[{true, XML}]} ->
+      {true, get_encrypted_type(fxml_stream:parse_element(XML))};
     _ ->
       false
   end.
 
 is_encrypted(Pkt0) ->
-  Pkt = xmpp:decode(Pkt0),
-  Encrypted = xmpp:get_subtag(Pkt, #encrypted_message_omemo{}),
-  case Encrypted of
-    #encrypted_message_omemo{} ->
-      true;
-    _ ->
-      false
+  case get_encrypted_type(Pkt0) of
+    <<>> -> false;
+    _ -> true
   end.
+
+get_encrypted_type({error, _}) ->
+  <<>>;
+get_encrypted_type(Pkt) ->
+  Patterns = [<<"urn:xmpp:otr">>, <<"urn:xmpp:omemo">>],
+  lists:foldl(fun(El, Acc0) ->
+    NS0 = xmpp:get_ns(El),
+    NS1 = lists:foldl(fun(P, Acc1) ->
+      case binary:match(NS0,P) of
+        nomatch -> Acc1;
+        _ -> NS0
+      end  end, <<>>, Patterns),
+    if
+      NS1 == <<>> -> Acc0;
+      true -> NS1
+    end
+              end, <<>>, xmpp:get_els(Pkt)).
 
 filter_all_except_references(Pkt) ->
   Els = xmpp:get_els(Pkt),

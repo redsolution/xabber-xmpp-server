@@ -628,11 +628,11 @@ process_message(out, #message{id = ID, type = chat, from = #jid{luser =  LUser,l
         #stanza_id{id = integer_to_binary(TS), by = jid:make(LServer)}),
       store_special_message_id(LServer,LUser,Conversation,TS,ID,<<"invite">>);
     true ->
-      Encrypted = xmpp:get_subtag(Pkt,#encrypted_message_omemo{}),
+      Encrypted = body_is_encrypted(Pkt),
       Type = case Encrypted of
-                      #encrypted_message_omemo{} ->
-                        create_conversation(LServer,LUser,Conversation,<<"">>,true,?NS_OMEMO,<<>>),
-                        ?NS_OMEMO;
+                      {true, NS} ->
+                        create_conversation(LServer,LUser,Conversation,<<"">>,true,NS,<<>>),
+                        NS;
                       _ ->
                         update_metainfo(LServer,LUser,Conversation,undefined),
                         undefined
@@ -673,7 +673,7 @@ process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = 
       Type1 = case Type of
                 undefined ->
                   case mod_mam_sql:is_encrypted(LServer,StanzaID) of
-                    true -> ?NS_OMEMO;
+                    {true, NS} -> NS;
                     _-> ?CHAT_NS
                   end;
                 _-> Type
@@ -1657,7 +1657,7 @@ handle_sub_els(chat, [#message_displayed{id = OriginID} = Displayed], From, To) 
                           Displayed2 = filter_packet(Displayed,BareJID),
                           SID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
                           case mod_mam_sql:is_encrypted(LServer,SID) of
-                            true -> {?NS_OMEMO, SID};
+                            {true, NS} -> {NS, SID};
                             _-> {?CHAT_NS, SID}
                           end
                       end,
@@ -1671,8 +1671,8 @@ handle_sub_els(chat, [#message_received{id = OriginID} = Delivered], From, To) -
   StanzaID1 = get_stanza_id(Delivered2,BareJID,LServer,OriginID),
   IsEncrypted = mod_mam_sql:is_encrypted(LServer,StanzaID1),
   case IsEncrypted of
-    true ->
-      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,?NS_OMEMO);
+    {true, NS} ->
+      update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,NS);
     _ ->
       update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,?CHAT_NS)
   end;
@@ -2240,18 +2240,21 @@ get_user_card(LUser, LServer, PUser, PServer) ->
       [Pkt]
   end.
 
--spec body_is_encrypted(message()) -> boolean().
-body_is_encrypted(#message{sub_els = SubEls}) ->
-  case lists:keyfind(<<"encrypted">>, #xmlel.name, SubEls) of
-    false -> false;
-    El ->
-      try xmpp:decode(El) of
-        #encrypted_message_omemo{} ->
-          {true, ?NS_OMEMO}
-      catch _:{xmpp_codec, _} ->
-        false
-      end
-  end.
+body_is_encrypted(Pkt) ->
+  SubEls = xmpp:get_els(Pkt),
+  Patterns = [<<"urn:xmpp:otr">>, <<"urn:xmpp:omemo">>],
+  lists:foldl(fun(El, Acc0) ->
+    NS0 = xmpp:get_ns(El),
+    NS1 = lists:foldl(fun(P, Acc1) ->
+      case binary:match(NS0,P) of
+        nomatch -> Acc1;
+        _ -> NS0
+      end  end, none, Patterns),
+    if
+      NS1 == none-> Acc0;
+      true -> {true, NS1}
+    end
+              end, false, SubEls).
 
 maybe_change_last_msg(LServer, LUser, ConversationJID, Replace) ->
   {PUser, PServer, _PRes} = jid:tolower(ConversationJID),

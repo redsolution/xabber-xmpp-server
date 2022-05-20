@@ -34,8 +34,8 @@
 
 %% ejabberd_hooks callbacks.
 -export([disco_sm_features/5, c2s_session_pending/1, c2s_copy_session/2,
-	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1, encrypt/3, decrypt/2, xabber_push_notification/4, make_encryption/3, test_values/0,
-	 remove_user/2]).
+	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1, encrypt/3,
+	 decrypt/2, xabber_push_notification/4, make_encryption/3, remove_user/2, revoke_devices/3]).
 
 %% gen_iq_handler callback.
 -export([process_iq/1]).
@@ -67,7 +67,7 @@
 			xdata())
 	  -> {ok, xabber_push_session()} | {error, err_reason()}.
 -callback store_session(binary(), binary(), timestamp(), jid(), binary(),
-		xdata(), binary(), binary())
+		xdata(), binary(), binary(), any())
 			-> {ok, xabber_push_session()} | {error, err_reason()}.
 -callback lookup_session(binary(), binary(), jid(), binary())
 	  -> {ok, xabber_push_session()} | {error, err_reason()}.
@@ -79,6 +79,8 @@
 	  -> {ok, [xabber_push_session()]} | {error, err_reason()}.
 -callback lookup_sessions(binary())
 	  -> {ok, [xabber_push_session()]} | {error, err_reason()}.
+-callback lookup_device_sessions(binary(), binary(), list())
+			-> {ok, [xabber_push_session()]} | {error, err_reason()}.
 -callback delete_session(binary(), binary(), timestamp())
 	  -> ok | {error, err_reason()}.
 -callback delete_old_sessions(binary() | global, erlang:timestamp())
@@ -197,6 +199,7 @@ delete_old_sessions(Days) ->
 %%--------------------------------------------------------------------
 -spec register_hooks(binary()) -> ok.
 register_hooks(Host) ->
+    ejabberd_hooks:add(revoke_devices, Host, ?MODULE, revoke_devices, 80),
 	  ejabberd_hooks:add(xabber_push_notification, Host, ?MODULE,
 			xabber_push_notification, 60),
     ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
@@ -218,6 +221,7 @@ register_hooks(Host) ->
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
+    ejabberd_hooks:delete(revoke_devices, Host, ?MODULE, revoke_devices, 80),
 	  ejabberd_hooks:delete(xabber_push_notification, Host, ?MODULE,
 		xabber_push_notification, 60),
     ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
@@ -353,7 +357,12 @@ enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
 		PushJID, Node, XData,Cipher,EncryptionKey) ->
 	case ejabberd_sm:get_session_sid(LUser, LServer, LResource) of
 		{TS, PID} ->
-			case store_session(LUser, LServer, TS, PushJID, Node, XData,Cipher,EncryptionKey) of
+			DeviceID = case ejabberd_sm:get_user_info(LUser, LServer, LResource) of
+									 [_H|Info] ->
+										 proplists:get_value(device_id, Info, undefined);
+									 _ -> undefined
+								 end,
+			case store_session(LUser, LServer, TS, PushJID, Node, XData,Cipher,EncryptionKey, DeviceID) of
 				{ok, _} ->
 					?INFO_MSG("Enabling push notifications for ~s",
 						[jid:encode(JID)]),
@@ -390,6 +399,12 @@ disable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
 %%--------------------------------------------------------------------
 %% Hook callbacks.
 %%--------------------------------------------------------------------
+revoke_devices(LUser, LServer, DevIDList) ->
+	?INFO_MSG("Disabling push notifications for ~s@~s on devices:~p",[LUser, LServer, DevIDList]),
+	Mod = gen_mod:db_mod(LServer, ?MODULE),
+	LookupFun = fun() -> Mod:lookup_device_sessions(LUser, LServer, DevIDList) end,
+	delete_sessions(LUser, LServer, LookupFun, Mod).
+
 -spec c2s_stanza(c2s_state(), xmpp_element() | xmlel(), term()) -> c2s_state().
 c2s_stanza(State, #stream_error{}, _SendResult) ->
     State;
@@ -544,9 +559,9 @@ store_session(LUser, LServer, TS, PushJID, Node, XData) ->
 	    Mod:store_session(LUser, LServer, TS, PushJID, Node, XData)
     end.
 
--spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata(),binary(),binary())
+-spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata(),binary(),binary(),any())
 			-> {ok, xabber_push_session()} | {error, err_reason()}.
-store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey) ->
+store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, DeviceID) ->
 	Mod = gen_mod:db_mod(LServer, ?MODULE),
 	Cache = use_cache(Mod, LServer),
 	delete_session(LUser, LServer, PushJID, Node),
@@ -559,10 +574,10 @@ store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey) -
 				{LUser, LServer, TS}, {ok, {TS, PushJID, Node, XData}},
 				fun() ->
 					Mod:store_session(LUser, LServer, TS, PushJID, Node,
-						XData, Cipher, EncryptionKey)
+						XData, Cipher, EncryptionKey, DeviceID)
 				end, cache_nodes(Mod, LServer));
 		false ->
-			Mod:store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey)
+			Mod:store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, DeviceID)
 	end.
 
 -spec lookup_session(binary(), binary(), timestamp())
@@ -859,6 +874,3 @@ make_new_form(Type_) ->
 	] ++ Out,
 	#xdata{type = result,
 		fields = Fields}.
-
-test_values() ->
-	[#stanza_id{id = <<"123">>, by = jid:make(<<"test">>)}].

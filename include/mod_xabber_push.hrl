@@ -23,4 +23,5 @@
          node = <<"">>                          :: binary(),
          encryption_type = <<"">>               :: binary(),
          encryption_key = <<"">>                :: binary(),
-         xml                                    :: undefined | xmlel()}).
+         xml                                    :: undefined | xmlel(),
+         device_id                              :: undefined | binary()}).

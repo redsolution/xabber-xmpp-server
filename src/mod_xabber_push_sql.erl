@@ -28,8 +28,8 @@
 -compile([{parse_transform, ejabberd_sql_pt}]).
 
 %% API
--export([init/2, store_session/6, store_session/8, lookup_session/4, lookup_session/3,
-	 lookup_sessions/3, lookup_sessions/2, lookup_sessions/1,
+-export([init/2, store_session/6, store_session/9, lookup_session/4, lookup_session/3,
+	 lookup_sessions/3, lookup_sessions/2, lookup_sessions/1, lookup_device_sessions/3,
 	 delete_session/3, delete_old_sessions/2, export/1]).
 
 -include("xmpp.hrl").
@@ -60,8 +60,9 @@ store_session(LUser, LServer, NowTS, PushJID, Node, XData) ->
 	_Err ->
 	    {error, db_failure}
     end.
-
-store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key) ->
+store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, undefined) ->
+	store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, <<>>);
+store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, DeviceID) ->
 	?INFO_MSG("Storing session ~p",[LUser]),
 	XML = encode_xdata(XData),
 	TS = misc:now_to_usec(NowTS),
@@ -76,7 +77,8 @@ store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key) ->
 			"!node=%(Node)s",
 			"cipher=%(Cipher)s",
 			"key=%(KeyString)s",
-			"xml=%(XML)s"]) of
+			"xml=%(XML)s",
+			"device_id=%(DeviceID)s"]) of
 		ok ->
 			?INFO_MSG("Save session for ~p",[LUser]),
 			{ok, {NowTS, PushLJID, Node, XData, Cipher, Key}};
@@ -175,6 +177,29 @@ lookup_sessions(LServer) ->
 	_Err ->
 	    {error, db_failure}
     end.
+
+lookup_device_sessions(LUser, LServer, Devices) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(service)s, @(cipher)s, @(key)s, @(device_id)s "
+    "from xabber_push_session "
+    "where username=%(LUser)s and %(LServer)H")) of
+    {selected, Rows} ->
+      {ok, lists:filtermap(
+        fun({TS, XML, Node, Service, Cipher, Key, DevID}) ->
+          case lists:member(DevID, Devices) of
+            true ->
+              NowTS = misc:usec_to_now(TS),
+              XData = decode_xdata(XML, LUser, LServer),
+              PushLJID = jid:tolower(jid:decode(Service)),
+              {true, {NowTS, PushLJID,Node, XData, Cipher, Key}};
+            _ ->
+              false
+          end
+        end, Rows)};
+    _Err ->
+      {error, db_failure}
+  end.
 
 delete_session(LUser, LServer, NowTS) ->
     TS = misc:now_to_usec(NowTS),

@@ -41,8 +41,7 @@
 %% Commands
 -export([
   revoke_device/3,
-  delete_expired_devices/1,
-  revoke_long_unused_devices/2
+  delete_long_unused_devices/2
 ]).
 %% Hoks
 -export([
@@ -222,7 +221,7 @@ process_iq(#iq{type = set, from = From, to = To,
   Info = set_default(InfoRaw),
   Client = set_default(ClientRaw),
   Desc = set_default(DescRaw),
-  ID = list_to_binary(str:to_lower(binary_to_list(randoms:get_alphanum_string(32)))),
+  ID = make_device_id(SJID),
   IP = ejabberd_sm:get_user_ip(From#jid.luser,LServer,From#jid.lresource),
   IPs = case IP of
           {PAddr, _PPort} -> ip_to_binary(PAddr);
@@ -296,7 +295,7 @@ process_iq(#iq{type = set, from = From,
   LServer = From#jid.lserver,
   LUser = From#jid.luser,
   DeviceIDs = lists:map(fun(#devices_device{id = ID}) -> ID end, Devices),
-  case sql_revoke_devices(LUser, LServer, DeviceIDs) of
+  case revoke_devices(LUser, LServer, DeviceIDs) of
     ok ->
       ReasonTXT = <<"Device was revoked">>,
       lists:foreach(fun(N) -> kick_by_device_id(LServer,LUser,N,ReasonTXT) end, DeviceIDs),
@@ -323,37 +322,37 @@ process_iq(Iq) ->
 
 
 remove_user(User, Server) ->
-  revoke_all(Server,User).
+  JID = jid:to_string(jid:make(User,Server)),
+  Devices = sql_get_device_ids(Server,JID),
+  run_hook_revoke_devices(User, Server, Devices),
+  sql_delete_all_devices(Server,JID).
 
 %%%%
 %%  Commands
 %%%%
 
-delete_expired_devices(Host) ->
-  case sql_delete_expired_devices(Host) of
-    ok-> 0;
-    _-> 1
-  end.
-
-revoke_long_unused_devices(Days,Host) ->
-  case is_integer(Days) of
-    true ->
-      case sql_revoke_long_unused_devices(integer_to_binary(Days),Host) of
-        ok-> 0;
-        _-> 1
-      end;
-    _ ->
-     1
-  end.
+delete_long_unused_devices(Days,Host) when is_integer(Days) ->
+  case sql_select_unused(Days, Host) of
+    [] -> 0;
+    error -> 1;
+    L ->
+      run_hook_revoke_devices(L),
+      sql_delete_unused(Days, Host),
+      0
+  end;
+delete_long_unused_devices(_Days, _Host) ->
+  1.
 
 revoke_device(LServer, LUser, DeviceID) ->
-  SJID = jid:to_string(jid:make({LUser,LServer})),
-  case sql_delete_device(LServer,SJID,DeviceID) of
-    ok->
-      ReasonTXT = <<"Token was revoked">>,
-      kick_by_device_id(LServer,LUser,DeviceID,ReasonTXT);
+  case sql_revoke_devices(LUser, LServer, [DeviceID]) of
+    error -> 1;
+    notfound ->
+      0;
     _ ->
-      1
+      run_hook_revoke_devices(LUser, LServer,[DeviceID]),
+      ReasonTXT = <<"Token was revoked">>,
+      kick_by_device_id(LServer,LUser,DeviceID,ReasonTXT),
+      0
   end.
 
 %%%%
@@ -402,7 +401,7 @@ register_and_upgrade_to_hotp_session(Iq,User,Server,State,#device_register{devic
   Info = set_default(InfoRaw),
   Client = set_default(ClientRaw),
   Desc = set_default(DescRaw),
-  ID = list_to_binary(str:to_lower(binary_to_list(randoms:get_alphanum_string(32)))),
+  ID = make_device_id(SJID),
   case sql_register_device(Server, SJID, TTL, Info, Client, ID, IPs, Desc) of
     {ok,Secret,ExpireTime} ->
       xmpp_stream_in:send(State,xmpp:make_iq_result(Iq,
@@ -440,6 +439,12 @@ set_count(User, Server, DeviceID, Count) ->
 %%%%
 %%  Internal functions
 %%%%
+
+make_device_id(SJID) ->
+  DevID = integer_to_binary(crypto:rand_uniform(1,16777216)),
+  DevIDPadded = <<(binary:copy(<<"0">>, 8 - byte_size(DevID)))/binary, DevID/binary>>,
+  UserID = str:sha(SJID),
+  <<DevIDPadded/binary,UserID:24/binary>>.
 
 ip_to_binary(IP) ->
   IPStr = inet_parse:ntoa(IP),
@@ -580,21 +585,6 @@ prepare_value(V) when is_integer(V) ->
 prepare_value(_V) ->
   "''".
 
-%%update_device_info(LServer, ID, Props) ->
-%%  PreProps = [ atom_to_list(K) ++ "='" ++ binary_to_list(ejabberd_sql:escape(V)) ++ "'" || {K,V} <- Props,
-%%    V =/= undefined],
-%%  SetString = string:join(PreProps, ","),
-%%  Query = "update devices set " ++ SetString ++
-%%    " where device_id='" ++  binary_to_list(ejabberd_sql:escape(ID)) ++ "' ;",
-%%  case ejabberd_sql:sql_query(LServer, Query) of
-%%    {updated,0} ->
-%%      notfound;
-%%    {updated,_} ->
-%%      ok;
-%%    _ ->
-%%      error
-%%  end.
-
 %%%% SQL Functions
 
 sql_update_count(LUser, LServer, _DeviceID, _Count) ->
@@ -668,9 +658,6 @@ sql_select_user_devices(LServer, _SJID) ->
       error
   end.
 
--spec sql_revoke_devices(binary(), binary(), list()) -> ok | error.
-sql_revoke_devices(_LUser, _LServer, []) ->
-  notfound;
 sql_revoke_devices(LUser, LServer, IDs) ->
   BareJID = jid:to_string(jid:make(LUser,LServer,<<>>)),
   IDClause = device_id_clause(IDs),
@@ -689,7 +676,7 @@ sql_get_device_ids(Server,_JID) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(device_id)s"
-    " from devices where jid=%(_JID)s")) of
+    " from devices where jid=%(_JID)s and expire > 0")) of
     {selected, Devices} ->
       [ID || {ID} <- Devices];
     _ ->
@@ -706,6 +693,11 @@ sql_revoke_all_devices(LServer,BareJID) ->
       error
   end.
 
+sql_delete_all_devices(LServer,_SJID) ->
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("delete from devices where jid=%(_SJID)s")).
+
 sql_delete_device(Server,_SJID,_ID) ->
  case ejabberd_sql:sql_query(
     Server,
@@ -716,19 +708,21 @@ sql_delete_device(Server,_SJID,_ID) ->
  end.
 
 %% SQL for API
-sql_delete_expired_devices(LServer) ->
-  Now = integer_to_binary(seconds_since_epoch(0)),
+
+sql_select_unused(Days, LServer) ->
+  _Time = seconds_since_epoch_minus(Days*86400),
   case ejabberd_sql:sql_query(
     LServer,
-    [<<"delete from devices where expire > 0 and expire < '">>,Now,<<"'">>]) of
-    {updated,_N} ->
-      ok;
+    ?SQL("select @(jid)s,@(device_id)s"
+    " from devices where last_usage < %(_Time)d")) of
+    {selected, UserDev} ->
+      UserDev;
     _ ->
       error
   end.
 
-sql_revoke_long_unused_devices(Days,LServer) ->
-  Time = seconds_since_epoch_minus(Days*86400),
+sql_delete_unused(Days,LServer) ->
+  Time = integer_to_binary(seconds_since_epoch_minus(Days*86400)),
   case ejabberd_sql:sql_query(
     LServer,
     [<<"delete from devices where last_usage < '">>,Time,<<"'">>]) of
@@ -739,19 +733,37 @@ sql_revoke_long_unused_devices(Days,LServer) ->
   end.
 
 %%%% END SQL Functions
+
+
+run_hook_revoke_devices(KVList) ->
+  lists:foreach(fun({SJID, IDs}) ->
+    #jid{luser=LUser, lserver=LServer} = jid:from_string(SJID),
+    run_hook_revoke_devices(LUser, LServer, IDs)
+                end, group_by(KVList)),
+  ok.
+
+run_hook_revoke_devices(LUser, LServer, IDs) ->
+  ejabberd_hooks:run(revoke_devices, LServer, [LUser, LServer, IDs]),
+  delete_from_omemo(LUser, LServer, IDs),
+  ok.
+
+
+-spec revoke_devices(binary(), binary(), list()) -> ok | notfound | error.
+revoke_devices(_LUser, _LServer, []) ->
+  notfound;
+revoke_devices(LUser, LServer, IDs) ->
+  run_hook_revoke_devices(LUser, LServer, IDs),
+  sql_revoke_devices(LUser, LServer, IDs).
+
 revoke_all(Server,User) ->
   JID = jid:to_string(jid:make(User,Server)),
   Devices = sql_get_device_ids(Server,JID),
-  case sql_revoke_all_devices(Server,JID) of
-    ok ->
-      lists:foreach(fun(ID) ->
-        ReasonTXT = <<"Device was revoked">>,
-        kick_by_device_id(Server,User,ID,ReasonTXT) end, Devices
-      ),
-      ok;
-    _ ->
-      error
-  end.
+  run_hook_revoke_devices(User, Server, Devices),
+  lists:foreach(fun(ID) ->
+    ReasonTXT = <<"Device was revoked">>,
+    kick_by_device_id(Server,User,ID,ReasonTXT) end, Devices
+  ),
+  sql_revoke_all_devices(Server,JID).
 
 revoke_all_except(Server, User, Resource) ->
   JID = jid:make(User,Server),
@@ -763,7 +775,7 @@ revoke_all_except(Server, User, Resource) ->
                       Info -> proplists:get_value(device_id, Info, <<>>)
                     end,
   Devices = DevicesAll -- [SessionDeviceID],
-  case sql_revoke_devices(User, Server, Devices) of
+  case revoke_devices(User, Server, Devices) of
     ok ->
       ReasonTXT = <<"Device was revoked">>,
       lists:foreach(fun(N) -> kick_by_device_id(Server,User,N,ReasonTXT) end, Devices);
@@ -793,6 +805,51 @@ device_id_clause(IDs) ->
               end,
   <<Begin/binary,IDValues/binary,Fin/binary>>.
 
+delete_from_omemo(LUser, LServer, IDs) ->
+  JID = jid:make(LUser, LServer),
+  Node = <<"urn:xmpp:omemo:2:devices">>,
+  IQ = #iq{from = JID,
+    to = JID,
+    id = randoms:get_string(),
+    type = get,
+    sub_els = [#pubsub{items = #ps_items{node = Node }}],
+    meta = #{}},
+  case mod_pubsub:iq_sm(IQ) of
+    #iq{type = result, sub_els = [#pubsub{items = #ps_items{items =
+    [#ps_item{sub_els = [#xmlel{name = <<"devices">>, attrs = Attrs, children = Devices }]}]}}]} ->
+      DeletedIDs = extract_omemo_id(IDs),
+      Item = #ps_item{
+        id = <<"current">>,
+        sub_els = [#xmlel{name = <<"devices">>, attrs = Attrs,
+          children = filter_omemo_devices(Devices, DeletedIDs)}]},
+      Payload = #pubsub{publish = #ps_publish{node = Node, items = [Item]}},
+      mod_pubsub:iq_sm(IQ#iq{type = set, sub_els = [Payload]}),
+      lists:foreach(fun(ID) ->
+        Retract = #pubsub{retract = #ps_retract{
+          node = <<"urn:xmpp:omemo:2:bundles">>,
+          items = [#ps_item{id = ID}]}},
+        mod_pubsub:iq_sm(IQ#iq{type = set, sub_els = [Retract]})
+                    end, DeletedIDs);
+    _->
+      error
+  end.
+
+extract_omemo_id(DeviceIDs) ->
+  lists:filtermap(fun(I) ->
+    try {true, str:strip(binary:part(I,0,8), left,$0)}
+    catch _:_ ->
+      false
+    end end, DeviceIDs).
+
+filter_omemo_devices(Elems, DeletedIDs) ->
+  lists:filter(fun(El) ->
+    case lists:keyfind(<<"id">>, 1, El#xmlel.attrs) of
+      {_, ID} ->
+        not lists:member(ID, DeletedIDs);
+      _ ->
+        true
+    end end, Elems).
+
 make_secret() ->
   base64:encode(crypto:strong_rand_bytes(20)).
 
@@ -805,6 +862,17 @@ seconds_since_epoch(Diff) ->
 seconds_since_epoch_minus(Diff) ->
   {Mega, Secs, _} = os:timestamp(),
   Mega * 1000000 + Secs - Diff.
+
+get_time_now() ->
+  {{Y,Mo,D}, {H,Mn,S}} = calendar:universal_time(),
+  FmtStr = "~2.10.0B/~2.10.0B/~4.10.0B at ~2.10.0B:~2.10.0B:~2.10.0B UTC",
+  IsoStr = io_lib:format(FmtStr, [D, Mo, Y, H, Mn, S]),
+  list_to_binary(IsoStr).
+
+group_by([])->    [];
+group_by(KVList) ->
+  Fun = fun({K,V}, D) -> dict:append(K, V, D) end,
+  dict:to_list(lists:foldr(Fun , dict:new(), KVList)).
 
 get_commands_spec() ->
   [
@@ -820,31 +888,12 @@ get_commands_spec() ->
       result_desc = "Returns integer code:\n"
       " - 0: operation succeeded\n"
       " - 1: error: sql query error"},
-    #ejabberd_commands{name = delete_expired_devices, tags = [xabber],
-      desc = "Delete expired devices",
-      longdesc = "Type 'your.host' to delete expired devices from selected host.",
-      module = ?MODULE, function = delete_expired_devices,
-      args_desc = ["Host"],
-      args_example = [<<"capulet.lit">>],
-      args = [{host, binary}],
-      result = {res, rescode},
-      result_example = 0,
-      result_desc = "Returns integer code:\n"
-      " - 0: operation succeeded\n"
-      " - 1: error: sql query error"},
-    #ejabberd_commands{name = revoke_long_unused_devices, tags = [xabber],
+    #ejabberd_commands{name = delete_long_unused_devices, tags = [xabber],
       desc = "Delete devices which not used more than DAYS ",
       longdesc = "",
-      module = ?MODULE, function = revoke_long_unused_devices,
+      module = ?MODULE, function = delete_long_unused_devices,
       args_desc = ["Days to keep unsed device", "Host"],
       args_example = [30, <<"capulet.lit">>],
       args = [{days, integer}, {host, binary}],
       result = {res, rescode}}
   ].
-
-
-get_time_now() ->
-  {{Y,Mo,D}, {H,Mn,S}} = calendar:universal_time(),
-  FmtStr = "~2.10.0B/~2.10.0B/~4.10.0B at ~2.10.0B:~2.10.0B:~2.10.0B UTC",
-  IsoStr = io_lib:format(FmtStr, [D, Mo, Y, H, Mn, S]),
-  list_to_binary(IsoStr).

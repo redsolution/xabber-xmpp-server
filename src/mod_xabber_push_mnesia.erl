@@ -29,8 +29,8 @@
 -behaviour(mod_xabber_push).
 
 %% API
--export([init/2, store_session/6, lookup_session/4, lookup_session/3, store_session/8,
-	 lookup_sessions/3, lookup_sessions/2, lookup_sessions/1,
+-export([init/2, store_session/6, lookup_session/4, lookup_session/3, store_session/9,
+	 lookup_sessions/3, lookup_sessions/2, lookup_sessions/1, lookup_device_sessions/3,
 	 delete_session/3, delete_old_sessions/2, transform/1]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
@@ -42,12 +42,13 @@
 %%% API
 %%%-------------------------------------------------------------------
 init(_Host, _Opts) ->
+		update_table(),
     ejabberd_mnesia:create(?MODULE, xabber_push_session,
 			   [{disc_only_copies, [node()]},
 			    {type, bag},
 			    {attributes, record_info(fields, xabber_push_session)}]).
 
-store_session(LUser, LServer, TS, PushJID, Node, XData, EncryptionType, EncriptionKey) ->
+store_session(LUser, LServer, TS, PushJID, Node, XData, EncryptionType, EncriptionKey, DeviceID) ->
 	US = {LUser, LServer},
 	PushLJID = jid:tolower(PushJID),
 	MaxSessions = ejabberd_sm:get_max_user_sessions(LUser, LServer),
@@ -63,7 +64,8 @@ store_session(LUser, LServer, TS, PushJID, Node, XData, EncryptionType, Encripti
 			node = Node,
 			xml = encode_xdata(XData),
 			encryption_key = base64:encode(EncriptionKey),
-			encryption_type = EncryptionType
+			encryption_type = EncryptionType,
+			device_id = DeviceID
 			})
 			end,
 	case mnesia:transaction(F) of
@@ -167,6 +169,11 @@ lookup_sessions(LServer) ->
     Records = mnesia:dirty_select(xabber_push_session, MatchSpec),
     {ok, records_to_sessions(Records)}.
 
+lookup_device_sessions(LUser, LServer, Devices) ->
+	Records1 = mnesia:dirty_read(xabber_push_session, {LUser, LServer}),
+	Records2 = lists:filter(fun(R)-> lists:member(R#xabber_push_session.device_id, Devices) end, Records1),
+	{ok, records_to_sessions(Records2)}.
+
 delete_session(LUser, LServer, TS) ->
     MatchSpec = ets:fun2ms(
 		  fun(#xabber_push_session{us = {U, S}, timestamp = T} = Rec)
@@ -247,3 +254,22 @@ records_to_sessions(Records) ->
 		      xml = El,
 			    encryption_type = EncriptionType,
 			    encryption_key = Key} <- Records].
+
+update_table() ->
+	Transformer =
+		fun(X)->
+			#xabber_push_session{
+				us = element(2,X),
+				timestamp = element(3,X),
+				service = element(4,X),
+				node = element(5,X),
+				encryption_type = element(6,X),
+				encryption_key = element(7,X),
+				xml = element(8,X),
+				device_id = undefined}
+		end,
+	try
+		mnesia:transform_table(xabber_push_session, Transformer, record_info(fields, xabber_push_session))
+	catch exit:{aborted, {no_exists, _}} ->
+		ok
+	end.

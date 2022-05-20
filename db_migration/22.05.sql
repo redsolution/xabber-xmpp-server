@@ -1,0 +1,1 @@
+ALTER TABLE xabber_push_session ADD COLUMN device_id text;

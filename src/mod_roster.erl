@@ -591,7 +591,7 @@ process_subscription(Direction, User, Server, JID1,
 			{none, AutoReply};
 		    {none, none} when Item#roster.subscription == none,
 				      Item#roster.ask == in ->
-			del_roster_t(LUser, LServer, LJID), {none, AutoReply};
+			del_roster_t(LUser, LServer, LJID), {route, AutoReply};
 		    {Subscription, Pending} ->
 			NewItem = Item#roster{subscription = Subscription,
 					      ask = Pending,
@@ -616,13 +616,15 @@ process_subscription(Direction, User, Server, JID1,
 	    end,
 	    case Push of
 		{push, OldItem, NewItem} ->
-		    if NewItem#roster.subscription == none,
+		    if OldItem#roster.subscription == none, NewItem#roster.subscription == none,
 		       NewItem#roster.ask == in ->
 			    ok;
 		       true ->
 			    push_item(jid:make(User, Server), OldItem, NewItem)
 		    end,
 		    true;
+		route ->
+				true;
 		none ->
 		    false
 	    end;

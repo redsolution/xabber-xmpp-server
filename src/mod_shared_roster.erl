@@ -331,10 +331,7 @@ in_subscription(Acc, #presence{to = To, from = JID, type = Type}) ->
 -spec out_subscription(presence()) -> boolean().
 out_subscription(#presence{from = From, to = To, type = unsubscribed} = Pres) ->
     #jid{user = User, server = Server} = From,
-    mod_roster:out_subscription(Pres#presence{type = unsubscribe}),
-    mod_roster:in_subscription(false, xmpp:set_from_to(
-					Pres#presence{type = unsubscribe},
-					To, From)),
+    mod_roster:out_subscription(Pres),
     process_subscription(out, User, Server, To, unsubscribed, false);
 out_subscription(#presence{from = From, to = To, type = Type}) ->
     #jid{user = User, server = Server} = From,

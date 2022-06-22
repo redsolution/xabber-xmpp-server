@@ -86,7 +86,7 @@
 -export([process/2]).
 
 %% register commands
--export([get_commands_spec/0, set_admin/2]).
+-export([get_commands_spec/0, set_admin/2, issue_token/3]).
 
 %% internal
 %%-export([create_user/1]).
@@ -120,6 +120,14 @@ get_commands_spec() ->
       args_desc = ["Username", "Local vhost served by ejabberd"],
       args_example = [<<"bob">>, <<"example.com">>],
       args = [{user, binary}, {host, binary}],
+      result = {res, rescode}},
+    #ejabberd_commands{name = panel_issue_token, tags = [panel],
+      desc = "Issue token for Panel",
+      policy = admin,
+      module = ?MODULE, function = issue_token,
+      args_desc = ["Username", "Local vhost served by ejabberd","Time to live of generated token in seconds"],
+      args_example = [<<"bob">>, <<"example.com">>, 3600],
+      args = [{user, binary}, {host, binary},{ttl, integer}],
       result = {res, rescode}}
   ].
 
@@ -156,7 +164,7 @@ process(Path, #request{method = Method, data = Data, q = Q, headers = Headers} =
   end.
 
 handle_reuest('POST',[<<"issue_token">>], _Req, _Perms, User, Server) ->
-  issue_token(User, Server);
+  issue_token(User, Server, ?TOKEN_TTL);
 handle_reuest('POST',[<<"revoke_token">>], #request{data = Data}, _Perms, User, Server) ->
   case extract_args(Data, [token]) of
     error -> badrequest_response();
@@ -506,13 +514,14 @@ parse_permissions(Perms) ->
   lists:foldl(fun({K,V}, Acc) -> <<Acc/binary,K/binary,V/binary>> end, <<>>,PL).
 
 %% Commands
-issue_token(User, Server) ->
+issue_token(User, Server, TTL) ->
   case oauth2:authorize_password({User, Server},  [<<"sasl_auth">>], admin_generated) of
     {ok, {_Ctx,Authorization}} ->
-      {ok, {_AppCtx2, Response}} = oauth2:issue_token(Authorization, [{expiry_time, ?TOKEN_TTL}]),
+      {ok, {_AppCtx2, Response}} = oauth2:issue_token(Authorization, [{expiry_time, TTL}]),
       {ok, AccessToken} = oauth2_response:access_token(Response),
-      sql_save_token(User, Server, AccessToken, ?TOKEN_TTL),
-      {201, {[{token, AccessToken},{expires_in, ?TOKEN_TTL}]}};
+      Expires = seconds_since_epoch(TTL),
+      sql_save_token(User, Server, AccessToken, Expires),
+      {201, {[{token, AccessToken},{expires_in, TTL}]}};
     {error, _Error} ->
       badrequest_response()
   end.
@@ -831,7 +840,10 @@ circle_change_members(Action, Args)->
   if
     is_list(Members) ->
       lists:foreach(fun(Member) ->
-        {U, S, _} = jid:tolower(jid:from_string(Member)),
+        {U, S, _} = case Member of
+                      <<"@all@">> -> {<<"@all@">>, Host, <<>>};
+                      M -> jid:tolower(jid:from_string(M))
+                    end,
         case Action of
           add ->
             mod_shared_roster:add_user_to_group(Host, {U, S}, Circle);
@@ -942,8 +954,7 @@ sql_get_permissions(_User, Server) ->
       {error,internal}
   end.
 
-sql_save_token(_LUser, LServer, _Token, TTLSeconds) ->
-  _Expire = seconds_since_epoch(TTLSeconds),
+sql_save_token(_LUser, LServer, _Token, _Expires) ->
   ejabberd_sql:sql_query(
     LServer,
     ?SQL_INSERT(
@@ -951,7 +962,7 @@ sql_save_token(_LUser, LServer, _Token, TTLSeconds) ->
       ["username=%(_LUser)s",
         "server_host=%(LServer)s",
         "token=%(_Token)s",
-        "expire=%(_Expire)d"])).
+        "expire=%(_Expires)d"])).
 
 sql_remove_token(LServer, _LUser, _Token) ->
   ejabberd_sql:sql_query(

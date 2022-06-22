@@ -224,16 +224,11 @@ search_in_references(References,SearchType) ->
   lists:member(true,Array).
 
 search_element_in_references(References,Element) ->
-  Array = lists:map(fun(Reference) ->
-    File = xmpp:get_subtag(Reference, Element),
-    case File of
-      Element ->
-        true;
-      _ ->
-        false
-    end
-                    end, References),
-  lists:member(true,Array).
+  lists:foldl(fun(Reference, Acc) ->
+    case  xmpp:get_subtag(xmpp:decode(Reference), Element) of
+      false -> Acc;
+      _ -> true
+    end end, false, References).
 
 write_prefs(LUser, _LServer, #archive_prefs{default = Default,
 					   never = Never,

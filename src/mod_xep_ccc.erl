@@ -2153,7 +2153,7 @@ conversation_sql_upsert(LServer, LUser, Conversation , Options) ->
   Thread = proplists:get_value(thread, Options, <<"">>),
   Encrypted = proplists:get_value(encrypted, Options, false),
   GroupInfo = proplists:get_value('group_info', Options, <<"">>),
-  Status = proplists:get_value('group_info', Options, <<"active">>),
+  Status = proplists:get_value('status', Options, <<"active">>),
   TS = time_now(),
   ?SQL_UPSERT_T(
     "conversation_metadata",

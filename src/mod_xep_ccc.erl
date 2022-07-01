@@ -136,7 +136,7 @@
 -define(TABLE_SIZE_LIMIT, 2000000000). % A bit less than 2 GiB.
 -define(NS_XABBER_SYNCHRONIZATION_CHAT, <<"https://xabber.com/protocol/synchronization#chat">>).
 -define(CHAT_NS,?NS_XABBER_SYNCHRONIZATION_CHAT).
--define(NS_OMEMO, <<"urn:xmpp:omemo:1">>).
+-define(NS_OMEMO, <<"urn:xmpp:omemo:2">>).
 %%--------------------------------------------------------------------
 %% gen_mod callbacks.
 %%--------------------------------------------------------------------
@@ -2131,15 +2131,20 @@ delete_invite(#invite_msg{us = {LUser,LServer}, id = ID} = Invite) ->
   mnesia:dirty_delete_object(Invite).
 
 make_sync_push(LServer,LUser,Conversation, TS, Type) ->
-  UserResources = ejabberd_sm:user_resources(LUser,LServer),
-  CnElem = get_conversation_info(LServer,LUser,Conversation,Type),
-  Query = #xabber_synchronization_query{stamp = integer_to_binary(TS), sub_els = [CnElem]},
-  lists:foreach(fun(Res) ->
-    From = jid:make(LUser,LServer),
-    To = jid:make(LUser,LServer,Res),
-    IQ = #iq{from = From, to = To, type = set, id = randoms:get_string(), sub_els = [Query]},
-    ejabberd_router:route(IQ)
-                end, UserResources).
+  case get_conversation_info(LServer,LUser,Conversation,Type) of
+    {error, Why} ->
+      ?ERROR_MSG("Get conversation info error: ~p;"
+      " user:~p, conversation:~p, type:~p",[Why, {LUser,LServer}, Conversation,Type]);
+    CnElem ->
+      UserResources = ejabberd_sm:user_resources(LUser,LServer),
+      Query = #xabber_synchronization_query{stamp = integer_to_binary(TS), sub_els = [CnElem]},
+      lists:foreach(fun(Res) ->
+        From = jid:make(LUser,LServer),
+        To = jid:make(LUser,LServer,Res),
+        IQ = #iq{from = From, to = To, type = set, id = randoms:get_string(), sub_els = [Query]},
+        ejabberd_router:route(IQ)
+                    end, UserResources)
+  end.
 
 create_conversation(LServer,LUser,Conversation,Thread,Encrypted,Type,GroupInfo) ->
   F = fun() ->

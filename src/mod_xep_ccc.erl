@@ -853,7 +853,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      RetractVersion = mod_xep_rrr:get_version(LServer,LUser,<<"encrypted">>),
+      RetractVersion = mod_retract:get_version(LServer,LUser,<<"encrypted">>),
       {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = RetractVersion}]},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]};
     _ ->
@@ -864,7 +864,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      RetractVersion = mod_xep_rrr:get_version(LServer,LUser,<<>>),
+      RetractVersion = mod_retract:get_version(LServer,LUser,<<>>),
       {stop,[#xabber_metadata{node = ?NS_XABBER_REWRITE, sub_els = [#xabber_conversation_retract{version = RetractVersion}]},
         #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]}
@@ -2127,7 +2127,7 @@ delete_old_invites(LUser,LServer,PUser,PServer) ->
   ).
 
 delete_invite(#invite_msg{us = {LUser,LServer}, id = ID} = Invite) ->
-  mod_xep_rrr:delete_message(LServer, LUser, ID),
+  mod_retract:delete_message(LServer, LUser, ID),
   mnesia:dirty_delete_object(Invite).
 
 make_sync_push(LServer,LUser,Conversation, TS, Type) ->

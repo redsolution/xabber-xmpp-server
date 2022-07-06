@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_xep_rrr.erl
+%%% File    : mod_retract.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose : XEP-0RRR: Message Delete and Rewrite
+%%% Purpose : XEP-RETRACT: Message Delete and Rewrite
 %%% Created : 17 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2022   Redsolution OÜ
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,13 +23,13 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_xep_rrr).
+-module(mod_retract).
 -author('andrey.gagarin@redsolution.com').
 -behaviour(gen_mod).
 -behavior(gen_server).
 -compile([{parse_transform, ejabberd_sql_pt}]).
 
--protocol({xep, '0RRR', '0.1.0'}).
+-protocol({xep, 'RETRACT', '0.1.0'}).
 %% gen_mod callbacks.
 -export([start/2,stop/1,reload/3,depends/2,mod_options/1]).
 
@@ -38,7 +38,6 @@
 
 %% retract hooks
 -export([
-  have_right_to_delete_all_incoming/6,
   have_right_to_delete_all/6,
   message_exist/6,
   replace_message/6,
@@ -47,8 +46,6 @@
   delete_all_incoming_messages/6,
   store_event/6, store_replace_event/6,
   notificate/6, notificate_replace/6,
-  save_id_in_conversation/1,
-  offline_message/1,
   get_version/3,
   message_type/2
 ]).
@@ -60,7 +57,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
   terminate/2, code_change/3]).
 
--export([check_iq/1,get_rewrite_job/6]).
+-export([check_iq/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -76,11 +73,10 @@
   message_id = <<>>                      :: non_neg_integer() | '_',
   usr = {<<>>, <<>>, <<>>}               :: {binary(), binary(), binary()} | '_',
   rewrite_ask = none                     :: rewriteask() | '_',
-  rewrite_message = []                   :: rewrite_message() | '_'
+  xml = undefined                        :: any() | '_'
 }).
 
 -type rewriteask() :: none | retract | retractall | rewrite.
--type rewrite_message() :: [{from,jid()} | {to,jid()} | {text,binary()} | {by, jid()}].
 %%--------------------------------------------------------------------
 %% gen_mod callbacks.
 %%--------------------------------------------------------------------
@@ -113,10 +109,10 @@ mod_options(_Host) ->
 %% gen_server callbacks.
 %%--------------------------------------------------------------------
 init([Host, _Opts]) ->
+  update_tables(),
   ejabberd_mnesia:create(?MODULE, rewrite_job,
     [{disc_only_copies, [node()]},
       {attributes, record_info(fields, rewrite_job)}]),
-  clean_tables(),
   register_iq_handlers(Host),
   register_hooks(Host),
   {ok, #state{host = Host}}.
@@ -138,50 +134,51 @@ handle_cast({From,#iq{id = IQID,type = set, sub_els = [#xabber_retract_message{i
   ?DEBUG("Change iq ~p",[NewIQ]),
   ejabberd_router:route(NewIQ),
   {noreply, State};
-handle_cast({From,#iq{id = IQID,type = set, sub_els = [#xabber_retract_all{conversation = BarePeer, type = Type}]}=IQ}, State) ->
+handle_cast({From,#iq{id = IQID,type = set,
+  sub_els = [#xabber_retract_all{conversation = BarePeer, type = _Type}=RetractEl]}=IQ}, State) ->
   {LUser,LServer,LResource} = jid:tolower(From),
   NewID = randoms:get_alphanum_string(32),
   NewIQ = IQ#iq{id = NewID},
-  set_rewrite_job(NewID,retractall,{LUser,LServer,LResource},BarePeer,IQID,[{type, Type}]),
+  set_rewrite_job(NewID,retractall,{LUser,LServer,LResource},BarePeer,IQID,RetractEl),
   ?DEBUG("Change iq ~p",[NewIQ]),
   ejabberd_router:route(NewIQ),
   {noreply, State};
-handle_cast({From,#iq{id = IQID,type = set, sub_els = [#xabber_replace{id = StanzaID, xabber_replace_message = Message}]}=IQ}, State) ->
+handle_cast({From,#iq{id = IQID,type = set,
+  sub_els = [#xabber_replace{id = StanzaID, xabber_replace_message = Message}]}=IQ}, State) ->
   {LUser,LServer,LResource} = jid:tolower(From),
   NewID = randoms:get_alphanum_string(32),
   NewIQ = IQ#iq{id = NewID},
-  #xabber_replace_message{from = MFrom, to = MTo, body = MBody, sub_els = SubEls} = Message,
-  set_rewrite_job(NewID,rewrite,{LUser,LServer,LResource},StanzaID,IQID,[{from,MFrom},{to,MTo},{text,MBody},{sub_els,SubEls}]),
+  set_rewrite_job(NewID,rewrite,{LUser,LServer,LResource},StanzaID,IQID,Message),
   ?DEBUG("Change iq ~p",[NewIQ]),
   ejabberd_router:route(NewIQ),
   {noreply, State};
 handle_cast(#iq{type = error, id = ID} = IQ, State) ->
-  ?DEBUG("Got retract error ~p",[IQ]),
-  case get_rewrite_job(ID,'_','_',{'_','_','_'},'_','_') of
+  case get_rewrite_job(ID) of
     [] ->
-      ?DEBUG("Do nothing",[]),
       ok;
     [#rewrite_job{usr = {LUser, LServer, LResource}, iq_id = IQID} = Job] ->
+      ?DEBUG("Got retract error ~p",[IQ]),
       delete_job(Job),
       FullJID = jid:make(LUser, LServer, LResource),
       NewIQ = IQ#iq{id = IQID, to = FullJID},
       ejabberd_router:route(NewIQ)
   end,
   {noreply, State};
-handle_cast(#iq{from = From, type = result, id = ID}, State) ->
+handle_cast(#iq{from = From, type = result, id = ID}, State) when From#jid.lresource == <<>> ->
   ?DEBUG("Got result ~p",[ID]),
-  case get_rewrite_job(ID,'_','_',{'_','_','_'},'_','_') of
+  case get_rewrite_job(ID) of
     [#rewrite_job{rewrite_ask = retractall, usr = {LUser, LServer, LResource}, iq_id = IQID,
-      rewrite_message = [{type, Type}]} = Job] when From#jid.lresource == <<>> ->
+      xml = RetractEl} = Job] ->
       delete_job(Job),
+      #xabber_retract_all{type = Type} = RetractEl,
       start_rewrite_job(retractall, LUser, LServer, LResource, Type, IQID, From);
     [#rewrite_job{message_id = StanzaID, rewrite_ask = rewrite, usr = {LUser, LServer, LResource}, iq_id = IQID,
-      rewrite_message = [{from,MFrom},{to,MTo},{text,MBody},{sub_els,SubEls}]} = Job] when From#jid.lresource == <<>> ->
+      xml = Message} = Job]->
       delete_job(Job),
       Replaced = #replaced{stamp = erlang:timestamp()},
-      Replace = #xabber_replace_message{from = MFrom,to = MTo, body = MBody, replaced = Replaced, sub_els = SubEls},
+      Replace = Message#xabber_replace_message{replaced = Replaced},
       start_rewrite_job(rewrite, LUser, LServer, LResource, StanzaID, IQID, {From,Replace});
-    [#rewrite_job{message_id = StanzaID, rewrite_ask = Type, usr = {LUser, LServer, LResource}, iq_id = IQID} = Job] when From#jid.lresource == <<>> ->
+    [#rewrite_job{message_id = StanzaID, rewrite_ask = Type, usr = {LUser, LServer, LResource}, iq_id = IQID} = Job] ->
       delete_job(Job),
       ?DEBUG("Start ~p message ~p for ~p~p~p ",[Type,StanzaID,LUser,LServer,LResource]),
       start_rewrite_job(Type, LUser, LServer, LResource, StanzaID, IQID, From);
@@ -194,7 +191,7 @@ handle_cast(_Msg, State) ->
   {noreply, State}.
 
 handle_info({mnesia_system_event, {mnesia_down, _Node}}, State) ->
-  clean_tables(),
+  mnesia:clear_table(rewrite_job),
   {noreply, State};
 handle_info(_Info, State) ->
   {noreply, State}.
@@ -220,10 +217,6 @@ disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
 %%--------------------------------------------------------------------
 -spec register_hooks(binary()) -> ok.
 register_hooks(Host) ->
-  ejabberd_hooks:add(offline_message_hook, Host, ?MODULE,
-    offline_message, 100),
-  ejabberd_hooks:add(receive_message_stored,
-    Host, ?MODULE, save_id_in_conversation, 100),
   ejabberd_hooks:add(s2s_receive_packet, Host, ?MODULE,
     check_iq, 30),
   %% add retract rewrite message hooks
@@ -260,10 +253,6 @@ register_hooks(Host) ->
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
-  ejabberd_hooks:delete(offline_message_hook, Host, ?MODULE,
-    offline_message, 100),
-  ejabberd_hooks:delete(receive_message_stored,
-    Host, ?MODULE, save_id_in_conversation, 100),
   ejabberd_hooks:delete(s2s_in_handle_call, Host, ?MODULE,
     check_iq, 10),
   %% delete retract one message hooks
@@ -349,36 +338,34 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_mess
   end;
 process_iq(#iq{from = From,
   to = To, type = set,
-  sub_els = [#xabber_retract_message{by = RetractUserJID, symmetric = true, id = StanzaID}]} = IQ) ->
+  sub_els = [#xabber_retract_message{symmetric = true, id = StanzaID}]} = IQ) ->
+  LUser = To#jid.luser,
   LServer = To#jid.lserver,
-  A = (jid:remove_resource(To) == jid:remove_resource(From)),
-  case From#jid.lresource of
-    <<>> when LServer =/= From#jid.lserver ->
-      BarePeer = jid:to_string(jid:remove_resource(RetractUserJID)),
-      case get_our_stanza_id(LServer,BarePeer,StanzaID) of
-        not_ok ->
+  IsToMyself = (jid:remove_resource(To) == jid:remove_resource(From)),
+  if
+    From#jid.lresource == <<>> andalso From#jid.lserver =/= LServer ->
+      BarePeer = jid:to_string(jid:remove_resource(From)),
+      case get_our_stanza_id(LServer, LUser, BarePeer, StanzaID) of
+        not_found ->
           ?DEBUG("Not found ~p ~p~n iq~p",[BarePeer,StanzaID,IQ]),
-          xmpp:make_error(IQ, xmpp:err_item_not_found());
-        {OurUser,OurStanzaID} when is_integer(OurStanzaID) == true ->
+          xmpp:make_iq_result(IQ);
+        error ->
+          ?DEBUG("Unknow error during retract ~p",[IQ]),
+          xmpp:make_error(IQ, xmpp:err_internal_server_error());
+        OurStanzaID ->
           Type = message_type(LServer,OurStanzaID),
-          OurUserJID = jid:from_string(OurUser),
-          LUser = OurUserJID#jid.luser,
           Version = get_version(LServer,LUser,Type) + 1,
           OurRetractAsk = #xabber_retract_message{
-            by = OurUserJID,
-            conversation = RetractUserJID,
+%%            by = OurUserJID,
+            conversation = From,
             id = OurStanzaID,
             version = Version,
             type = Type,
             xmlns = ?NS_XABBER_REWRITE_NOTIFY},
           ?DEBUG("Delete message ~p in chat ~p by ~p~n Retract ~p",[StanzaID,jid:to_string(To),BarePeer,OurRetractAsk]),
-          start_retract_message(LUser, LServer, OurStanzaID, IQ, OurRetractAsk, Version);
-        _ ->
-          ?DEBUG("Unknow error during retract ~p",[IQ]),
-          xmpp:make_error(IQ, xmpp:err_item_not_found())
+          start_retract_message(LUser, LServer, OurStanzaID, IQ, OurRetractAsk, Version)
       end;
-    _ when A == true ->
-      LUser = To#jid.luser,
+    IsToMyself ->
       PeerString = get_bare_peer(LServer,LUser,StanzaID),
       case PeerString of
         not_found ->
@@ -397,54 +384,51 @@ process_iq(#iq{from = From,
               ignore
           end
       end;
-    <<>> when To#jid.lresource == <<>> andalso To#jid.lserver == LServer ->
-      ?DEBUG("Start deleting local messages ~p",[IQ]),
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request())),
-      ignore;
-    _ ->
-      ?INFO_MSG("Bad symmetric retract",[]),
+    true ->
+      ?ERROR_MSG("Bad symmetric retract:~p",[IQ]),
       xmpp:make_error(IQ, xmpp:err_bad_request())
   end;
 process_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_all{conversation = RetractUserJID, symmetric = false, type = Type}]} = IQ) ->
-  A = (jid:remove_resource(To) == jid:remove_resource(From)),
-  LServer = From#jid.lserver,
-  LUser = From#jid.luser,
-  case A of
+  case (jid:remove_resource(To) == jid:remove_resource(From)) of
     true ->
+      LServer = From#jid.lserver,
+      LUser = From#jid.luser,
       Version = get_version(LServer,LUser,Type) + 1,
-      NewRetractAsk = #xabber_retract_all{type = Type, conversation = RetractUserJID, version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
+      NewRetractAsk = #xabber_retract_all{type = Type, conversation = RetractUserJID,
+        version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
       start_retract_all_message(LUser, LServer, IQ, NewRetractAsk, Version);
     _ ->
       xmpp:make_error(IQ, xmpp:err_bad_request())
   end;
-
-process_iq(#iq{
-  from = From,
-  to = To, type = set,
+process_iq(#iq{from = From,to = To, type = set,
   sub_els = [#xabber_replace{id = StanzaID, xabber_replace_message = Message}]} = IQ) ->
-  A = (To == jid:remove_resource(From)),
+  IsToMyself = (jid:remove_resource(To) == jid:remove_resource(From)),
+  LUser = To#jid.luser,
   LServer = To#jid.lserver,
-  case From#jid.lresource of
-    <<>> when LServer =/= From#jid.lserver->
+  if
+    From#jid.lresource == <<>> andalso LServer =/= From#jid.lserver->
       BarePeer = jid:to_string(From),
-      case get_our_stanza_id(LServer,BarePeer,StanzaID) of
-        not_ok ->
+      case get_our_stanza_id(LServer, LUser, BarePeer, StanzaID) of
+        not_found ->
           ?DEBUG("Not found ~p ~p~n iq~p",[BarePeer,StanzaID,IQ]),
           xmpp:make_error(IQ, xmpp:err_item_not_found());
-        {OurUser,OurStanzaID} when is_integer(OurStanzaID) == true ->
+        error ->
+          ?DEBUG("Unknow error during retract ~p",[IQ]),
+          xmpp:make_error(IQ, xmpp:err_internal_server_error());
+        OurStanzaID ->
           Type = message_type(LServer,OurStanzaID),
-          OurUserJID = jid:from_string(OurUser),
-          LUser = OurUserJID#jid.luser,
-          Version = get_version(LServer,LUser,Type) + 1,
+          Version = get_version(LServer, LUser, Type) + 1,
           Replaced = #replaced{stamp = erlang:timestamp()},
           NewMessage = Message#xabber_replace_message{replaced = Replaced},
-          OurReplaceAsk = #xabber_replace{by = OurUserJID, conversation = From, id = OurStanzaID, version = Version, xabber_replace_message = NewMessage, type = Type, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-          start_rewrite_message(LUser, LServer, OurStanzaID, IQ, OurReplaceAsk, Version);
-        _ ->
-          ?DEBUG("Unknow error during retract ~p",[IQ]),
-          xmpp:make_error(IQ, xmpp:err_item_not_found())
+          OurReplaceAsk = #xabber_replace{
+            type = Type, xmlns = ?NS_XABBER_REWRITE_NOTIFY,
+%%            by = OurUserJID,
+            conversation = From,
+            id = OurStanzaID, version = Version,
+            xabber_replace_message = NewMessage},
+          start_rewrite_message(LUser, LServer, OurStanzaID, IQ, OurReplaceAsk, Version)
         end;
-    _ when A == true ->
+    IsToMyself ->
       LUser = To#jid.luser,
       PeerString = get_bare_peer(LServer,LUser,StanzaID),
       PeerJID = jid:from_string(PeerString),
@@ -457,7 +441,9 @@ process_iq(#iq{
           Proc = gen_mod:get_module_proc(LServer, ?MODULE),
           gen_server:cast(Proc, {From,IQS}),
           ignore
-      end
+      end;
+    true ->
+      xmpp:make_error(IQ, xmpp:err_bad_request())
   end;
 process_iq(IQ) ->
   ?DEBUG("IQ ~p",[IQ]),
@@ -466,17 +452,22 @@ process_iq(IQ) ->
 start_local_replace(User1,User2,LServer,StanzaID,Message,IQ,Type) ->
   User1JID = jid:make(User1,LServer),
   User2JID = jid:make(User2,LServer),
-  User1String = jid:to_string(User1JID),
-  User2String = jid:to_string(User2JID),
-  case get_our_stanza_id(LServer,User1String,StanzaID) of
-    {User2String,OurStanzaID} when is_integer(OurStanzaID) == true ->
+  SUser1JID = jid:to_string(User1JID),
+  case get_our_stanza_id(LServer, User2, SUser1JID, StanzaID) of
+    not_found ->
+      ?DEBUG("Not found ~p ~p",[StanzaID,IQ]),
+      xmpp:make_error(IQ, xmpp:err_item_not_found());
+    error ->
+      ?DEBUG("Unknow error during rewrite ~p",[IQ]),
+      xmpp:make_error(IQ, xmpp:err_item_not_found());
+    OurStanzaID ->
       Replaced = #replaced{stamp = erlang:timestamp()},
       NewMessage = Message#xabber_replace_message{replaced = Replaced},
       User1Version = get_version(LServer,User1,Type) + 1,
       RetractAskUser1 = #xabber_replace{
         xabber_replace_message = NewMessage,
         type = Type,
-        by = User1JID,
+%%        by = User1JID,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User2JID,
         version = User1Version,
@@ -485,7 +476,7 @@ start_local_replace(User1,User2,LServer,StanzaID,Message,IQ,Type) ->
       RetractAskUser2 = #xabber_replace{
         xabber_replace_message = NewMessage,
         type = Type,
-        by = User2JID,
+%%        by = User2JID,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User1JID,
         version = User2Version,
@@ -496,22 +487,24 @@ start_local_replace(User1,User2,LServer,StanzaID,Message,IQ,Type) ->
           start_rewrite_message(User1, LServer, StanzaID, IQ, RetractAskUser1, User1Version);
         _ ->
           xmpp:make_error(IQ, xmpp:err_not_allowed())
-      end;
-    _ ->
-      ?DEBUG("Not found ~p ~p",[StanzaID,IQ]),
-      xmpp:make_error(IQ, xmpp:err_item_not_found())
+      end
   end.
 
 start_local_retract(User1,User2,LServer,StanzaID,IQ, Type) ->
   User1JID = jid:make(User1,LServer),
   User2JID = jid:make(User2,LServer),
   BarePeer = jid:to_string(User1JID),
-  User2String = jid:to_string(User2JID),
-  case get_our_stanza_id(LServer,BarePeer,StanzaID) of
-    {User2String,OurStanzaID} when is_integer(OurStanzaID) == true ->
+  case get_our_stanza_id(LServer, User2, BarePeer, StanzaID) of
+    not_found ->
+      ?DEBUG("Not found ~p ~p~n iq~p",[BarePeer,StanzaID,IQ]),
+      xmpp:make_error(IQ, xmpp:err_item_not_found());
+    error ->
+      ?DEBUG("Unknow error during retract ~p",[IQ]),
+      xmpp:make_error(IQ, xmpp:err_item_not_found());
+    OurStanzaID ->
       User1Version = get_version(LServer,User1,Type) + 1,
       RetractAskUser1 = #xabber_retract_message{
-        by = User1JID,
+%%        by = User1JID,
         type = Type,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User2JID,
@@ -519,7 +512,7 @@ start_local_retract(User1,User2,LServer,StanzaID,IQ, Type) ->
         id = StanzaID},
       User2Version = get_version(LServer,User2,Type) + 1,
       RetractAskUser2 = #xabber_retract_message{
-        by = User2JID,
+%%        by = User2JID,
         type = Type,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User1JID,
@@ -531,10 +524,7 @@ start_local_retract(User1,User2,LServer,StanzaID,IQ, Type) ->
           start_retract_message(User1, LServer, StanzaID, IQ, RetractAskUser1, User1Version);
         _ ->
           xmpp:make_error(IQ, xmpp:err_not_allowed())
-      end;
-    _ ->
-      ?DEBUG("Not found ~p ~p~n iq~p",[BarePeer,StanzaID,IQ]),
-      xmpp:make_error(IQ, xmpp:err_item_not_found())
+      end
   end.
 
 
@@ -666,23 +656,6 @@ delete_all_message(_Acc, RewriteAsk, LUser, LServer,_StanzaID, _Version) ->
       end
   end.
 
-have_right_to_delete_all_incoming(_Acc, RewriteAsk,LUser,LServer,_StanzaID, _Version) ->
-  OurUsername  = jid:to_string(jid:make(LUser,LServer)),
-  #xabber_retract_all{conversation = Conversation} = RewriteAsk,
-  BarePeer = jid:to_string(Conversation),
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(our_stanza_id)d from foreign_message_stanza_id where our_username=%(OurUsername)s and foreign_username=%(BarePeer)s")) of
-    {selected,[]} ->
-      {stop,not_found};
-    {selected,[{}]} ->
-      {stop,not_found};
-    {selected,Messages} ->
-      Messages;
-    _ ->
-      {stop,not_found}
-  end.
-
 delete_all_incoming_messages(Messages, RewriteAsk,LUser,LServer,_StanzaID, _Version) ->
   [F|R] = Messages,
   #xabber_retract_all{conversation = Conversation, type = Type} = RewriteAsk,
@@ -749,13 +722,11 @@ delete_message(_Acc,_RewriteAsk,LUser,LServer,StanzaID, _Version) ->
 replace_message(XML, RewriteAsk, LUser,LServer,StanzaID, _Version) ->
   #xabber_replace{xabber_replace_message = ReplaceMessage} = RewriteAsk,
   Sub = ReplaceMessage#xabber_replace_message.sub_els,
-  SubNewFil = filter_els(Sub),
   OldMessage = xmpp:decode(fxml_stream:parse_element(XML)),
   Lang = xmpp:get_lang(OldMessage),
   SubEls = xmpp:get_els(OldMessage),
   Replaced = ReplaceMessage#xabber_replace_message.replaced,
-  NewSubEls = strip_els(SubEls),
-  NewEls = NewSubEls ++ SubNewFil,
+  NewEls = filter_old_els(SubEls) ++ filter_new_els(Sub),
   NewTXT = ReplaceMessage#xabber_replace_message.body,
   NewMessage = OldMessage#message{body = [#text{data = NewTXT,lang = Lang}], sub_els = NewEls ++ [Replaced]},
   NewXML = fxml:element_to_binary(xmpp:encode(NewMessage)),
@@ -850,9 +821,13 @@ get_bare_peer(LServer,LUser,ID) ->
 get_count_events(Server,Username,Version,Type) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(count(*))d from message_retract where username = %(Username)s and version > %(Version)d and type=%(Type)s and %(Server)H")) of
+    ?SQL("select @(count(*))d from message_retract "
+    " where username = %(Username)s and version > %(Version)d and "
+    " type=%(Type)s and %(Server)H")) of
     {selected, [{Count}]} ->
-     Count
+     Count;
+    _->
+      0
   end.
 
 get_query(Server,Username,Version,Type) ->
@@ -917,161 +892,99 @@ check_iq({Packet, #{lserver := LServer} = S2SState}) ->
 
 %% retract jobs
 
-set_rewrite_job(ServerID, Type, {LUser,LServer,LResource}, StanzaIDBinary, IQID, RewriteMessage) ->
-  RewriteJob = #rewrite_job{server_id = ServerID, iq_id = IQID, message_id =  StanzaIDBinary, usr = {LUser,LServer,LResource}, rewrite_ask = Type, rewrite_message = RewriteMessage},
+set_rewrite_job(ServerID, Type, {LUser,LServer,LResource}, StanzaIDBinary, IQID, XML) ->
+  RewriteJob = #rewrite_job{server_id = ServerID, iq_id = IQID, message_id = StanzaIDBinary,
+    usr = {LUser,LServer,LResource}, rewrite_ask = Type, xml = XML},
   mnesia:dirty_write(RewriteJob).
 
-get_rewrite_job(ServerID,IQID,Type,{LUser,LServer,LResource},StanzaIDBinary,RewriteMessage) ->
-  FN = fun()->
-    mnesia:match_object(rewrite_job,
-      {rewrite_job, ServerID, IQID, StanzaIDBinary, {LUser,LServer,LResource}, Type,RewriteMessage},
-      read)
-       end,
+get_rewrite_job(ServerID) ->
+  FN = fun()-> mnesia:read(rewrite_job, ServerID) end,
   {atomic,Jobs} = mnesia:transaction(FN),
   Jobs.
 
 -spec delete_job(#rewrite_job{}) -> ok.
-delete_job(#rewrite_job{} = J) ->
+delete_job(J) ->
   mnesia:dirty_delete_object(J).
 
 %% clean mnesia
 
-clean_tables() ->
-  Jobs =
-    get_rewrite_job('_','_','_',{'_','_','_'},'_','_'),
-  lists:foreach(
-    fun(J) ->
-      mnesia:dirty_delete_object(J)
-    end, Jobs).
-
-%% save foreign stanza-id
-
-save_foreign_id_and_jid(_,_,F,_,L) when F == undefined orelse L == undefined ->
-  skip;
-save_foreign_id_and_jid(LServer,FUsername,FID,OurUser,OurID) ->
-  ejabberd_sql:sql_query(
-    LServer,
-    ?SQL_INSERT(
-      "foreign_message_stanza_id",
-      [ "foreign_username=%(FUsername)s",
-        "our_username=%(OurUser)s",
-        "server_host=%(LServer)s",
-        "foreign_stanza_id=%(FID)d",
-        "our_stanza_id=%(OurID)d"
-      ])).
-
-get_our_stanza_id(LServer,FUsername,FID) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(our_username)s,@(our_stanza_id)d from foreign_message_stanza_id"
-    " where foreign_stanza_id=%(FID)d and foreign_username =%(FUsername)s and %(LServer)H")) of
-    {selected,[<<>>]} ->
-      not_ok;
-    {selected,[{User,ID}]} ->
-      {User,ID};
-    _ ->
-      not_ok
+update_tables() ->
+  try mnesia:table_info(rewrite_job, attributes) of
+    Attrs ->
+      case lists:member(rewrite_message, Attrs) of
+        true -> mnesia:delete_table(rewrite_job);
+        _ ->
+          mnesia:clear_table(rewrite_job)
+      end
+  catch exit:_ -> ok
   end.
 
-offline_message({archived,Pkt} = Acc) ->
-  save_id_in_conversation({ok, Pkt}),
-  Acc;
-offline_message(Acc) -> Acc.
+get_our_stanza_id(LServer, LUser, ForeignSJID, FID) when is_integer(FID) ->
+  get_our_stanza_id(LServer, LUser, ForeignSJID, integer_to_binary(FID));
+get_our_stanza_id(LServer, LUser, ForeignSJID, FID) ->
+  ForeignIDLike = <<"%<stanza-id %",
+    (ejabberd_sql:escape(ejabberd_sql:escape_like_arg_circumflex(FID)))/binary,
+    "%/>%">>,
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select
+    @(timestamp)d,@(xml)s from archive
+    where username=%(LUser)s
+    and bare_peer=%(ForeignSJID)s
+    and xml like %(ForeignIDLike)s
+    and %(LServer)H")) of
+    {selected,[]} ->
+      not_found;
+    {selected,ValueList} ->
+      FJID = jid:from_string(ForeignSJID),
+      R = lists:filtermap(fun({TS, XML})->
+        Pkt = xmpp:decode(fxml_stream:parse_element(XML)),
+        case xmpp:get_subtag(Pkt, #stanza_id{}) of
+          #stanza_id{by = FJID, id = FID} -> {true, TS};
+          _ -> false
+        end end, ValueList),
+      case lists:sort(R) of
+        [H | _] -> H;
+        _ -> not_found
+      end;
+      _ ->
+        error
+  end.
 
-save_id_in_conversation({ok,#message{meta = #{sm_copy := true} } = Pkt}) ->
-  {ok, Pkt};
-save_id_in_conversation({ok,#message{from = FJID, to = LJID, meta = #{stanza_id := LIDi} } = Pkt}) ->
-  PktGrpOnly = filter_all_exept_groupchat(Pkt),
-  Reference = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-  SystemMessage = xmpp:get_subtag(PktGrpOnly, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
-  if
-    Reference == false andalso SystemMessage == false ->
-      LJIDBare = jid:remove_resource(LJID),
-      FJIDBare = jid:remove_resource(FJID),
-      FID = lists:foldl(fun(Tag, _) ->
-        case Tag of
-          #stanza_id{id = ID, by = FJIDBare} -> ID;
-          _ -> undefined
-        end end, undefined, get_all_stanza_id(Pkt#message.sub_els)),
-      LServer = LJID#jid.lserver,
-      LID = integer_to_binary(LIDi),
-      save_foreign_id_and_jid(LServer,jid:to_string(FJIDBare),FID,jid:to_string(LJIDBare),LID);
-    true ->
-      pass
-  end,
-  {ok,Pkt};
-save_id_in_conversation(Val) -> Val.
-
-filter_els(Els) ->
-  NewEls = lists:filter(
+filter_new_els(Els) ->
+  lists:filter(
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = <<"groupchat">>} ->
-            false;
-          #xmppreference{type = _Any} ->
-            true
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
+      if
+        (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
+          (Name == <<"time">> andalso NS == ?NS_UNIQUE);
+          (Name == <<"origin-id">> andalso NS == ?NS_SID_0);
+          (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
+          false;
+        (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
+          try xmpp:decode(El) of
+            #xmppreference{type = <<"groupchat">>} -> false;
+            #xmppreference{type = _Any} -> true
+          catch _:{xmpp_codec, _} ->
+            false
+          end;
         true ->
           true
       end
-    end, Els),
-  NewEls.
+    end, Els).
 
-strip_els(Els) ->
-  NewEls = lists:filter(
+filter_old_els(Els) ->
+  lists:filter(
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
-      (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0);
-      (Name == <<"time">> andalso NS == ?NS_UNIQUE);
-      (Name == <<"origin-id">> andalso NS == ?NS_SID_0);
-      (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
-        try xmpp:decode(El) of
-          #mam_archived{} ->
-            false;
-          #unique_time{} ->
-            false;
-          #origin_id{} ->
-            true;
-          #stanza_id{} ->
-            false;
-          #xmppreference{type = _Any} ->
-            false
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          false
+      if
+        (Name == <<"origin-id">> andalso NS == ?NS_SID_0);
+          (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) -> true;
+        true -> false
       end
-    end, Els),
-  NewEls.
-
-filter_all_exept_groupchat(Pkt) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = lists:filter(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = <<"groupchat">>} ->
-            true;
-          #xmppreference{type = _Any} ->
-            false
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els),
-  xmpp:set_els(Pkt,NewEls).
+    end, Els).
 
 -spec set_stanza_id(list(), jid(), binary()) -> list().
 set_stanza_id(SubELS, JID, ID) ->
@@ -1081,16 +994,3 @@ set_stanza_id(SubELS, JID, ID) ->
   StanzaID = #stanza_id{by = BareJID, id = ID},
   Time = #unique_time{by = BareJID, stamp = TimeStamp},
   [Archived, StanzaID, Time|SubELS].
-
-get_all_stanza_id(Els) ->
-  lists:filtermap(
-    fun(El) ->
-      case {xmpp:get_name(El), xmpp:get_ns(El)} of
-        {<<"stanza-id">>, ?NS_SID_0} ->
-          try
-            {true, xmpp:decode(El)}
-          catch _:{xmpp_codec, _} ->
-            false
-          end;
-        _ -> false
-      end end, Els).

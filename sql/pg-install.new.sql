@@ -538,17 +538,6 @@ CREATE TABLE message_retract(
     CONSTRAINT uc_retract_message_versions UNIQUE (username,server_host,type,version)
     );
 
-CREATE TABLE foreign_message_stanza_id(
-    server_host text NOT NULL,
-    foreign_username text,
-    our_username text,
-    foreign_stanza_id bigint UNIQUE,
-    our_stanza_id bigint,
-    FOREIGN KEY (server_host,our_stanza_id) REFERENCES archive(server_host,"timestamp") ON DELETE CASCADE,
-    PRIMARY KEY (server_host, our_stanza_id)
-);
-
-CREATE INDEX i_our_origin_id ON foreign_message_stanza_id USING btree (foreign_stanza_id);
 
 CREATE TABLE xabber_token (
     token text NOT NULL,

@@ -674,13 +674,29 @@ do_route(#presence{to = To, type = T} = Packet)
 					ok
 			end
 	end;
-do_route(#presence{to = #jid{lresource = <<"">>} = To} = Packet) ->
-    ?DEBUG("processing presence to bare JID:~n~s", [xmpp:pp(Packet)]),
-    {LUser, LServer, _} = jid:tolower(To),
-    lists:foreach(
-      fun({_, R}) ->
-	      do_route(Packet#presence{to = jid:replace_resource(To, R)})
-      end, get_user_present_resources(LUser, LServer));
+do_route(#presence{to = #jid{lresource = <<"">>} = To, from = From, type = T} = Packet) ->
+  {LUser, LServer, _} = jid:tolower(To),
+	{_, FromServer, _} = jid:tolower(From),
+	case get_user_present_resources(LUser, LServer) of
+		[] when T == available, FromServer /= LServer ->
+      %% Send PEP items to non-local contact if the user is offline
+      %% mod_pubsub:caps_add/3 is used for local contacts
+			case mod_pubsub:config(LServer, ignore_pep_from_offline, true) of
+				false ->
+					case ejabberd_hooks:run_fold(roster_get_jid_info, LServer, {none, none, []},
+						[LUser, LServer, From]) of
+						{Sub, _, _} when Sub == both orelse Sub == from ->
+							mod_pubsub:send_last_pep_from_offline(To, From, mod_caps:read_caps(Packet));
+						_ -> ok
+					end;
+				_ -> ok
+			end;
+		Resources ->
+			lists:foreach(
+				fun({_, R}) ->
+					do_route(Packet#presence{to = jid:replace_resource(To, R)})
+				end, Resources)
+	end;
 do_route(#message{to = #jid{lresource = <<"">>}, type = T} = Packet) ->
     ?DEBUG("processing message to bare JID:~n~s", [xmpp:pp(Packet)]),
     if T == chat; T == headline; T == normal ->

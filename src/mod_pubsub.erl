@@ -93,6 +93,9 @@
     handle_call/3, handle_cast/2, handle_info/2,
     terminate/2, code_change/3, depends/2, mod_opt_type/1, mod_options/1]).
 
+%% external API
+-export([send_last_pep_from_offline/3]).
+
 %%====================================================================
 %% API
 %%====================================================================
@@ -547,21 +550,26 @@ disco_items(Host, Node, From) ->
 %%
 
 -spec caps_add(jid(), jid(), [binary()]) -> ok.
-caps_add(JID, JID, _Features) ->
-    %% Send the owner his last PEP items.
+caps_add(JID, JID, Features) ->
+    %% Send PEP items of offline contacts if ignore_pep_from_offline is set to false.
+    send_pep_from_offline(JID, Features),
+    %% Send the owner his last PEP items
     send_last_pep(JID, JID);
 caps_add(#jid{lserver = S1} = From, #jid{lserver = S2} = To, _Features)
   when S1 =/= S2 ->
     %% When a remote contact goes online while the local user is offline, the
     %% remote contact won't receive last items from the local user even if
-    %% ignore_pep_from_offline is set to false. To work around this issue a bit,
+    %% ignore_pep_from_offline is set to true. To work around this issue a bit,
     %% we'll also send the last items to remote contacts when the local user
     %% connects. That's the reason to use the caps_add hook instead of the
     %% presence_probe_hook for remote contacts: The latter is only called when a
     %% contact becomes available; the former is also executed when the local
     %% user goes online (because that triggers the contact to send a presence
     %% packet with CAPS).
-    send_last_pep(To, From);
+    case config(To#jid.lserver, ignore_pep_from_offline) of
+      false -> ok;
+      _ -> send_last_pep(To, From)
+    end;
 caps_add(_From, _To, _Feature) ->
     ok.
 
@@ -3011,6 +3019,75 @@ send_last_pep(From, To) ->
 	      end
       end,
       tree_action(Host, get_nodes, [Owner, From])).
+
+send_pep_from_offline(JID, Features) ->
+  ServerHost = JID#jid.lserver,
+  case config(ServerHost, ignore_pep_from_offline) of
+    false ->
+      Roster = ejabberd_hooks:run_fold(roster_get, ServerHost, [],
+        [{JID#jid.luser, ServerHost}]),
+      lists:foreach(
+        fun(#roster{jid = {U, S, R}, subscription = Sub})
+          when Sub == both orelse Sub == from, S == ServerHost ->
+          case user_resources(U, S) of
+            [] -> send_last_pep_from_offline(jid:make(U, S, R), JID, Features);
+            _ -> ok %% this is already handled by presence probe
+          end;
+          (_) ->
+            ok %% we can not do anything in any cases
+        end, Roster);
+    true ->
+      ok
+  end.
+
+send_last_pep_from_offline(From, To, Features) ->
+  ServerHost = From#jid.lserver,
+  Host = host(ServerHost),
+  Publisher = jid:tolower(From),
+  Owner = jid:remove_resource(Publisher),
+  lists:foreach(
+    fun(#pubsub_node{nodeid = {_, Node}, type = Type, id = Nidx, options = Options}) ->
+      case match_option(Options, send_last_published_item, on_sub_and_presence) of
+        true ->
+          LJID = jid:tolower(To),
+          Subscribed = case get_option(Options, access_model) of
+                         open -> true;
+                         presence -> true;
+                         whitelist -> false; % subscribers are added manually
+                         authorize -> false; % likewise
+                         roster ->
+                           Grps = get_option(Options, roster_groups_allowed, []),
+                           {OU, OS, _} = Owner,
+                           element(2, get_roster_info(OU, OS, LJID, Grps))
+                       end,
+          if Subscribed ->
+            case get_last_items(Host, Type, Nidx, LJID, 1) of
+              [] ->
+                ok;
+              Items ->
+                NotificationType = get_option(Options, notification_type, headline),
+                BaseStanza = #message{from = From, to = To, type=NotificationType,
+                  sub_els = [#ps_event{items = items_els(Node, Options, Items)}]},
+                Stanza = add_extended_headers(BaseStanza, extended_headers([From])),
+                send_stanza_from_offline(ServerHost, Node, Stanza, Features)
+            end;
+            true -> ok
+          end;
+        _ ->
+          ok
+      end
+    end, tree_action(Host, get_nodes, [Owner, From])).
+
+send_stanza_from_offline(_LServer, Node, Stanza, Features) when is_list(Features)->
+  case lists:member(<<((Node))/binary, "+notify">>, Features) of
+    true ->
+      ejabberd_router:route(Stanza);
+    false ->
+      ok
+  end;
+send_stanza_from_offline(LServer, Node, Stanza, Caps) ->
+  Features = mod_caps:get_features(LServer, Caps),
+  send_stanza_from_offline(LServer, Node, Stanza, Features).
 
 subscribed_nodes_by_jid(NotifyType, SubsByDepth) ->
     NodesToDeliver = fun (Depth, Node, Subs, Acc) ->

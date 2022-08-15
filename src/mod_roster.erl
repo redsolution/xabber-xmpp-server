@@ -47,7 +47,7 @@
 	 c2s_self_presence/1, in_subscription/2,
 	 out_subscription/1, set_items/3, remove_user/2,
 	 get_jid_info/4, encode_item/1, webadmin_page/3,
-	 webadmin_user/4, get_versioning_feature/2,
+	 webadmin_user/4, c2s_post_auth_features/2,
 	 roster_versioning_enabled/1, roster_version/2,
 	 mod_opt_type/1, mod_options/1, set_roster/1, del_roster/3,
 	 depends/2]).
@@ -104,7 +104,7 @@ start(Host, Opts) ->
     ejabberd_hooks:add(c2s_self_presence, Host, ?MODULE,
 		       c2s_self_presence, 50),
     ejabberd_hooks:add(c2s_post_auth_features, Host,
-		       ?MODULE, get_versioning_feature, 50),
+		       ?MODULE, c2s_post_auth_features, 50),
     ejabberd_hooks:add(webadmin_page_host, Host, ?MODULE,
 		       webadmin_page, 50),
     ejabberd_hooks:add(webadmin_user, Host, ?MODULE,
@@ -126,7 +126,7 @@ stop(Host) ->
     ejabberd_hooks:delete(c2s_self_presence, Host, ?MODULE,
 			  c2s_self_presence, 50),
     ejabberd_hooks:delete(c2s_post_auth_features,
-			  Host, ?MODULE, get_versioning_feature, 50),
+			  Host, ?MODULE, c2s_post_auth_features, 50),
     ejabberd_hooks:delete(webadmin_page_host, Host, ?MODULE,
 			  webadmin_page, 50),
     ejabberd_hooks:delete(webadmin_user, Host, ?MODULE,
@@ -212,21 +212,6 @@ roster_versioning_enabled(Host) ->
 roster_version_on_db(Host) ->
     gen_mod:get_module_opt(Host, ?MODULE, store_current_id).
 
-%% Returns a list that may contain an xmlelement with the XEP-237 feature if it's enabled.
--spec get_versioning_feature([xmpp_element()], binary()) -> [xmpp_element()].
-get_versioning_feature(Acc, Host) ->
-    case gen_mod:is_loaded(Host, ?MODULE) of
-	true ->
-    case roster_versioning_enabled(Host) of
-      true ->
-	  [#rosterver_feature{}|Acc];
-		false ->
-		    Acc
-	    end;
-	false ->
-	    Acc
-    end.
-
 roster_version(LServer, LUser) ->
     US = {LUser, LServer},
     case roster_version_on_db(LServer) of
@@ -270,6 +255,23 @@ write_roster_version(LUser, LServer, InTransaction) ->
 			     cache_nodes(Mod, LServer))
     end,
     Ver.
+
+%% Returns a list that may contain an xmlelement with the XEP-237 feature if it's enabled.
+-spec c2s_post_auth_features([xmpp_element()], binary()) -> [xmpp_element()].
+c2s_post_auth_features(Acc, Host) ->
+  case gen_mod:is_loaded(Host, ?MODULE) of
+    true ->
+      Acc1 = [#xmlel{name = <<"sub">>,
+        attrs = [{<<"xmlns">>,<<"urn:xmpp:features:pre-approval">>}]}|Acc],
+      case roster_versioning_enabled(Host) of
+        true ->
+          [#rosterver_feature{}|Acc1];
+        false ->
+          Acc1
+      end;
+    false ->
+      Acc
+  end.
 
 %% Load roster from DB only if necessary.
 %% It is necessary if

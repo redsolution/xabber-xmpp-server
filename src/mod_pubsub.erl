@@ -566,10 +566,7 @@ caps_add(#jid{lserver = S1} = From, #jid{lserver = S2} = To, _Features)
     %% contact becomes available; the former is also executed when the local
     %% user goes online (because that triggers the contact to send a presence
     %% packet with CAPS).
-    case config(To#jid.lserver, ignore_pep_from_offline) of
-      false -> ok;
-      _ -> send_last_pep(To, From)
-    end;
+    send_last_pep(To, From);
 caps_add(_From, _To, _Feature) ->
     ok.
 

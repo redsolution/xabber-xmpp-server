@@ -329,10 +329,16 @@ in_subscription(Acc, #presence{to = To, from = JID, type = Type}) ->
     process_subscription(in, User, Server, JID, Type, Acc).
 
 -spec out_subscription(presence()) -> boolean().
-out_subscription(#presence{from = From, to = To, type = unsubscribed} = Pres) ->
-    #jid{user = User, server = Server} = From,
-    mod_roster:out_subscription(Pres),
-    process_subscription(out, User, Server, To, unsubscribed, false);
+%% undo this fix
+%% https://github.com/processone/ejabberd/commit/d0fc8fe056809a16929199d0a22ac8a8c947fd0e
+%% todo: new solution
+%%out_subscription(#presence{from = From, to = To, type = unsubscribed} = Pres) ->
+%%  #jid{user = User, server = Server} = From,
+%%  mod_roster:out_subscription(Pres#presence{type = unsubscribe}),
+%%  mod_roster:in_subscription(false, xmpp:set_from_to(
+%%    Pres#presence{type = unsubscribe},
+%%    To, From)),
+%%  process_subscription(out, User, Server, To, unsubscribed, false);
 out_subscription(#presence{from = From, to = To, type = Type}) ->
     #jid{user = User, server = Server} = From,
     process_subscription(out, User, Server, To, Type, false).

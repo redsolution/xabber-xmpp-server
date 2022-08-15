@@ -28,6 +28,7 @@
     ask = none                             :: ask() | '_',
     groups = []                            :: [binary()] | '_',
     askmessage = <<"">>                    :: binary() | '_',
+    approved = <<>>                        :: binary() | '_',
     xs = []                                :: [fxml:xmlel()] | '_'
 }).
 

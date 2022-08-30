@@ -715,7 +715,7 @@ in_state_change(to, in, subscribed) -> none;
 in_state_change(to, in, unsubscribe) -> {to, none};
 in_state_change(to, in, unsubscribed) -> {none, in};
 in_state_change(from, none, subscribe) -> none;
-in_state_change(from, none, subscribed) -> {both, none};
+in_state_change(from, none, subscribed) -> none;
 in_state_change(from, none, unsubscribe) ->
     {none, none};
 in_state_change(from, none, unsubscribed) -> none;

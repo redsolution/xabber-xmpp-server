@@ -330,7 +330,8 @@ record_to_row(
 		      both -> <<"B">>;
 		      to -> <<"T">>;
 		      from -> <<"F">>;
-		      none -> <<"N">>
+		      none -> <<"N">>;
+          undefined -> <<"U">>
 		    end,
     SAsk = case Ask of
 	     subscribe -> <<"S">>;
@@ -348,6 +349,7 @@ decode_subscription(User, Server, S) ->
 	<<"T">> -> to;
 	<<"F">> -> from;
 	<<"N">> -> none;
+  <<"U">> -> undefined;
 	<<"">> -> none;
 	_ ->
 	    ?ERROR_MSG("~s", [format_row_error(User, Server, {subscription, S})]),

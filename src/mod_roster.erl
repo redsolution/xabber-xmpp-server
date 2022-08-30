@@ -339,8 +339,7 @@ process_iq_get(#iq{to = To, lang = Lang,
 -spec get_user_roster([#roster{}], {binary(), binary()}) -> [#roster{}].
 get_user_roster(Acc, {LUser, LServer}) ->
     Items = get_roster(LUser, LServer),
-    lists:filter(fun (#roster{subscription = none,
-			      ask = in}) ->
+    lists:filter(fun (#roster{subscription = undefined}) ->
 			 false;
 		     (_) -> true
 		 end,
@@ -370,7 +369,7 @@ get_roster_item(LUser, LServer, LJID) ->
 	error ->
 	    LBJID = jid:remove_resource(LJID),
 	    #roster{usj = {LUser, LServer, LBJID},
-		    us = {LUser, LServer}, jid = LBJID}
+		    us = {LUser, LServer}, jid = LBJID, subscription = undefined}
     end.
 
 get_subscription_and_groups(LUser, LServer, LJID) ->
@@ -595,6 +594,9 @@ process_subscription(Direction, User, Server, JID1,
              _ -> <<"">>
            end,
     case NewState of
+      remove ->
+        del_roster_t(LUser, LServer, LJID),
+        {route, AutoReply};
       approved ->
         NewItem = Item#roster{approved = <<"true">>},
         roster_subscribe_t(LUser, LServer, LJID, NewItem),
@@ -610,7 +612,12 @@ process_subscription(Direction, User, Server, JID1,
       none ->
         {none, AutoReply};
       {none, none} when Item#roster.subscription == none, Item#roster.ask == in ->
-        del_roster_t(LUser, LServer, LJID),
+        roster_subscribe_t(LUser, LServer, LJID, Item#roster{ask = none}),
+        {route, AutoReply};
+      {undefined, in} ->
+        NewItem = Item#roster{subscription = undefined,
+          ask = in, askmessage = AskMessage},
+        roster_subscribe_t(LUser, LServer, LJID, NewItem),
         {route, AutoReply};
       {Subscription, Pending} ->
         Approved = if
@@ -678,6 +685,10 @@ in_state_change(none, A , subscribe, _Approved) -> {from, A};
 in_state_change(to, _, subscribe, _Approved) -> {both, none};
 in_state_change(S, A, T, _) -> in_state_change(S, A, T).
 
+in_state_change(undefined, none, subscribe) -> {undefined, in};
+in_state_change(undefined, in, subscribe) -> none;
+in_state_change(undefined, in, unsubscribe) -> remove;
+in_state_change(undefined, A, T) -> in_state_change(none,A, T);
 in_state_change(none, none, subscribe) -> {none, in};
 in_state_change(none, none, subscribed) -> ?NNSD;
 in_state_change(none, none, unsubscribe) -> none;
@@ -719,6 +730,8 @@ in_state_change(both, none, unsubscribe) -> {to, none};
 in_state_change(both, none, unsubscribed) ->
     {from, none}.
 
+out_state_change(undefined, in, unsubscribed) -> remove;
+out_state_change(undefined, A, T) -> out_state_change(none, A,T);
 out_state_change(none, none, subscribe) -> {none, out};
 out_state_change(none, none, subscribed) -> approved;
 out_state_change(none, none, unsubscribe) -> none;

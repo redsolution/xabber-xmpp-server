@@ -36,6 +36,7 @@
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
+-include("mod_roster.hrl").
 
 %% gen_mod callbacks.
 -export([start/2,stop/1,reload/3,depends/2,mod_options/1]).
@@ -232,9 +233,13 @@ handle_cast({user_send, #presence{type = Type, from = #jid{luser = LUser, lserve
   to = #jid{luser = PUser, lserver = PServer}}}, State) when Type == subscribe orelse Type == subscribed  ->
   delete_old_invites(LUser,LServer,PUser,PServer),
   {noreply, State};
-handle_cast({user_send, #presence{type = Type, from = #jid{luser = LUser, lserver = LServer},
-  to = #jid{luser = PUser, lserver = PServer}}}, State) when Type == unsubscribe orelse Type == unsubscribed  ->
+handle_cast({user_send, #presence{type = unsubscribe, from = #jid{luser = LUser, lserver = LServer},
+  to = #jid{luser = PUser, lserver = PServer}}}, State) ->
   maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
+  {noreply, State};
+handle_cast({user_send, #presence{type = unsubscribed, from = #jid{luser = LUser, lserver = LServer},
+  to = To}}, State) ->
+  maybe_delete_invite_or_presence(LUser, LServer, To),
   {noreply, State};
 handle_cast({sm, #presence{type = available,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
   PktNew = xmpp:decode_els(Presence),
@@ -280,8 +285,8 @@ handle_cast({sm, #presence{type = subscribe,from = From, to = #jid{lserver = LSe
   Conversation = jid:to_string(jid:remove_resource(From)),
   create_conversation(LServer,LUser,Conversation,<<"">>,false,Type,GroupInfo),
   {noreply, State};
-handle_cast({sm, #presence{type = unsubscribe,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}}},State) ->
-  maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
+handle_cast({sm, #presence{type = unsubscribe,from = From, to = #jid{lserver = LServer, luser = LUser}}},State) ->
+  maybe_delete_invite_or_presence(LUser, LServer, From),
   {noreply, State};
 handle_cast({sm, #presence{type = unsubscribed,from = #jid{lserver = PServer, luser = PUser}, to = #jid{lserver = LServer, luser = LUser}}},State) ->
   maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
@@ -720,8 +725,14 @@ make_result(LServer, LUser, Stamp, RSM, Form) ->
   {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(LServer, QueryCount),
   Count = binary_to_integer(CountBinary),
   ConvRes = convert_result(Res),
+  Presences = get_pending_subscriptions(LUser,LServer),
   ReplacedConv = lists:map(fun(El) ->
-    make_result_el(LServer, LUser, El)
+    C = make_result_el(LServer, LUser, El),
+    case lists:keyfind(C#xabber_conversation.jid, #presence.from, Presences) of
+      false -> C;
+      Presence -> xmpp_codec:set_els(C, [Presence | C#xabber_conversation.sub_els])
+    end
+
                    end, ConvRes
   ),
 %%  ReplacedConv = replace_invites(LServer, LUser, Conv),
@@ -869,6 +880,23 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
         #xabber_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]}
   end.
+
+get_pending_subscriptions(LUser, LServer) ->
+  BareJID = jid:make(LUser, LServer),
+  Result = mod_roster:get_roster(LUser, LServer),
+  lists:filtermap(
+    fun(#roster{ask = Ask} = R) when Ask == in; Ask == both ->
+      Message = R#roster.askmessage,
+      Status = if is_binary(Message) -> (Message);
+                 true -> <<"">>
+               end,
+      {true, #presence{from = jid:make(R#roster.jid),
+        to = BareJID,
+        type = subscribe,
+        status = xmpp:mk_text(Status)}};
+      (_) ->
+        false
+    end, Result).
 
 get_last_informative_message_for_chat(LServer,LUser,Conversation) ->
   case ejabberd_sql:sql_query(
@@ -1324,19 +1352,8 @@ update_type(NewType, LServer,LUser,Conversation,X) ->
   ).
 
 update_metainfo(_Any, _LServer,_LUser,_Conversation, undefined,_Type) ->
-  ?DEBUG("No id in displayed",[]),
+  ?DEBUG("Stanza ID is undefined",[]),
   ok;
-update_metainfo(call, LServer,LUser,Conversation,_StanzaID, Type) ->
-  ?DEBUG("save new call ~p ~p ",[LUser,Conversation]),
-  TS = time_now(),
-  ?SQL_UPSERT(
-    LServer,
-    "conversation_metadata",
-    ["!username=%(LUser)s",
-      "!conversation=%(Conversation)s",
-      "!type=%(Type)s",
-      "metadata_updated_at=%(TS)d",
-      "server_host=%(LServer)s"]);
 update_metainfo(delivered, LServer,LUser,Conversation,StanzaID,Type) ->
   ?DEBUG("save delivered ~p ~p ~p",[LUser,Conversation,StanzaID]),
   TS = time_now(),
@@ -1370,7 +1387,18 @@ update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type) ->
     ?SQL("update conversation_metadata set metadata_updated_at = %(TS)d, displayed_until = %(StanzaID)s
     where username=%(LUser)s and conversation=%(Conversation)s and type = %(Type)s and
      displayed_until::bigint <= %(StanzaID)d and %(LServer)H")
-  ).
+  );
+update_metainfo(_, LServer,LUser,Conversation,_StanzaID, Type) ->
+  ?DEBUG("updating the conversation metadata timestamp ~p ~p ",[LUser,Conversation]),
+  TS = time_now(),
+  ?SQL_UPSERT(
+    LServer,
+    "conversation_metadata",
+    ["!username=%(LUser)s",
+      "!conversation=%(Conversation)s",
+      "!type=%(Type)s",
+      "metadata_updated_at=%(TS)d",
+      "server_host=%(LServer)s"]).
 
 -spec get_conversation_type(binary(),binary(),binary()) -> list() | error.
 get_conversation_type(LServer,LUser,Conversation) ->
@@ -2042,7 +2070,7 @@ delete_conversation(LServer,LUser,#xabber_conversation{type = Type, jid = JID}) 
     {updated,0} ->
       {error,xmpp:err_item_not_found()};
     {updated,_N} ->
-      make_sync_push(LServer,LUser,Conversation,TS,Type),
+      make_sync_push(LServer,LUser,Conversation,TS,Type,false),
       ok;
     _ ->
       {error,xmpp:err_internal_server_error()}
@@ -2117,6 +2145,25 @@ maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer) ->
       ),
       delete_conversation(LServer,LUser,#xabber_conversation{jid = jid:make(PUser,PServer), type = ?NS_GROUPCHAT});
     _ ->
+      notfound
+  end.
+
+maybe_delete_invite_or_presence(LUser, LServer, JID) ->
+  case maybe_delete_invite_and_conversation(LUser, LServer, JID#jid.luser, JID#jid.lserver) of
+    notfound ->
+      %% notify all connected clients of the user
+      %% that the subscription request has been rejected
+      SJID = jid:to_string(jid:remove_resource(JID)),
+      TS = time_now(),
+      case mod_roster:get_jid_info([],LUser, LServer, JID) of
+        {_, Ask ,_} when Ask == in; Ask == both ->
+          lists:foreach(fun(CType) ->
+            update_metainfo(presence, LServer, LUser, SJID, <<"presence">> ,CType),
+            make_sync_push(LServer, LUser, SJID, TS, CType, false)
+                        end, get_conversation_type(LServer,LUser,SJID));
+        _ -> ok
+      end;
+    _ ->
       ok
   end.
 
@@ -2130,15 +2177,33 @@ delete_invite(#invite_msg{us = {LUser,LServer}, id = ID} = Invite) ->
   mod_retract:delete_message(LServer, LUser, ID),
   mnesia:dirty_delete_object(Invite).
 
+make_sync_push(LServer,LUser,Conversation, TS, ?NS_GROUPCHAT) ->
+  make_sync_push(LServer,LUser,Conversation, TS, ?NS_GROUPCHAT, false);
 make_sync_push(LServer,LUser,Conversation, TS, Type) ->
+  make_sync_push(LServer,LUser,Conversation, TS, Type, true).
+
+make_sync_push(LServer,LUser,Conversation, TS, Type, WithPresence) ->
   case get_conversation_info(LServer,LUser,Conversation,Type) of
     {error, Why} ->
       ?ERROR_MSG("Get conversation info error: ~p;"
       " user:~p, conversation:~p, type:~p",[Why, {LUser,LServer}, Conversation,Type]);
     CnElem ->
-      UserResources = ejabberd_sm:user_resources(LUser,LServer),
-      Query = #xabber_synchronization_query{stamp = integer_to_binary(TS), sub_els = [CnElem]},
-      lists:foreach(fun(Res) ->
+      CnElem1 = if
+                   WithPresence ->
+                     case mod_roster:get_jid_info([],LUser, LServer,
+                       jid:from_string(Conversation)) of
+                       {_, Ask ,_} when Ask == in; Ask == both ->
+                         P = #presence{from = jid:from_string(Conversation),
+                           type = subcribe},
+                         SubEls = [P | xmpp_codec:get_els(CnElem)],
+                         xmpp_codec:set_els(CnElem, SubEls);
+                       _ -> CnElem
+                     end;
+                   true -> CnElem
+                 end,
+      UserResources = ejabberd_sm:get_user_present_resources(LUser,LServer),
+      Query = #xabber_synchronization_query{stamp = integer_to_binary(TS), sub_els = [CnElem1]},
+      lists:foreach(fun({_, Res}) ->
         From = jid:make(LUser,LServer),
         To = jid:make(LUser,LServer,Res),
         IQ = #iq{from = From, to = To, type = set, id = randoms:get_string(), sub_els = [Query]},

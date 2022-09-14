@@ -34,7 +34,8 @@
 %% gen_mod
 -export([start/2, stop/1, reload/3, mod_opt_type/1, mod_options/1, depends/2]).
 %% API
--export([maybe_kick/1, maybe_kick/3, block_user/3, unblock_user/2, get_user/2, store_user/3]).
+-export([maybe_kick/1, maybe_kick/3, block_user/3, unblock_user/2, get_user/2,
+  store_user/3, remove_user/2]).
 
 
 -include("logger.hrl").
@@ -79,6 +80,10 @@ get_user(LUser, LServer) ->
 
 store_user(LUser, LServer, Reason) ->
   sql_store_user(LUser, LServer, Reason).
+
+remove_user(User, Server) ->
+  sql_remove_user(User, Server).
+
 
 maybe_kick(#{jid := JID, sid := SID, lang := Lang} = State) ->
   {_LUser, LServer, _} = jid:tolower(JID),
@@ -132,7 +137,7 @@ block_user(User, Server, Reason) ->
 unblock_user(User, Server) ->
   LUser = jid:nodeprep(User),
   LServer = jid:nameprep(Server),
-  sql_remove_user(LUser,LServer),
+  remove_user(LUser,LServer),
   ets_cache:delete(?BLOCK_USERS_CACHE, {LUser, LServer}, cache_nodes(LServer)).
 
 -spec init_cache(binary(), gen_mod:opts()) -> ok.

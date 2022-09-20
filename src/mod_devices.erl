@@ -594,7 +594,7 @@ update_device_secret(User, Server, Device) ->
       Props = [{count, <<$0>>},{secret,NewSecret}, {info,Info},
         {client,Client}, {description,Desc}, {expire, Expire}],
       case update_device(Server, SJID, DeviceID, Props ) of
-        ok ->  Device#devices_device{secret = Secret,expire = Expire};
+        ok ->  Device#devices_device{secret = NewSecret, expire = Expire};
         Error -> Error
       end;
     _ -> notfound

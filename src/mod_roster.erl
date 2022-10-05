@@ -47,7 +47,7 @@
 	 c2s_self_presence/1, in_subscription/2,
 	 out_subscription/1, set_items/3, remove_user/2,
 	 get_jid_info/4, encode_item/1, webadmin_page/3,
-	 webadmin_user/4, get_versioning_feature/2,
+	 webadmin_user/4, c2s_post_auth_features/2,
 	 roster_versioning_enabled/1, roster_version/2,
 	 mod_opt_type/1, mod_options/1, set_roster/1, del_roster/3,
 	 depends/2]).
@@ -104,7 +104,7 @@ start(Host, Opts) ->
     ejabberd_hooks:add(c2s_self_presence, Host, ?MODULE,
 		       c2s_self_presence, 50),
     ejabberd_hooks:add(c2s_post_auth_features, Host,
-		       ?MODULE, get_versioning_feature, 50),
+		       ?MODULE, c2s_post_auth_features, 50),
     ejabberd_hooks:add(webadmin_page_host, Host, ?MODULE,
 		       webadmin_page, 50),
     ejabberd_hooks:add(webadmin_user, Host, ?MODULE,
@@ -126,7 +126,7 @@ stop(Host) ->
     ejabberd_hooks:delete(c2s_self_presence, Host, ?MODULE,
 			  c2s_self_presence, 50),
     ejabberd_hooks:delete(c2s_post_auth_features,
-			  Host, ?MODULE, get_versioning_feature, 50),
+			  Host, ?MODULE, c2s_post_auth_features, 50),
     ejabberd_hooks:delete(webadmin_page_host, Host, ?MODULE,
 			  webadmin_page, 50),
     ejabberd_hooks:delete(webadmin_user, Host, ?MODULE,
@@ -212,21 +212,6 @@ roster_versioning_enabled(Host) ->
 roster_version_on_db(Host) ->
     gen_mod:get_module_opt(Host, ?MODULE, store_current_id).
 
-%% Returns a list that may contain an xmlelement with the XEP-237 feature if it's enabled.
--spec get_versioning_feature([xmpp_element()], binary()) -> [xmpp_element()].
-get_versioning_feature(Acc, Host) ->
-    case gen_mod:is_loaded(Host, ?MODULE) of
-	true ->
-    case roster_versioning_enabled(Host) of
-      true ->
-	  [#rosterver_feature{}|Acc];
-		false ->
-		    Acc
-	    end;
-	false ->
-	    Acc
-    end.
-
 roster_version(LServer, LUser) ->
     US = {LUser, LServer},
     case roster_version_on_db(LServer) of
@@ -248,6 +233,12 @@ read_roster_version(LUser, LServer) ->
 	      Mod:read_roster_version(LUser, LServer)
       end).
 
+maybe_write_roster_version(LUser, LServer) ->
+  case roster_version_on_db(LServer) of
+		true -> write_roster_version_t(LUser, LServer);
+		false -> ok
+	end.
+
 write_roster_version(LUser, LServer) ->
     write_roster_version(LUser, LServer, false).
 
@@ -264,6 +255,23 @@ write_roster_version(LUser, LServer, InTransaction) ->
 			     cache_nodes(Mod, LServer))
     end,
     Ver.
+
+%% Returns a list that may contain an xmlelement with the XEP-237 feature if it's enabled.
+-spec c2s_post_auth_features([xmpp_element()], binary()) -> [xmpp_element()].
+c2s_post_auth_features(Acc, Host) ->
+  case gen_mod:is_loaded(Host, ?MODULE) of
+    true ->
+      Acc1 = [#xmlel{name = <<"sub">>,
+        attrs = [{<<"xmlns">>,<<"urn:xmpp:features:pre-approval">>}]}|Acc],
+      case roster_versioning_enabled(Host) of
+        true ->
+          [#rosterver_feature{}|Acc1];
+        false ->
+          Acc1
+      end;
+    false ->
+      Acc
+  end.
 
 %% Load roster from DB only if necessary.
 %% It is necessary if
@@ -331,8 +339,7 @@ process_iq_get(#iq{to = To, lang = Lang,
 -spec get_user_roster([#roster{}], {binary(), binary()}) -> [#roster{}].
 get_user_roster(Acc, {LUser, LServer}) ->
     Items = get_roster(LUser, LServer),
-    lists:filter(fun (#roster{subscription = none,
-			      ask = in}) ->
+    lists:filter(fun (#roster{subscription = undefined}) ->
 			 false;
 		     (_) -> true
 		 end,
@@ -362,7 +369,7 @@ get_roster_item(LUser, LServer, LJID) ->
 	error ->
 	    LBJID = jid:remove_resource(LJID),
 	    #roster{usj = {LUser, LServer, LBJID},
-		    us = {LUser, LServer}, jid = LBJID}
+		    us = {LUser, LServer}, jid = LBJID, subscription = undefined}
     end.
 
 get_subscription_and_groups(LUser, LServer, LJID) ->
@@ -422,6 +429,10 @@ encode_item(Item) ->
 			   both -> subscribe;
 			   _ -> undefined
 		       end,
+		 approved = case Item#roster.approved of
+			        <<"">> -> <<"">>;
+			        _ -> <<"true">>
+			          end,
 		 groups = Item#roster.groups}.
 
 decode_item(#roster_item{subscription = remove} = Item, R, _) ->
@@ -455,10 +466,7 @@ process_iq_set(#iq{from = _From, to = To,
 		    remove -> del_roster_t(LUser, LServer, LJID);
 		    _ -> update_roster_t(LUser, LServer, LJID, Item3)
 		end,
-		case roster_version_on_db(LServer) of
-		    true -> write_roster_version_t(LUser, LServer);
-		    false -> ok
-		end,
+		maybe_write_roster_version(LUser, LServer),
 		{Item, Item3}
 	end,
     case transaction(LUser, LServer, [LJID], F) of
@@ -561,76 +569,100 @@ out_subscription(#presence{from = From, to = JID, type = Type}) ->
     process_subscription(out, User, Server, JID, Type, <<"">>).
 
 process_subscription(Direction, User, Server, JID1,
-		     Type, Reason) ->
-    LUser = jid:nodeprep(User),
-    LServer = jid:nameprep(Server),
-    LJID = jid:tolower(jid:remove_resource(JID1)),
-    F = fun () ->
-		Item = get_roster_item(LUser, LServer, LJID),
-		NewState = case Direction of
-			     out ->
-				 out_state_change(Item#roster.subscription,
-						  Item#roster.ask, Type);
-			     in ->
-				 in_state_change(Item#roster.subscription,
-						 Item#roster.ask, Type)
-			   end,
-		AutoReply = case Direction of
-			      out -> none;
-			      in ->
-				  in_auto_reply(Item#roster.subscription,
-						Item#roster.ask, Type)
-			    end,
-		AskMessage = case NewState of
-			       {_, both} -> Reason;
-			       {_, in} -> Reason;
-			       _ -> <<"">>
-			     end,
-		case NewState of
-		    none ->
-			{none, AutoReply};
-		    {none, none} when Item#roster.subscription == none,
-				      Item#roster.ask == in ->
-			del_roster_t(LUser, LServer, LJID), {route, AutoReply};
-		    {Subscription, Pending} ->
-			NewItem = Item#roster{subscription = Subscription,
-					      ask = Pending,
-					      askmessage = AskMessage},
-			roster_subscribe_t(LUser, LServer, LJID, NewItem),
-			case roster_version_on_db(LServer) of
-			    true -> write_roster_version_t(LUser, LServer);
-			    false -> ok
-			end,
-			{{push, Item, NewItem}, AutoReply}
-		end
-	end,
-    case transaction(LUser, LServer, [LJID], F) of
-	{atomic, {Push, AutoReply}} ->
-	    case AutoReply of
-		none -> ok;
-		_ ->
-		    ejabberd_router:route(
-		      #presence{type = AutoReply,
-				from = jid:make(User, Server),
-				to = JID1})
-	    end,
-	    case Push of
-		{push, OldItem, NewItem} ->
-		    if OldItem#roster.subscription == none, NewItem#roster.subscription == none,
-		       NewItem#roster.ask == in ->
-			    ok;
-		       true ->
-			    push_item(jid:make(User, Server), OldItem, NewItem)
-		    end,
-		    true;
-		route ->
-				true;
-		none ->
-		    false
-	    end;
-	_ ->
-	    false
-    end.
+    Type, Reason) ->
+  LUser = jid:nodeprep(User),
+  LServer = jid:nameprep(Server),
+  LJID = jid:tolower(jid:remove_resource(JID1)),
+  F = fun () ->
+    Item = get_roster_item(LUser, LServer, LJID),
+    NewState = case Direction of
+                 out ->
+                   out_state_change(Item#roster.subscription,
+                     Item#roster.ask, Type);
+                 in ->
+         in_state_change(Item#roster.subscription,
+             Item#roster.ask, Type, Item#roster.approved)
+         end,
+    AutoReply = case Direction of
+            out -> none;
+            in -> in_auto_reply(Item#roster.subscription,
+              Item#roster.ask, Type, Item#roster.approved)
+          end,
+    AskMessage = case NewState of
+             {_, both} -> Reason;
+             {_, in} -> Reason;
+             _ -> <<"">>
+           end,
+    case NewState of
+      remove ->
+        del_roster_t(LUser, LServer, LJID),
+        {route, AutoReply};
+      approved ->
+        NewItem = Item#roster{approved = <<"true">>},
+        roster_subscribe_t(LUser, LServer, LJID, NewItem),
+        maybe_write_roster_version(LUser, LServer),
+        {{push_approved, Item, NewItem}, AutoReply};
+      notapproved when Item#roster.approved /= <<>> ->
+        NewItem = Item#roster{approved = <<>>},
+        roster_subscribe_t(LUser, LServer, LJID, NewItem),
+        maybe_write_roster_version(LUser, LServer),
+        {{push_approved, Item, NewItem}, AutoReply};
+      notapproved ->
+        {none, AutoReply};
+      none ->
+        {none, AutoReply};
+      {none, none} when Item#roster.subscription == none, Item#roster.ask == in ->
+        roster_subscribe_t(LUser, LServer, LJID, Item#roster{ask = none}),
+        {route, AutoReply};
+      {undefined, in} ->
+        NewItem = Item#roster{subscription = undefined,
+          ask = in, askmessage = AskMessage},
+        roster_subscribe_t(LUser, LServer, LJID, NewItem),
+        {route, AutoReply};
+      {Subscription, Pending} ->
+        Approved = if
+                     Subscription == both; Subscription == from ->
+                       <<>>;
+                     true -> Item#roster.approved
+                   end,
+        NewItem = Item#roster{subscription = Subscription,
+          ask = Pending, askmessage = AskMessage, approved = Approved},
+        roster_subscribe_t(LUser, LServer, LJID, NewItem),
+        maybe_write_roster_version(LUser, LServer),
+        {{push, Item, NewItem}, AutoReply}
+    end
+      end,
+  case transaction(LUser, LServer, [LJID], F) of
+    {atomic, {Push, AutoReply}} ->
+      case AutoReply of
+        none -> ok;
+        _ ->
+          ejabberd_router:route(#presence{type = AutoReply,
+            from = jid:make(User, Server), to = JID1})
+      end,
+      case Push of
+        {push, OldItem, NewItem} ->
+          if
+            OldItem#roster.subscription == none, NewItem#roster.subscription == none,
+            NewItem#roster.ask == in ->
+              ok;
+            true ->
+              push_item(jid:make(User, Server), OldItem, NewItem)
+          end,
+          %% do not  deliver a presence stanza of type "subscribe" to the user
+          %% if pre-approved is enabled
+          not (Direction == in andalso Type == subscribe andalso OldItem#roster.approved /= <<>>);
+        {push_approved, OldItem, NewItem} ->
+          push_item(jid:make(User, Server), OldItem, NewItem),
+          false;
+        route ->
+          true;
+        none ->
+          false
+      end;
+    _ ->
+      false
+  end.
 
 %% in_state_change(Subscription, Pending, Type) -> NewState
 %% NewState = none | {NewSubscription, NewPending}
@@ -648,6 +680,15 @@ process_subscription(Direction, User, Server, JID1,
 
 -endif.
 
+in_state_change(S, A, subscribe, <<>> ) -> in_state_change(S, A, subscribe);
+in_state_change(none, A , subscribe, _Approved) -> {from, A};
+in_state_change(to, _, subscribe, _Approved) -> {both, none};
+in_state_change(S, A, T, _) -> in_state_change(S, A, T).
+
+in_state_change(undefined, none, subscribe) -> {undefined, in};
+in_state_change(undefined, in, subscribe) -> none;
+in_state_change(undefined, in, unsubscribe) -> remove;
+in_state_change(undefined, A, T) -> in_state_change(none,A, T);
 in_state_change(none, none, subscribe) -> {none, in};
 in_state_change(none, none, subscribed) -> ?NNSD;
 in_state_change(none, none, unsubscribe) -> none;
@@ -674,7 +715,7 @@ in_state_change(to, in, subscribed) -> none;
 in_state_change(to, in, unsubscribe) -> {to, none};
 in_state_change(to, in, unsubscribed) -> {none, in};
 in_state_change(from, none, subscribe) -> none;
-in_state_change(from, none, subscribed) -> {both, none};
+in_state_change(from, none, subscribed) -> none;
 in_state_change(from, none, unsubscribe) ->
     {none, none};
 in_state_change(from, none, unsubscribed) -> none;
@@ -689,17 +730,19 @@ in_state_change(both, none, unsubscribe) -> {to, none};
 in_state_change(both, none, unsubscribed) ->
     {from, none}.
 
+out_state_change(undefined, in, unsubscribed) -> remove;
+out_state_change(undefined, A, T) -> out_state_change(none, A,T);
 out_state_change(none, none, subscribe) -> {none, out};
-out_state_change(none, none, subscribed) -> none;
+out_state_change(none, none, subscribed) -> approved;
 out_state_change(none, none, unsubscribe) -> none;
-out_state_change(none, none, unsubscribed) -> none;
+out_state_change(none, none, unsubscribed) -> notapproved;
 out_state_change(none, out, subscribe) ->
     {none,
      out}; %% We need to resend query (RFC3921, section 9.2)
-out_state_change(none, out, subscribed) -> none;
+out_state_change(none, out, subscribed) -> approved;
 out_state_change(none, out, unsubscribe) ->
     {none, none};
-out_state_change(none, out, unsubscribed) -> none;
+out_state_change(none, out, unsubscribed) -> notapproved;
 out_state_change(none, in, subscribe) -> {none, both};
 out_state_change(none, in, subscribed) -> {from, none};
 out_state_change(none, in, unsubscribe) -> none;
@@ -711,9 +754,9 @@ out_state_change(none, both, unsubscribe) -> {none, in};
 out_state_change(none, both, unsubscribed) ->
     {none, out};
 out_state_change(to, none, subscribe) -> none;
-out_state_change(to, none, subscribed) -> {both, none};
+out_state_change(to, none, subscribed) -> approved;
 out_state_change(to, none, unsubscribe) -> {none, none};
-out_state_change(to, none, unsubscribed) -> none;
+out_state_change(to, none, unsubscribed) -> notapproved;
 out_state_change(to, in, subscribe) -> none;
 out_state_change(to, in, subscribed) -> {both, none};
 out_state_change(to, in, unsubscribe) -> {none, in};
@@ -735,6 +778,11 @@ out_state_change(both, none, unsubscribe) ->
     {from, none};
 out_state_change(both, none, unsubscribed) ->
     {to, none}.
+
+in_auto_reply(S, A, subscribe, <<>>) -> in_auto_reply(S, A, subscribe);
+in_auto_reply(none, _, subscribe, _Approved) -> subscribed;
+in_auto_reply(to, _, subscribe, _Approved) -> subscribed;
+in_auto_reply(S, A, T, _) -> in_auto_reply(S, A, T).
 
 in_auto_reply(from, none, subscribe) -> subscribed;
 in_auto_reply(from, out, subscribe) -> subscribed;

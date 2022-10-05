@@ -232,7 +232,7 @@ get_roster_groups(LServer, LUser, SJID) ->
       ?SQL("select @(grp)s from rostergroups"
            " where username=%(LUser)s and %(LServer)H and jid=%(SJID)s")).
 
-roster_subscribe({LUser, LServer, SJID, Name, SSubscription, SAsk, AskMessage}) ->
+roster_subscribe({LUser, LServer, SJID, Name, SSubscription, SAsk, AskMessage, Approved}) ->
     ?SQL_UPSERT_T(
        "rosterusers",
        ["!username=%(LUser)s",
@@ -243,7 +243,7 @@ roster_subscribe({LUser, LServer, SJID, Name, SSubscription, SAsk, AskMessage}) 
         "ask=%(SAsk)s",
         "askmessage=%(AskMessage)s",
         "server='N'",
-        "subscribe=''",
+        "subscribe=%(Approved)s",
         "type='item'"]).
 
 get_roster_by_jid(LServer, LUser, SJID) ->
@@ -265,7 +265,7 @@ get_subscription(LServer, LUser, SJID) ->
       ?SQL("select @(subscription)s, @(ask)s from rosterusers "
            "where username=%(LUser)s and %(LServer)H and jid=%(SJID)s")).
 
-update_roster_sql({LUser, LServer, SJID, Name, SSubscription, SAsk, AskMessage},
+update_roster_sql({LUser, LServer, SJID, Name, SSubscription, SAsk, AskMessage, Approved},
 		  ItemGroups) ->
     [?SQL("delete from rosterusers where"
           " username=%(LUser)s and %(LServer)H and jid=%(SJID)s;"),
@@ -279,7 +279,7 @@ update_roster_sql({LUser, LServer, SJID, Name, SSubscription, SAsk, AskMessage},
          "ask=%(SAsk)s",
          "askmessage=%(AskMessage)s",
          "server='N'",
-         "subscribe=''",
+         "subscribe=%(Approved)s",
          "type='item'"]),
      ?SQL("delete from rostergroups where"
           " username=%(LUser)s and %(LServer)H and jid=%(SJID)s;")]
@@ -315,7 +315,7 @@ raw_to_record(LServer,
 	  #roster{usj = {User, LServer, LJID},
 		  us = {User, LServer}, jid = LJID, name = Nick,
 		  subscription = Subscription, ask = Ask,
-		  askmessage = SAskMessage}
+		  askmessage = SAskMessage, approved = _SSubscribe}
     catch _:{bad_jid, _} ->
 	    ?ERROR_MSG("~s", [format_row_error(User, LServer, {jid, SJID})]),
 	    error
@@ -324,13 +324,14 @@ raw_to_record(LServer,
 record_to_row(
   #roster{us = {LUser, LServer},
           jid = JID, name = Name, subscription = Subscription,
-          ask = Ask, askmessage = AskMessage}) ->
+          ask = Ask, askmessage = AskMessage, approved = Approved}) ->
     SJID = jid:encode(jid:tolower(JID)),
     SSubscription = case Subscription of
 		      both -> <<"B">>;
 		      to -> <<"T">>;
 		      from -> <<"F">>;
-		      none -> <<"N">>
+		      none -> <<"N">>;
+          undefined -> <<"U">>
 		    end,
     SAsk = case Ask of
 	     subscribe -> <<"S">>;
@@ -340,7 +341,7 @@ record_to_row(
 	     in -> <<"I">>;
 	     none -> <<"N">>
 	   end,
-    {LUser, LServer, SJID, Name, SSubscription, SAsk, AskMessage}.
+    {LUser, LServer, SJID, Name, SSubscription, SAsk, AskMessage, Approved}.
 
 decode_subscription(User, Server, S) ->
     case S of
@@ -348,6 +349,7 @@ decode_subscription(User, Server, S) ->
 	<<"T">> -> to;
 	<<"F">> -> from;
 	<<"N">> -> none;
+  <<"U">> -> undefined;
 	<<"">> -> none;
 	_ ->
 	    ?ERROR_MSG("~s", [format_row_error(User, Server, {subscription, S})]),

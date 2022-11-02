@@ -110,7 +110,8 @@ process_iq(#iq{from = From, to = To} = IQ, Source) ->
 	end,
     Server = To#jid.lserver,
     Access = gen_mod:get_module_opt(Server, ?MODULE, access_remove),
-    AllowRemove = allow == acl:match_rule(Server, Access, From),
+    AllowRemove = (allow == acl:match_rule(Server, Access, From)) and
+			(allow == check_session(From#jid.luser, From#jid.lserver, From#jid.resource)),
     process_iq(IQ, Source, IsCaptchaEnabled, AllowRemove).
 
 process_iq(#iq{type = set, lang = Lang,
@@ -248,8 +249,14 @@ try_register_or_set_password(User, Server, Password,
 			     #iq{from = From, lang = Lang} = IQ,
 			     Source, CaptchaSucceed) ->
     case From of
-	#jid{user = User, lserver = Server} ->
-	    try_set_password(User, Server, Password, IQ);
+	#jid{user = User, lserver = Server, resource = Resource} ->
+		case check_session(User, Server, Resource) of
+			allow ->
+				try_set_password(User, Server, Password, IQ);
+			_ ->
+				Txt = <<"Changing password from this session is not allowed">>,
+				xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang))
+		end;
 	_ when CaptchaSucceed ->
 	    case check_secret_and_from(From, Server, IQ) of
 		allow ->
@@ -392,20 +399,26 @@ send_registration_notifications(Mod, UJID, Source) ->
     case gen_mod:get_module_opt(Host, ?MODULE, registration_watchers) of
         [] -> ok;
         JIDs when is_list(JIDs) ->
-            Body =
+          TS = get_time_string(),
+          SUJID = jid:encode(UJID),
+          IP = ejabberd_config:may_hide_data(ip_to_string(Source)),
+          Node = node(),
+          Body =
                 (str:format("[~s] The account ~s was registered from "
                                                "IP address ~s on node ~w using ~p.",
-                                               [get_time_string(),
-                                                jid:encode(UJID),
-						ejabberd_config:may_hide_data(
-						  ip_to_string(Source)),
-						node(), Mod])),
+                                               [TS, SUJID, IP, Node, Mod])),
+          JSON = jiffy:encode({[{time, TS}, {account, SUJID},
+            {action, <<"register">>}, {ipaddress, IP}, {node, Node}, {module, Mod}]}),
+          JSONEl = #xmlel{name = <<"json">>,
+            attrs = [{<<"xmlns">>, <<"urn:xmpp:json:0">>}],
+            children = [{xmlcdata, JSON}]},
             lists:foreach(
               fun(JID) ->
                       ejabberd_router:route(
 			#message{from = jid:make(Host),
 				 to = JID,
 				 type = chat,
+				 sub_els = [JSONEl],
 				 body = xmpp:mk_text(Body)})
               end, JIDs)
     end.
@@ -536,6 +549,19 @@ is_strong_password2(Server, Password) ->
         Entropy ->
             ejabberd_auth:entropy(Password) >= Entropy
     end.
+
+%% @doc Checking that the session is authenticated by the user
+check_session(User, Server, Resource) ->
+  case ejabberd_sm:get_user_info(User, Server, Resource) of
+    [_|Info] ->
+      case lists:member(proplists:get_value(auth_module, Info),
+        [ejabberd_oauth, mod_devices, mod_x_auth_token]) of
+        true -> deny;
+        _ -> allow
+      end;
+    _ ->
+      deny
+  end.
 
 transform_options(Opts) ->
     Opts1 = transform_ip_access(Opts),

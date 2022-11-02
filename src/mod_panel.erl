@@ -102,10 +102,13 @@ stop(_Host) ->
 
 depends(_Host, _Opts) -> [].
 
-mod_options(_Host) -> [].
+mod_options(_Host) ->
+  [{cronjob_token, undefined}].
 
-mod_opt_type(_) ->
-  fun (L) -> lists:map(fun iolist_to_binary/1, L) end.
+mod_opt_type(cronjob_token) ->
+  fun(undefined) -> undefined;
+    (Token) -> iolist_to_binary(Token)
+  end.
 
 %%%
 %%% Register commands
@@ -145,6 +148,9 @@ process(Path, #request{method = Method, data = Data, q = Q, headers = Headers} =
     {error, not_found} -> invalid_token_response();
     {error, invalid_auth} -> unauthorized_response();
     {error, _} -> unauthorized_response();
+    cronjob ->
+      json_format(
+        handle_reuest(Method, Path, Req, {false,<<"cronjob">>}, <<>>, <<>>));
     Auth when is_map(Auth) ->
       {User, Server, <<"">>} = maps:get(usr, Auth),
       Result = case get_permissions(User, Server) of
@@ -160,7 +166,9 @@ process(Path, #request{method = Method, data = Data, q = Q, headers = Headers} =
                  Perms ->
                    handle_reuest(Method, Path, Req, Perms, User, Server)
       end,
-      json_format(Result)
+      json_format(Result);
+    _ ->
+      unauthorized_response()
   end.
 
 handle_reuest('POST',[<<"issue_token">>], _Req, _Perms, User, Server) ->
@@ -226,6 +234,9 @@ handle_reuest('DELETE',[<<"users">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
   check_and_run(Adm, Server, Args,fun remove_user/1);
+handle_reuest('GET',[<<"users">>], #request{q = Q}, {_, <<"cronjob">>}, _, _) ->
+  Args = check_args(Q, [host]),
+  check_and_run(true, <<>>, Args,fun get_users/1);
 handle_reuest('GET',[<<"users">>], #request{q = Q},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
   Args = check_args(Q, [host]),
@@ -242,10 +253,16 @@ handle_reuest('PUT',[<<"users">>,<<"set_password">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, password]),
   check_and_run(Adm, Server, Args, fun set_password/1);
+handle_reuest('POST',[<<"users">>,<<"block">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
+  Args = extract_args(Data, [username, host, reason]),
+  check_and_run(true, <<>>, Args, fun block_user/1);
 handle_reuest('POST',[<<"users">>,<<"block">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, reason]),
   check_and_run(Adm, Server, Args, fun block_user/1);
+handle_reuest('DELETE',[<<"users">>,<<"block">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
+  Args = extract_args(Data, [username, host]),
+  check_and_run(true, <<>>, Args, fun unblock_user/1);
 handle_reuest('DELETE',[<<"users">>,<<"block">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
@@ -345,7 +362,10 @@ extract_auth(#request{auth = HTTPAuth, ip = {IP, _}}) ->
                {ok, {U, S}} ->
                  #{usr => {U, S, <<"">>}, caller_server => S};
                {false, Reason} ->
-                 {error, Reason}
+                 case gen_mod:get_module_opt(global,?MODULE,cronjob_token) of
+                   Token -> cronjob;
+                   _ -> {error, Reason}
+                 end
              end;
            _ ->
              {error, invalid_auth}
@@ -359,18 +379,19 @@ extract_auth(#request{auth = HTTPAuth, ip = {IP, _}}) ->
   end.
 
 unauthorized_response() ->
-  json_error(401, 10, <<"You are not authorized to call this command.">>).
+  json_error(401, 401001,
+    <<"You are not authorized to call this command.">>).
 
 invalid_token_response() ->
-  json_error(401, 10, <<"Oauth Token is invalid or expired.">>).
+  json_error(401, 401002, <<"Token is invalid or expired.">>).
 
 badrequest_response() ->
   badrequest_response(<<"Bad Request">>).
 badrequest_response(Body) ->
-  {400, Body}.
+  {400, 40001, Body}.
 
 forbidden_response() ->
-  {403 , <<"Forbidden">>}.
+  {403 , 403001, <<"Forbidden">>}.
 
 
 json_format({Code, Result}) ->

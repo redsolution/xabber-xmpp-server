@@ -34,10 +34,9 @@
   handle_info/2, terminate/2, code_change/3]).
 -export([
   message_hook/1,
-  check_permission_write/2,
   strip_stanza_id/2,
   send_displayed/3,
-  check_invite/2, get_actual_user_info/2, get_displayed_msg/4, shift_references/2, binary_length/1, set_displayed/4
+  get_actual_user_info/2, get_displayed_msg/4, shift_references/2, binary_length/1, set_displayed/4
 ]).
 -export([get_last/1, seconds_since_epoch/1]).
 
@@ -74,8 +73,6 @@ mod_options(_Opts) -> [].
 %% gen_server callbacks
 %%====================================================================
 init([Host, _Opts]) ->
-  ejabberd_hooks:add(groupchat_message_hook, Host, ?MODULE, check_invite, 5),
-  ejabberd_hooks:add(groupchat_message_hook, Host, ?MODULE, check_permission_write, 10),
   init_db(),
   {ok, #state{host = Host}}.
 
@@ -100,92 +97,73 @@ handle_info(Info, State) ->
   ?WARNING_MSG("unexpected info: ~p", [Info]),
   {noreply, State}.
 
-terminate(_Reason, #state{host = Host}) ->
-  ejabberd_hooks:delete(groupchat_message_hook, Host, ?MODULE, check_invite, 5),
-  ejabberd_hooks:delete(groupchat_message_hook, Host, ?MODULE, check_permission_write, 10).
+terminate(_Reason, _State) ->
+  ok.
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
 %%
-message_hook(#message{id = Id,to =To, from = From, sub_els = Els, type = Type, meta = Meta, body = Body} = Pkt) ->
+message_hook(#message{to =To, from = From} = Pkt) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  UserExits = mod_groups_inspector_sql:check_user(User,Server,Chat),
-  Result = ejabberd_hooks:run_fold(groupchat_message_hook, Server, Pkt, [{User,Chat,UserExits,Els}]),
+  UserStatus = check_permission_write(User,Chat),
   ChatStatus = mod_groups_chats:get_chat_active(Server,Chat),
-  case Result of
-    not_ok ->
+  case UserStatus of
+    restricted ->
       Text = <<"You have no permission to write in this chat">>,
-      IdSer = randoms:get_string(),
-      TypeSer = chat,
       BodySer = [#text{lang = <<>>,data = Text}],
-      ElsSer = [#xabbergroupchat_x{no_permission = <<>>}],
-      MetaSer = #{},
-      MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
+      ElsSer = [#xabbergroupchat_x{no_permission = <<>>, xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}],
+      MessageNew = #message{from = To, to = From, id = randoms:get_string(),
+        type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
       UserID = mod_groups_inspector:get_user_id(Server,User,Chat),
-      Err = xmpp:err_not_allowed(),
-      ejabberd_router:route_error(Pkt, Err),
+      ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
       send_message_no_permission_to_write(UserID,MessageNew);
     blocked ->
       Text = <<"You are blocked in this chat">>,
-      IdSer = randoms:get_string(),
-      TypeSer = chat,
       BodySer = [#text{lang = <<>>,data = Text}],
       UserID = mod_groups_inspector:get_user_id(Server,User,Chat),
       UserJID = jid:from_string(User),
       UserCard = #xabbergroupchat_user_card{id = UserID, jid = UserJID},
       ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = [UserCard]}],
-      MetaSer = #{},
-      MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
-      Err = xmpp:err_not_allowed(),
-      ejabberd_router:route_error(Pkt, Err),
+      MessageNew = #message{from = To, to = From, id = randoms:get_string(),
+        type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
+      ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
       send_message_no_permission_to_write(UserID,MessageNew);
-    {ok,Sub} when ChatStatus =/= <<"inactive">> ->
-      Message = change_message(Id,Type,Body,Sub,Meta,To,From),
+    allowed when ChatStatus =/= <<"inactive">> ->
+      Message = Pkt#message{type = chat},
       transform_message(Message);
     _ when ChatStatus == <<"inactive">> ->
       Text = <<"Chat is inactive.">>,
-      IdSer = randoms:get_string(),
-      TypeSer = chat,
       BodySer = [#text{lang = <<>>,data = Text}],
       ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}],
-      MetaSer = #{},
-      MessageNew = construct_message(To,From,IdSer,TypeSer,BodySer,ElsSer,MetaSer),
+      MessageNew = #message{from = To, to = From, id = randoms:get_string(),
+        type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
       UserID = mod_groups_inspector:get_user_id(Server,User,Chat),
-      Err = xmpp:err_not_allowed(),
-      ejabberd_router:route_error(Pkt, Err),
+      ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
       send_message_no_permission_to_write(UserID,MessageNew);
     _ ->
-      Err = xmpp:err_not_allowed(),
-      ejabberd_router:route_error(Pkt, Err)
+      ejabberd_router:route_error(Pkt, xmpp:err_not_allowed())
   end.
 
-check_invite(Pkt, {_User,_Chat,_UserExits,_Els}) ->
-  case xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}) of
-    false ->
-      ok;
-    _ ->
-      ?DEBUG("Drop message with invite",[]),
-      {stop, do_nothing}
-  end.
-
-check_permission_write(_Acc, {User,Chat,UserExits,Els}) ->
+-spec check_permission_write(binary(), binary()) -> allowed | restricted | blocked | notexist .
+check_permission_write(User,Chat) ->
   ChatJID = jid:from_string(Chat),
-  UserJId =  jid:from_string(User),
-  Domain = UserJId#jid.lserver,
   Server = ChatJID#jid.lserver,
-  Block = mod_groups_block:check_block(Server,Chat,User,Domain),
-  case mod_groups_restrictions:is_restricted(<<"send-messages">>,User,Chat) of
-    false when UserExits == exist ->
-      {stop,{ok,Els}};
-    _  when UserExits == exist->
-      {stop,not_ok};
-    _ when Block == {stop,not_ok} ->
-      {stop,blocked};
+  case mod_groups_inspector_sql:check_user(User,Server,Chat) of
+    exist ->
+      case mod_groups_restrictions:is_restricted(<<"send-messages">>,User,Chat) of
+        true -> restricted;
+        _ -> allowed
+      end;
     _ ->
-      {stop, do_nothing}
+      UserJID =  jid:from_string(User),
+      Domain = UserJID#jid.lserver,
+      case mod_groups_block:check_block(Server,Chat,User,Domain) of
+        {stop,not_ok} -> blocked;
+        _-> notexist
+      end
   end.
 
 send_received_and_message(Pkt, From, To, OriginID, Users) ->
@@ -297,17 +275,16 @@ do_route(#message{body=[], from = From, type = chat, to = To} = Msg) ->
     _ ->
       ok
   end;
-do_route(#message{body=Body} = Message) ->
-  Text = xmpp:get_text(Body),
-  Len = string:len(unicode:characters_to_list(Text)),
-  case Text of
-    <<>> ->
-      ok;
-    _  when Len > 0 ->
+do_route(#message{body=_Body, type = Type} = Message) when Type == normal orelse Type == chat->
+  case xmpp:get_subtag(Message, #xabbergroupchat_invite{}) of
+    false ->
       message_hook(Message);
     _ ->
+      ?DEBUG("Drop message with invite",[]),
       ok
-  end.
+  end;
+do_route(_Message) ->
+  ok.
 
 send_displayed(_ChatJID,empty,_MessageID) ->
   ok;
@@ -401,8 +378,7 @@ binary_length(Binary) ->
   B5 = binary:replace(B4,<<"\'">>,<<"&apos;">>,[global]),
   string:len(unicode:characters_to_list(B5)).
 
-transform_message(#message{id = Id, type = Type, to = To,from = From,
-                      body = Body, meta = Meta} = Pkt) ->
+transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
   Text = xmpp:get_text(Body),
   Server = To#jid.lserver,
   LUser = To#jid.luser,
@@ -422,8 +398,7 @@ transform_message(#message{id = Id, type = Type, to = To,from = From,
   PktSanitarized = strip_reference_elements(PktSanitarized1),
   Els2 = shift_references(PktSanitarized, Length),
   NewEls = [Reference|Els2],
-  ToArchived = jid:remove_resource(From),
-  ArchiveMsg = message_for_archive(Id,Type,NewBody,NewEls,Meta,From,ToArchived),
+  ArchiveMsg = Pkt#message{body = NewBody, sub_els = NewEls, to = jid:remove_resource(From)},
   OriginID = case get_origin_id(xmpp:get_subtag(ArchiveMsg, #origin_id{})) of
                false ->
                  Id;
@@ -463,16 +438,6 @@ get_origin_id(OriginId) ->
       #origin_id{id = ID} = OriginId,
       ID
   end.
-
-message_for_archive(Id,Type,Body,Els,Meta,From,To)->
-  #message{id = Id,from = From, to = To, type = Type, body = Body, sub_els = Els, meta = Meta}.
-
-construct_message(From,To,Id,Type,Body,Els,Meta) ->
-  #message{from = From, to = To, id = Id, type = Type, body = Body, sub_els = Els, meta = Meta}.
-
-
-change_message(Id,Type,Body,Els,Meta,To,From) ->
-  #message{id = Id, type = Type, body = Body, sub_els = Els, meta = Meta, to = To, from = From}.
 
 -spec strip_reference_elements(stanza()) -> stanza().
 strip_reference_elements(Pkt) ->

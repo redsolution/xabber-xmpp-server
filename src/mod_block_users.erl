@@ -34,7 +34,7 @@
 %% gen_mod
 -export([start/2, stop/1, reload/3, mod_opt_type/1, mod_options/1, depends/2]).
 %% API
--export([maybe_kick/1, maybe_kick/3, block_user/3, unblock_user/2, get_user/2,
+-export([maybe_kick/1, maybe_kick/4, block_user/3, unblock_user/2, get_user/2,
   store_user/3, remove_user/2]).
 
 
@@ -42,8 +42,11 @@
 -include("ejabberd_sql_pt.hrl").
 -include("xmpp.hrl").
 
--record(state, {host = <<"">> :: binary()}).
+-record(state, {
+  host = <<"">> :: binary(),
+  last = maps:new() :: map()}).
 -define(BLOCK_USERS_CACHE,blocked_users).
+-define(DELAY, 3600).
 
 
 init([Host, Opts]) ->
@@ -56,9 +59,22 @@ handle_call(_Request, _From, State) ->
   Reply = ok,
   {reply, Reply, State}.
 
-handle_cast({maybe_kick, {JID, Lang, SID}}, State) ->
-  maybe_kick(JID, Lang, SID),
-  {noreply, State};
+handle_cast({maybe_kick, {JID, Lang, SID}}, #state{last = Last} = State) ->
+  LJID = jid:tolower(jid:remove_resource(JID)),
+  LastTS = case maps:find(LJID, Last) of
+             {ok, TS} -> TS;
+             _ -> 0
+           end,
+  NewLast = case maybe_kick(JID, Lang, SID, LastTS) of
+               {ok, NewTS} ->
+                 Last1 = maps:remove(LJID, Last),
+                 maps:put(LJID, NewTS, Last1);
+               _ -> Last
+             end,
+  {noreply, State#state{last = NewLast}};
+handle_cast({delete_last, {User, Server}}, #state{last = Last} = State) ->
+  LJID = {User, Server, <<>>},
+  {noreply,State#state{last = maps:remove(LJID, Last)}};
 handle_cast(Msg, State) ->
   ?WARNING_MSG("Could not handle cast ~p~n ~p~n",[Msg,State]),
   {noreply, State}.
@@ -91,7 +107,7 @@ maybe_kick(#{jid := JID, sid := SID, lang := Lang} = State) ->
   gen_server:cast(Proc, {maybe_kick, {JID, Lang, SID}}),
   State.
 
-maybe_kick(JID , Lang, {_TS,PID}) ->
+maybe_kick(JID , Lang, {_TS,PID}, LastTS) ->
   {LUser, LServer, _} = jid:tolower(JID),
   Res = case use_cache(LServer) of
           true ->
@@ -105,12 +121,23 @@ maybe_kick(JID , Lang, {_TS,PID}) ->
         end,
   case Res of
     {ok, Reason} ->
-      From = jid:make(<<>>,LServer),
+      Result = maybe_notify(JID, Reason, LastTS),
+      xmpp_stream_in:send(PID, xmpp:serr_policy_violation(Reason, Lang)),
+      Result;
+    _ ->
+      ok
+  end.
+
+maybe_notify(JID, Reason, LastTS) ->
+  EarlierThan = seconds_since_epoch() - ?DELAY,
+  if
+    LastTS < EarlierThan ->
+      From = jid:make(<<>>,JID#jid.lserver),
       ErrMsg = #message{type = chat, from = From, to = JID,
         id = randoms:get_string(), body = [#text{lang = <<>>, data = Reason}]},
       ejabberd_router:route(ErrMsg),
-      xmpp_stream_in:send(PID, xmpp:serr_policy_violation(Reason, Lang));
-    _ ->
+      {ok, seconds_since_epoch()};
+    true ->
       ok
   end.
 
@@ -138,6 +165,8 @@ unblock_user(User, Server) ->
   LUser = jid:nodeprep(User),
   LServer = jid:nameprep(Server),
   remove_user(LUser,LServer),
+  Proc = gen_mod:get_module_proc(LServer, ?MODULE),
+  gen_server:cast(Proc, {delete_last, {LUser, LServer}}),
   ets_cache:delete(?BLOCK_USERS_CACHE, {LUser, LServer}, cache_nodes(LServer)).
 
 -spec init_cache(binary(), gen_mod:opts()) -> ok.
@@ -193,6 +222,11 @@ mod_options(Host) ->
     {cache_size, ejabberd_config:cache_size(Host)},
     {cache_missed, ejabberd_config:cache_missed(Host)},
     {cache_life_time, ejabberd_config:cache_life_time(Host)}].
+
+-spec seconds_since_epoch() -> non_neg_integer().
+seconds_since_epoch() ->
+  {Mega, Secs, _} = os:timestamp(),
+  Mega * 1000000 + Secs.
 
 %% SQL
 

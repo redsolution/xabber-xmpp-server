@@ -267,6 +267,14 @@ handle_reuest('DELETE',[<<"users">>,<<"block">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
   check_and_run(Adm, Server, Args, fun unblock_user/1);
+handle_reuest('POST',[<<"users">>,<<"ban">>], #request{data = Data},
+    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [username, host]),
+  check_and_run(Adm, Server, Args, fun ban_user/1);
+handle_reuest('DELETE',[<<"users">>,<<"ban">>], #request{data = Data},
+    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [username, host]),
+  check_and_run(Adm, Server, Args, fun unban_user/1);
 handle_reuest(_,[<<"users">>], _, _, _, _) ->
   forbidden_response();
 handle_reuest(_,[<<"users">>| _], _, _, _, _) ->
@@ -695,6 +703,44 @@ unblock_user(Args) ->
       {503, <<"feature not implemented">>}
   end.
 
+ban_user(Args) ->
+  ban_user(do, Args).
+
+unban_user(Args) ->
+  ban_user(undo, Args).
+
+ban_user(Action, Args) ->
+  {Username, Host} = extract_user_host(Args),
+  Default = ejabberd_config:default_db(Host, ejabberd_auth),
+  Result = case ejabberd_config:get_option({auth_method, Host}, [Default]) of
+             [sql] when Action == do ->
+               mod_devices:remove_user(Username, Host),
+               kick_user_sessions(Username, Host),
+               sql_ban_user(Username, Host);
+             [sql] when Action == undo ->
+               sql_unban_user(Username, Host);
+             _ ->
+               not_implemented
+           end,
+  case Result of
+    {updated,1} -> {200, <<>>};
+    {updated,0} -> {404, <<"user not found">>};
+    not_implemented -> {503, <<"feature not implemented">>};
+    _ -> {500, <<>>}
+  end.
+
+sql_ban_user(Username, Host) ->
+  ejabberd_sql:sql_query(
+    Host,
+    ?SQL("update users SET password = '+++BANNED+++' || password "
+    "where username=%(Username)s and %(Host)H")).
+
+sql_unban_user(Username, Host) ->
+  ejabberd_sql:sql_query(
+    Host,
+    ?SQL("update users SET password = ltrim(password,'+++BANNED+++') "
+    "where username=%(Username)s and %(Host)H")).
+
 get_users(Args) ->
   Host = jid:nodeprep(proplists:get_value(host,Args)),
   Users = lists:sort(get_users(Host, [])),
@@ -936,6 +982,14 @@ extract_user_host(PropList)->
 seconds_since_epoch(Diff) ->
   {Mega, Secs, _} = os:timestamp(),
   Mega * 1000000 + Secs + Diff.
+
+kick_user_sessions(User, Server) ->
+  lists:map(
+    fun(Resource) ->
+      ejabberd_sm:route(jid:make(User, Server, Resource),
+        {exit, <<"Kicked by administrator">>})
+    end,
+    ejabberd_sm:get_user_resources(User, Server)).
 
 %% SQL functions
 

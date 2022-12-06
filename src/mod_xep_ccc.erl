@@ -53,7 +53,7 @@
 -export([process_iq/1]).
 
 %%
--export([get_count/4, delete_msg/5, get_last_message/4, get_last_messages/4,get_actual_last_call/4,get_last_call/4]).
+-export([get_count/4, delete_msg/5, eg_get_last_message/4,get_actual_last_call/4,get_last_call/4]).
 
 %%
 -export([get_last_message/3, get_count_messages/4, get_last_groupchat_message/4, get_last_previous_message/4]).
@@ -97,10 +97,19 @@
 }
 ).
 
--record(last_msg,
+%%-record(last_msg,
+%%{
+%%  us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
+%%  bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_',
+%%  id = <<>>                            :: binary() | '_',
+%%  user_id = <<>>                       :: binary() | '_',
+%%  packet = #xmlel{}                    :: xmlel() | message() | '_'
+%%}
+%%).
+
+-record(external_group_last_msg,
 {
-  us = {<<"">>, <<"">>}                :: {binary(), binary()} | '_',
-  bare_peer = {<<"">>, <<"">>, <<"">>} :: ljid() | '_',
+  group = {<<"">>, <<"">>}             :: {binary(), binary()} | '_',
   id = <<>>                            :: binary() | '_',
   user_id = <<>>                       :: binary() | '_',
   packet = #xmlel{}                    :: xmlel() | message() | '_'
@@ -177,10 +186,10 @@ init([Host, _Opts]) ->
   ejabberd_mnesia:create(?MODULE, request_job,
     [{disc_only_copies, [node()]},
       {attributes, record_info(fields, request_job)}]),
-  ejabberd_mnesia:create(?MODULE, last_msg,
+  ejabberd_mnesia:create(?MODULE, external_group_last_msg,
     [{disc_only_copies, [node()]},
-      {type, bag},
-      {attributes, record_info(fields, last_msg)}]),
+      {type, set},
+      {attributes, record_info(fields, external_group_last_msg)}]),
   ejabberd_mnesia:create(?MODULE, last_call,
     [{disc_only_copies, [node()]},
       {type, bag},
@@ -587,7 +596,7 @@ process_message(in,#message{id = _ID, type = chat, from = Peer, to = To, meta = 
             IsLocal ->
               pass;
             true ->
-              store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, OriginID)
+              eg_store_last_msg(Pkt, Peer, LUser, LServer,TSGroupchat, false)
           end,
           update_metainfo(LServer,LUser,Conversation, Type),
           maybe_push_notification(LUser,LServer,Conversation,Type,<<"message">>,StanzaID)
@@ -798,7 +807,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
     ?NS_CHANNELS when IsLocal == false ->
       Count = length(get_count(LUser, LServer, PUser, PServer)),
       UserCard = get_user_card(LUser, LServer, PUser, PServer),
-      LastMessage = get_last_message(LUser, LServer, PUser, PServer),
+      LastMessage = eg_get_last_message(LUser, LServer, PUser, PServer),
       LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
@@ -847,7 +856,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
     ?NS_GROUPCHAT when IsLocal == false ->
       Count = length(get_count(LUser, LServer, PUser, PServer)),
       UserCard = get_user_card(LUser, LServer, PUser, PServer),
-      LastMessage = get_last_message(LUser, LServer, PUser, PServer),
+      LastMessage = eg_get_last_message(LUser, LServer, PUser, PServer),
       LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
@@ -1009,41 +1018,46 @@ get_actual_last_call(LUser, LServer, PUser, PServer) ->
     _ -> []
   end.
 
-store_last_msg(Pkt, Peer, LUser, LServer, StanzaID, OriginIDRecord) ->
-  case {mnesia:table_info(last_msg, disc_only_copies),
-    mnesia:table_info(last_msg, memory)} of
+%% Save the last message of the external group
+eg_store_last_msg(Pkt, GroupJID, LUser, LServer, StanzaID, IsEcho) ->
+  {GUser, GServer, _} = jid:tolower(GroupJID),
+  case eg_get_last_message_by_id(GUser, GServer, StanzaID) of
+    false ->
+      eg_store_last_msg(Pkt, GUser, GServer, LUser, LServer, StanzaID, IsEcho);
+    _ ->
+      ok
+  end.
+eg_store_last_msg(Pkt, GUser, GServer, LUser, LServer, StanzaID, IsEcho) ->
+  case {mnesia:table_info(external_group_last_msg, disc_only_copies),
+    mnesia:table_info(external_group_last_msg, memory)} of
     {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
       ?ERROR_MSG("Last messages too large, won't store message id for ~s@~s",
         [LUser, LServer]),
       {error, overflow};
     _ ->
-      {PUser, PServer, _} = jid:tolower(Peer),
-      IsService = xmpp:get_subtag(Pkt,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
-      Res = get_user_id(Pkt),
-      UserID = case Res of
-                 false when IsService =/= false ->
-                   jid:to_string(jid:remove_resource(Peer));
-                 _ ->
-                   Res
-               end,
+      UserID = get_user_id(Pkt),
       case UserID of
         false -> ok;
         _ ->
           F1 = fun() ->
             mnesia:write(
-              #last_msg{us = {LUser, LServer},
-                bare_peer = {PUser, PServer, <<>>},
+              #external_group_last_msg{
+                group =  {GUser, GServer},
                 id = StanzaID,
                 user_id = UserID,
                 packet = Pkt
               })
                end,
-          delete_last_msg(Peer, LUser, LServer),
           case mnesia:transaction(F1) of
             {atomic, ok} ->
-              ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
-              OriginID = get_origin_id(OriginIDRecord),
-              store_last_msg_in_counter(Peer, LUser, LServer, UserID, StanzaID, OriginID, IsService),
+              ?DEBUG("Save last msg ~p to ~p@~p~n",[LUser, GUser, GServer]),
+              case IsEcho of
+                false ->
+                  IsService = xmpp:get_subtag(Pkt,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
+                  store_last_msg_in_counter(GUser, GServer, LUser, LServer, UserID, StanzaID, IsService);
+                true ->
+                  pass
+              end,
               ok;
             {aborted, Err1} ->
               ?DEBUG("Cannot add last msg for ~s@~s: ~s",
@@ -1058,40 +1072,40 @@ get_origin_id(#origin_id{id = OriginID}) ->
 get_origin_id(_OriginID) ->
   <<>>.
 
-store_last_msg(Pkt, Peer, LUser, LServer, TS) ->
-  case {mnesia:table_info(last_msg, disc_only_copies),
-    mnesia:table_info(last_msg, memory)} of
-    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
-      ?ERROR_MSG("Last messages too large, won't store message id for ~s@~s",
-        [LUser, LServer]),
-      {error, overflow};
-    _ ->
-      {PUser, PServer, _} = jid:tolower(Peer),
-      UserID = get_user_id(Pkt),
-      case UserID of
-        false -> ok;
-        _ ->
-          F1 = fun() ->
-            mnesia:write(
-              #last_msg{us = {LUser, LServer},
-                bare_peer = {PUser, PServer, <<>>},
-                id = TS,
-                user_id = UserID,
-                packet = Pkt
-              })
-               end,
-          delete_last_msg(Peer, LUser, LServer),
-          case mnesia:transaction(F1) of
-            {atomic, ok} ->
-              ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
-              ok;
-            {aborted, Err1} ->
-              ?DEBUG("Cannot add last msg for ~s@~s: ~s",
-                [LUser, LServer, Err1]),
-              Err1
-          end
-      end
-  end.
+%%store_last_msg(Pkt, Peer, LUser, LServer, TS) ->
+%%  case {mnesia:table_info(last_msg, disc_only_copies),
+%%    mnesia:table_info(last_msg, memory)} of
+%%    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
+%%      ?ERROR_MSG("Last messages too large, won't store message id for ~s@~s",
+%%        [LUser, LServer]),
+%%      {error, overflow};
+%%    _ ->
+%%      {PUser, PServer, _} = jid:tolower(Peer),
+%%      UserID = get_user_id(Pkt),
+%%      case UserID of
+%%        false -> ok;
+%%        _ ->
+%%          F1 = fun() ->
+%%            mnesia:write(
+%%              #last_msg{us = {LUser, LServer},
+%%                bare_peer = {PUser, PServer, <<>>},
+%%                id = TS,
+%%                user_id = UserID,
+%%                packet = Pkt
+%%              })
+%%               end,
+%%          delete_last_msg(Peer, LUser, LServer),
+%%          case mnesia:transaction(F1) of
+%%            {atomic, ok} ->
+%%              ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
+%%              ok;
+%%            {aborted, Err1} ->
+%%              ?DEBUG("Cannot add last msg for ~s@~s: ~s",
+%%                [LUser, LServer, Err1]),
+%%              Err1
+%%          end
+%%      end
+%%  end.
 
 
 get_user_id(Pkt) ->
@@ -1124,7 +1138,7 @@ get_x(false) ->
 get_x(X) ->
   get_card_from_refence(xmpp:get_subtag(X,#xmppreference{}), channel).
 
-store_last_msg_in_counter(Peer, LUser, LServer, UserID, StanzaID, OriginID, false) ->
+store_last_msg_in_counter(PUser, PServer, LUser, LServer, UserID, StanzaID, false) ->
   case {mnesia:table_info(unread_msg_counter, disc_only_copies),
     mnesia:table_info(unread_msg_counter, memory)} of
     {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
@@ -1132,12 +1146,11 @@ store_last_msg_in_counter(Peer, LUser, LServer, UserID, StanzaID, OriginID, fals
         [LUser, LServer]),
       {error, overflow};
     _ ->
-      {PUser, PServer, _} = jid:tolower(Peer),
       F1 = fun() ->
         mnesia:write(
           #unread_msg_counter{us = {LUser, LServer},
             bare_peer = {PUser, PServer, <<>>},
-            origin_id = OriginID,
+            origin_id = <<>>,
             user_id = UserID,
             id = StanzaID,
             ts = time_now()
@@ -1145,10 +1158,10 @@ store_last_msg_in_counter(Peer, LUser, LServer, UserID, StanzaID, OriginID, fals
            end,
       case mnesia:transaction(F1) of
         {atomic, ok} ->
-          ?DEBUG("Save last msg ~p to ~p~n",[LUser,Peer]),
+          ?INFO_MSG("Save last msg ~p to ~p@~p~n",[LUser, PUser, PServer]),
           ok;
         {aborted, Err1} ->
-          ?DEBUG("Cannot add unread counter for ~s@~s: ~s",
+          ?INFO_MSG("Cannot add unread counter for ~s@~s: ~s",
             [LUser, LServer, Err1]),
           Err1
       end
@@ -1156,13 +1169,14 @@ store_last_msg_in_counter(Peer, LUser, LServer, UserID, StanzaID, OriginID, fals
 store_last_msg_in_counter(_Peer, _LUser, _LServer, _UserID, _TS, _OriginID, _IsService) ->
   ok.
 
-delete_last_msg(Peer, LUser, LServer) ->
-  {PUser, PServer,_R} = jid:tolower(Peer),
-  Msgs = get_last_messages(LUser, LServer, PUser, PServer),
-  lists:foreach(
-    fun(Msg) ->
-      mnesia:dirty_delete_object(Msg)
-    end, Msgs).
+%% Delete last message in the external group if
+%%eg_delete_last_msg(GUser, GServer) ->
+%%  case mnesia:dirty_read(external_group_last_msg, {GUser, GServer}) of
+%%    [] -> ok;
+%%    _ ->
+%%      mnesia:dirty_delete(external_group_last_msg, {GUser, GServer})
+%%  end.
+
 
 get_count(LUser, LServer, PUser, PServer) ->
   FN = fun()->
@@ -1173,33 +1187,17 @@ get_count(LUser, LServer, PUser, PServer) ->
   {atomic,Msgs} = mnesia:transaction(FN),
   Msgs.
 
-get_last_message(LUser, LServer, PUser, PServer) ->
-  FN = fun()->
-    mnesia:match_object(last_msg,
-      {last_msg, {LUser, LServer}, {PUser, PServer,<<>>},'_','_','_'},
-      read)
-       end,
-  {atomic,MsgRec} = mnesia:transaction(FN),
-  case MsgRec of
+%% Get last message in the external group
+eg_get_last_message(LUser, LServer, GUser, GServer) ->
+  case mnesia:dirty_read(external_group_last_msg, {GUser, GServer}) of
     [] ->
-      Chat = jid:to_string(jid:make(PUser,PServer)),
+      Chat = jid:to_string(jid:make(GUser, GServer)),
       get_invite(LServer,LUser,Chat);
-    _ ->
-      SortFun = fun(E1,E2) -> ID1 = binary_to_integer(E1#last_msg.id), ID2 = binary_to_integer(E2#last_msg.id), ID1 > ID2 end,
-      MsgSort = lists:sort(SortFun,MsgRec),
-      [Msg|_Rest] = MsgSort,
-      #last_msg{packet = Packet} = Msg,
-      [#xabber_conversation_last{sub_els = [Packet]}]
-  end.
+    [Result] ->
+      #external_group_last_msg{packet = Msg} = Result,
+      [#xabber_conversation_last{sub_els = [xmpp:set_to(Msg, jid:make(LUser, LServer))]}]
 
-get_last_messages(LUser, LServer, PUser, PServer) ->
-  FN = fun()->
-    mnesia:match_object(last_msg,
-      {last_msg, {LUser, LServer}, {PUser, PServer,<<>>},'_','_','_'},
-      read)
-       end,
-  {atomic,MsgRec} = mnesia:transaction(FN),
-  MsgRec.
+  end.
 
 delete_msg(_LUser, _LServer, _PUser, _PServer, undefined) ->
   ok;
@@ -1214,17 +1212,13 @@ delete_msg(LUser, LServer, PUser, PServer, StanzaID) ->
   ?DEBUG("to delete ~p~n",[MsgsToDelete]),
   lists:foreach(fun(Msg) -> mnesia:dirty_delete_object(Msg) end, MsgsToDelete).
 
-delete_one_msg(LUser, LServer, PUser, PServer, StanzaID) ->
+eg_delete_one_msg(LUser, LServer, PUser, PServer, StanzaID) ->
   Msgs = get_count(LUser, LServer, PUser, PServer),
-  LastMsg = get_last_messages(LUser, LServer, PUser, PServer),
+  LastMsg = eg_get_last_message_by_id(PUser, PServer, StanzaID),
   case LastMsg of
-    [#last_msg{id = StanzaID,packet = _Pkt}] ->
-      lists:foreach(
-        fun(LMsg) ->
-          mnesia:dirty_delete_object(LMsg)
-        end, LastMsg);
+    false -> ok;
     _ ->
-      ok
+      mnesia:dirty_delete(external_group_last_msg, {PUser, PServer})
   end,
   MsgsToDelete = [X || X <- Msgs, X#unread_msg_counter.id == StanzaID],
   lists:foreach(
@@ -1235,13 +1229,10 @@ delete_one_msg(LUser, LServer, PUser, PServer, StanzaID) ->
 delete_user_msg(LUser, LServer, PUser, PServer, UserID) ->
   Msgs = get_count(LUser, LServer, PUser, PServer),
   MsgsToDelete = [X || X <- Msgs, X#unread_msg_counter.user_id == UserID],
-  LastMsg = get_last_messages(LUser, LServer, PUser, PServer),
+  LastMsg = mnesia:dirty_read(external_group_last_msg, {PUser, PServer}),
   case LastMsg of
-    [#last_msg{user_id = UserID,packet = _Pkt}] ->
-      lists:foreach(
-        fun(LMsg) ->
-          mnesia:dirty_delete_object(LMsg)
-        end, LastMsg);
+    [#external_group_last_msg{user_id = UserID,packet = _Pkt} = LMsg] ->
+      mnesia:dirty_delete_object(LMsg);
     _ ->
       ok
   end,
@@ -1252,8 +1243,7 @@ delete_user_msg(LUser, LServer, PUser, PServer, UserID) ->
 
 delete_all_msgs(LUser, LServer, PUser, PServer) ->
   Msgs = get_count(LUser, LServer, PUser, PServer),
-  Peer = jid:make(PUser,PServer),
-  delete_last_msg(Peer, LUser, LServer),
+  mnesia:dirty_delete(external_group_last_msg, {PUser, PServer}),
   lists:foreach(
     fun(Msg) ->
       mnesia:dirty_delete_object(Msg)
@@ -1717,7 +1707,11 @@ handle_sub_els(headline, [#xabber_retract_message{type = Type, version = Version
   conversation = ConversationJID} = Retract], _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
-  delete_one_msg(LUser, LServer, PUser, PServer, integer_to_binary(StanzaID)),
+  case lists:member(PServer,ejabberd_config:get_myhosts()) of
+    false ->
+      eg_delete_one_msg(LUser, LServer, PUser, PServer, integer_to_binary(StanzaID));
+    _ -> ok
+  end,
   Conversation = jid:to_string(ConversationJID),
   TS = time_now(),
   case update_retract(LServer,LUser,Conversation,Version,Type, TS) of
@@ -1761,7 +1755,7 @@ handle_sub_els(headline, [#xabber_replace{type = Type, version = Version, conver
     _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   Conversation = jid:to_string(ConversationJID),
-  maybe_change_last_msg(LServer, LUser, ConversationJID, Replace),
+  eg_maybe_change_last_msg(LServer, LUser, ConversationJID, Replace),
   TS = time_now(),
   case update_retract(LServer,LUser,Conversation,Version,Type,TS) of
     ok ->
@@ -1784,7 +1778,7 @@ handle_sub_els(headline, [#delivery_x{ sub_els = [Message]}], From, To) ->
   case IsLocal of
     false ->
       get_and_store_user_card(LServer,LUser,PeerJID,MessageD),
-      store_last_msg(MessageD, PeerJID, LUser, LServer, StanzaID),
+      eg_store_last_msg(xmpp:set_from(MessageD, From), PeerJID, LUser, LServer, StanzaID, true),
       delete_msg(LUser, LServer, PUser, PServer, StanzaID),
       update_metainfo(read, LServer,LUser,Conversation,StanzaID,?NS_GROUPCHAT);
     _ ->
@@ -2326,10 +2320,11 @@ body_is_encrypted(Pkt) ->
     end
               end, false, SubEls).
 
-maybe_change_last_msg(LServer, LUser, ConversationJID, Replace) ->
+%% Maybe change last message in the external group
+eg_maybe_change_last_msg(LServer, LUser, ConversationJID, Replace) ->
   {PUser, PServer, _PRes} = jid:tolower(ConversationJID),
   ReplaceID = Replace#xabber_replace.id,
-  M = get_last_message_with_timestamp(LUser, LServer, PUser, PServer, ReplaceID),
+  M = eg_get_last_message_by_id(PUser, PServer, ReplaceID),
   case M of
     false -> ok;
     _ ->
@@ -2350,84 +2345,72 @@ maybe_change_last_msg(LServer, LUser, ConversationJID, Replace) ->
       R = #replaced{stamp = erlang:timestamp(), body = OldText},
       Els2 = [R|Els1],
       MessageDecoded = MD#message{sub_els = Els2, body = NewBody},
-      change_last_msg(MessageDecoded, ConversationJID, LUser, LServer,ReplaceID)
+%%      change_last_msg(MessageDecoded, ConversationJID, LUser, LServer,ReplaceID)
+      eg_store_last_msg(MessageDecoded, ConversationJID, LUser, LServer,
+        integer_to_binary(ReplaceID), true)
   end.
 
-get_last_message_with_timestamp(LUser, LServer, PUser, PServer, Timestamp) ->
-  TS = case is_integer(Timestamp) of
-         true ->
-           integer_to_binary(Timestamp);
-         _ ->
-           Timestamp
-       end,
+%% Get last message in the external group if ID matches
+eg_get_last_message_by_id(GUser, GServer, ID) when is_integer(ID) ->
+  eg_get_last_message_by_id(GUser, GServer, integer_to_binary(ID));
+
+eg_get_last_message_by_id(GUser, GServer, ID) ->
   FN = fun()->
-    mnesia:match_object(last_msg,
-      {last_msg, {LUser, LServer}, {PUser, PServer,<<>>},'_','_','_'},
+    mnesia:match_object(external_group_last_msg,
+      {external_group_last_msg, {GUser, GServer},ID,'_','_'},
       read)
        end,
-  {atomic,MsgRec} = mnesia:transaction(FN),
-  case MsgRec of
-    [] ->
-      false;
-    _ ->
-      SortFun = fun(E1,E2) -> ID1 = binary_to_integer(E1#last_msg.id), ID2 = binary_to_integer(E2#last_msg.id), ID1 > ID2 end,
-      MsgSort = lists:sort(SortFun,MsgRec),
-      [Msg|_Rest] = MsgSort,
-      #last_msg{packet = Packet, id = ID} = Msg,
-      case ID of
-        TS ->
-          Packet;
-        _ ->
-          false
-      end
+  case mnesia:transaction(FN) of
+    {atomic, [#external_group_last_msg{packet = Msg}]} -> Msg;
+    _ -> false
   end.
 
-change_last_msg(Pkt, Peer, LUser, LServer, Timestamp) ->
-  case {mnesia:table_info(last_msg, disc_only_copies),
-    mnesia:table_info(last_msg, memory)} of
-    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
-      ?ERROR_MSG("Last messages too large, won't store message id for ~s@~s",
-        [LUser, LServer]),
-      {error, overflow};
-    _ ->
-      TS = case is_integer(Timestamp) of
-             true ->
-               integer_to_binary(Timestamp);
-             _ ->
-               Timestamp
-           end,
-      {PUser, PServer, _} = jid:tolower(Peer),
-      IsService = xmpp:get_subtag(Pkt,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
-      Res = get_user_id(Pkt),
-      UserID = case Res of
-                 false when IsService =/= false ->
-                   jid:to_string(jid:remove_resource(Peer));
-                 _ ->
-                   Res
-               end,
-      case UserID of
-        false -> ok;
-        _ ->
-          F1 = fun() ->
-            mnesia:write(
-              #last_msg{us = {LUser, LServer},
-                bare_peer = {PUser, PServer, <<>>},
-                id = TS,
-                user_id = UserID,
-                packet = Pkt
-              })
-               end,
-          delete_last_msg(Peer, LUser, LServer),
-          case mnesia:transaction(F1) of
-            {atomic, ok} ->
-              ok;
-            {aborted, Err1} ->
-              ?DEBUG("Cannot add last msg for ~s@~s: ~s",
-                [LUser, LServer, Err1]),
-              Err1
-          end
-      end
-  end.
+%%change_last_msg(Pkt, Peer, LUser, LServer, Timestamp) ->
+%%  case {mnesia:table_info(external_group_last_msg, disc_only_copies),
+%%    mnesia:table_info(external_group_last_msg, memory)} of
+%%    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
+%%      ?ERROR_MSG("Last messages too large, won't store message id for ~s@~s",
+%%        [LUser, LServer]),
+%%      {error, overflow};
+%%    _ ->
+%%      TS = case is_integer(Timestamp) of
+%%             true ->
+%%               integer_to_binary(Timestamp);
+%%             _ ->
+%%               Timestamp
+%%           end,
+%%      {PUser, PServer, _} = jid:tolower(Peer),
+%%      IsService = xmpp:get_subtag(Pkt,#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
+%%      Res = get_user_id(Pkt),
+%%      UserID = case Res of
+%%                 false when IsService =/= false ->
+%%                   jid:to_string(jid:remove_resource(Peer));
+%%                 _ ->
+%%                   Res
+%%               end,
+%%      case UserID of
+%%        false -> ok;
+%%        _ ->
+%%          F1 = fun() ->
+%%            mnesia:write(
+%%              #external_group_last_msg{
+%%                group = {PUser, PServer},
+%%                id = TS,
+%%                user_id = UserID,
+%%                packet = Pkt
+%%              })
+%%               end,
+%%          delete_last_msg(Peer, LUser, LServer),
+%%          case mnesia:transaction(F1) of
+%%            {atomic, ok} ->
+%%              ok;
+%%            {aborted, Err1} ->
+%%              ?DEBUG("Cannot add last msg for ~s@~s: ~s",
+%%                [LUser, LServer, Err1]),
+%%              Err1
+%%          end
+%%      end
+%%  end.
 
 -spec update_mam_prefs(atom(), jid(), jid()) -> stanza() | error.
 update_mam_prefs(_Action, User, User) ->
@@ -2477,5 +2460,14 @@ update_table(unread_msg_counter) ->
     {atomic, ok} = mnesia:transform_table(unread_msg_counter, Transformer2,
       record_info(fields, unread_msg_counter),
       unread_msg_counter);
-update_table(_) ->
+update_table(last_msg) ->
+  Keys = mnesia:dirty_all_keys(last_msg),
+  List1 = lists:map(fun(K) -> mnesia:dirty_read(last_msg, K) end, Keys),
+  List2 = [ {{U,S},I,UI,P} || {_,_,{U,S,_},I,UI,P} <- lists:flatten(List1)],
+  List3 = lists:ukeysort(1,List2),
+  F = fun({G,I,UI,P}) ->
+    E = #external_group_last_msg{group = G, id = I, user_id = UI, packet = P},
+    mnesia:dirty_write(E)
+    end,
+  lists:foreach(F, List3),
   ok.

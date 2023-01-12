@@ -581,35 +581,26 @@ do_check_packet(#jid{luser = LUser, lserver = LServer}, List, Packet, Dir) ->
 		   in -> jid:tolower(From);
 		   out -> jid:tolower(To)
 		 end,
-	  {Subscription, _Ask, Groups} = ejabberd_hooks:run_fold(
-					   roster_get_jid_info, LServer,
-					   {none, none, []},
-					   [LUser, LServer, LJID]),
-	  check_packet_aux(List, PType2, LJID, Subscription, Groups)
+	  check_packet_aux(List, PType2, LJID, {LUser, LServer})
     end.
 
 -spec check_packet_aux([listitem()],
-		       message | iq | presence_in | presence_out | other,
-		       ljid(), none | both | from | to, [binary()]) ->
-			      allow | deny.
+    message | iq | presence_in | presence_out | other,
+    ljid(), {binary(), binary()}) -> allow | deny.
 %% Ptype = mesage | iq | presence_in | presence_out | other
-check_packet_aux([], _PType, _JID, _Subscription,
-		 _Groups) ->
-    allow;
-check_packet_aux([Item | List], PType, JID,
-		 Subscription, Groups) ->
-    #listitem{type = Type, value = Value, action = Action} =
-	Item,
-    case is_ptype_match(Item, PType) of
-      true ->
-	    case is_type_match(Type, Value, JID, Subscription, Groups) of
-		true -> Action;
-		false ->
-		    check_packet_aux(List, PType, JID, Subscription, Groups)
-	    end;
-      false ->
-	  check_packet_aux(List, PType, JID, Subscription, Groups)
-    end.
+check_packet_aux([], _PType, _JID, _UserServer) ->
+  allow;
+check_packet_aux([Item | List], PType, JID, UserServer) ->
+  #listitem{type = Type, value = Value, action = Action} = Item,
+  case is_ptype_match(Item, PType) of
+    true ->
+      case is_type_match(Type, Value, JID, UserServer) of
+        true -> Action;
+        false -> check_packet_aux(List, PType, JID, UserServer)
+      end;
+    false ->
+      check_packet_aux(List, PType, JID, UserServer)
+  end.
 
 -spec is_ptype_match(listitem(),
 		     message | iq | presence_in | presence_out | other) ->
@@ -628,10 +619,10 @@ is_ptype_match(Item, PType) ->
     end.
 
 -spec is_type_match(none | jid | subscription | group, listitem_value(),
-		    ljid(), none | both | from | to, [binary()]) -> boolean().
-is_type_match(none, _Value, _JID, _Subscription, _Groups) ->
+		    ljid(), {binary(), binary()}) -> boolean().
+is_type_match(none, _Value, _JID, _UserServer) ->
     true;
-is_type_match(jid, Value, JID, _Subscription, _Groups) ->
+is_type_match(jid, Value, JID, _UserServer) ->
     case Value of
 	{<<"">>, Server, <<"">>} ->
 	    case JID of
@@ -650,9 +641,17 @@ is_type_match(jid, Value, JID, _Subscription, _Groups) ->
 	    end;
 	_ -> Value == JID
     end;
-is_type_match(subscription, Value, _JID, Subscription, _Groups) ->
+is_type_match(subscription, Value, LJID, {LUser, LServer}) ->
+	{Subscription, _Ask, _Groups} = ejabberd_hooks:run_fold(
+		roster_get_jid_info, LServer,
+		{none, none, []},
+		[LUser, LServer, LJID]),
     Value == Subscription;
-is_type_match(group, Group, _JID, _Subscription, Groups) ->
+is_type_match(group, Group, LJID, {LUser, LServer}) ->
+	{_Sub, _Ask, Groups} = ejabberd_hooks:run_fold(
+		roster_get_jid_info, LServer,
+		{none, none, []},
+		[LUser, LServer, LJID]),
     lists:member(Group, Groups).
 
 -spec remove_user(binary(), binary()) -> ok.

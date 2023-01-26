@@ -121,6 +121,7 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
   Is_geo = search_element_in_references(References,#geoloc{}),
   Is_sticker = search_element_in_references(References,#sticker{}),
   Is_encrypted = is_encrypted(Pkt),
+  Tags = get_message_tags(Pkt),
     XML = fxml:element_to_binary(Pkt),
     Body = fxml:get_subtag_cdata(Pkt, <<"body">>),
     SType = misc:atom_to_binary(Type),
@@ -144,6 +145,7 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
                 "sticker=%(Is_sticker)b",
                 "voice=%(Is_voice)b",
                 "encrypted=%(Is_encrypted)b",
+                "tags=%(Tags)s",
                "nick=%(Nick)s"])) of
 	{updated, _} ->
 	    ok;
@@ -229,6 +231,21 @@ search_element_in_references(References,Element) ->
       false -> Acc;
       _ -> true
     end end, false, References).
+
+get_message_tags(Pkt) ->
+  Message = xmpp:decode(Pkt),
+  Invite = case xmpp:has_subtag(Message, #xabbergroupchat_invite{}) of
+             true -> [<<"<invite>">>];
+             _ -> []
+           end,
+  VoIP = lists:filtermap(fun(SubTag) ->
+    case xmpp:has_subtag(Message,SubTag) of
+      true -> {true, <<"<voip>">>};
+      _ -> false
+    end end,
+    [#jingle_reject{}, #jingle_accept{}, #jingle_propose{}]),
+  Tags = [],
+  lists:join(<<$,>>, lists:usort(Tags ++ Invite ++ VoIP)).
 
 write_prefs(LUser, _LServer, #archive_prefs{default = Default,
 					   never = Never,

@@ -725,8 +725,10 @@ should_archive_out(#message{from = From, body = Body, subject = Subject,
 				none when Type == headline ->
 					false;
 				none ->
-					xmpp:get_text(Body) /= <<>> orelse
-						xmpp:get_text(Subject) /= <<>>
+					(xmpp:get_text(Body) /= <<>> orelse
+						xmpp:get_text(Subject) /= <<>>) andalso
+					%% do not store sent invitations
+						xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}) == false
 			end
 	end;
 should_archive_out(_, _LServer) ->

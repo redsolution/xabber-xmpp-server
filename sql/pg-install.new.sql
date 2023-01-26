@@ -91,6 +91,7 @@ CREATE TABLE archive (
     id SERIAL,
     kind text,
     nick text,
+    tags text,
     image boolean NOT NULL DEFAULT false,
     document boolean NOT NULL DEFAULT false,
     audio boolean NOT NULL DEFAULT false,

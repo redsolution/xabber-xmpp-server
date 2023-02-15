@@ -423,7 +423,10 @@ del_roster(LUser, LServer, LJID) ->
 encode_item(Item) ->
     #roster_item{jid = jid:make(Item#roster.jid),
 		 name = Item#roster.name,
-		 subscription = Item#roster.subscription,
+		 subscription = case Item#roster.subscription of
+                      undefined -> none;
+                      V -> V
+                    end,
 		 ask = case ask_to_pending(Item#roster.ask) of
 			   out -> subscribe;
 			   both -> subscribe;

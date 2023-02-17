@@ -286,6 +286,7 @@ do_route(#message{body=_Body, type = Type} = Message) when Type == normal orelse
 do_route(_Message) ->
   ok.
 
+%% todo: it needs to be optimized
 send_displayed(_ChatJID,empty,_MessageID) ->
   ok;
 send_displayed(ChatJID,StanzaID,MessageID) ->
@@ -468,7 +469,8 @@ strip_x_elements(Pkt) ->
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"x">> andalso NS == ?NS_GROUPCHAT) ->
+      IsGroupsNS = str:prefix(?NS_GROUPCHAT, NS),
+      if (Name == <<"x">> andalso IsGroupsNS) ->
         try xmpp:decode(El) of
           #xabbergroupchat_x{} ->
             false

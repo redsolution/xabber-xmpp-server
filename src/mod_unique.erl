@@ -36,7 +36,7 @@
   start/2, stop/1, depends/2, mod_options/1
 ]).
 -export([
-  remove_request/2, get_message/3, get_stanza_id_by_origin_id/3
+  remove_request/2, remove_request/3, get_message/3, get_stanza_id_by_origin_id/3
 ]).
 
 %% Hooks
@@ -98,21 +98,12 @@ mod_options(_) -> [].
 %%receive_message_stored(Acc) ->
 %%  Acc.
 
-sent_message_stored({ok, Pkt}, LServer, JID, StanzaID, Request) ->
-    case Request of
-      #delivery_retry{to = To} ->
-        case To of
-          undefined ->
-            check_origin_id(Pkt, LServer, JID, StanzaID),
-            {ok, Pkt};
-          _ ->
-            Pkt2 = add_request(Pkt,Request),
-            {ok, Pkt2}
-        end;
-      _ ->
-        check_origin_id(Pkt, LServer, JID, StanzaID),
-        {ok, Pkt}
-    end;
+sent_message_stored({ok, Pkt}, _LServer, _JID, _StanzaID,
+    #delivery_retry{to = To} = _Request) when To /= undefined ->
+  {ok, Pkt};
+sent_message_stored({ok, Pkt}, LServer, JID, StanzaID, _) ->
+  send_received(Pkt, LServer, JID, StanzaID),
+  {ok, Pkt};
 sent_message_stored(Acc, _LServer, _JID, _StanzaID, _Request) ->
     Acc.
 
@@ -144,12 +135,8 @@ user_send_packet(Acc) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-add_request(Pkt,Request) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = [Request|Els],
-  xmpp:set_els(Pkt,NewEls).
 
-check_origin_id(Pkt, _LServer, JID, _StanzaID) ->
+send_received(Pkt, _LServer, JID, _StanzaID) ->
   case xmpp:get_subtag(Pkt, #origin_id{}) of
     #origin_id{id = OriginID} ->
       send_received(Pkt, JID, OriginID),
@@ -219,19 +206,23 @@ get_message(LServer, LUser, OriginID) ->
       #message{meta = #{stanza_id => StanzaID, unique_time => StanzaID}}
   end.
 
-remove_request(Pkt,false) ->
-  Pkt;
+remove_request(Pkt,false) -> Pkt;
 remove_request(Pkt,_Request) ->
+  remove_request(Pkt,_Request, all).
+
+remove_request(Pkt,_Request, To) ->
+  FN = fun(_, all) -> false;
+    (V1, V2) ->  V1 /= V2 end,
   Els = xmpp:get_els(Pkt),
   NewEls = lists:filter(
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
       if
-        (Name == <<"retry">> andalso NS == <<"https://xabber.com/protocol/delivery">>) ->
+        (Name == <<"retry">> andalso NS == ?NS_UNIQUE) ->
           try xmpp:decode(El) of
-            #delivery_retry{} ->
-              false
+            #delivery_retry{to=V} ->
+              FN(V, To)
           catch _:{xmpp_codec, _} ->
             false
           end;

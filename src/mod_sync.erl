@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_xep_ccc.erl
+%%% File    : mod_sync.erl
 %%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
 %%% Purpose : XEP:  Fast Client Synchronization
 %%% Created : 21 May 2019 by Andrey Gagarin <andrey.gagarin@redsolution.com>
@@ -23,7 +23,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_xep_ccc).
+-module(mod_sync).
 -author('andrey.gagarin@redsolution.com').
 
 -behaviour(gen_mod).

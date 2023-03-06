@@ -966,7 +966,7 @@ get_last_informative_message(LServer, LUser, Conversation, TS) ->
     ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
     " from archive where username=%(LUser)s and bare_peer=%(Conversation)s "
     " and %(LServer)H and timestamp < %(TS)d and encrypted = false "
-    " order by timestamp desc NULLS LAST limit 10")) of
+    " order by timestamp desc limit 10")) of
     {selected,[]} ->
       [];
     {selected,List} ->
@@ -1009,7 +1009,7 @@ get_last_encrypted_message(LServer,LUser,Conversation) ->
     ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
     " from archive where username=%(LUser)s and bare_peer=%(Conversation)s "
     " and %(LServer)H and txt notnull and txt !='' and encrypted = true "
-    " order by timestamp desc NULLS LAST limit 1")) of
+    " order by timestamp desc limit 1")) of
     {selected,[<<>>]} ->
       [];
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
@@ -1592,7 +1592,7 @@ lg_get_last_message_id(GUser, GServer) ->
   case ejabberd_sql:sql_query(GServer,
     ?SQL("select @(timestamp)s from archive"
     " where username=%(GUser)s  and txt notnull and txt !='' and %(GServer)H "
-    " order by timestamp desc NULLS LAST limit 1")) of
+    " order by timestamp desc limit 1")) of
     {selected,[{TS}]} -> TS;
     _ -> undefined
   end.
@@ -1602,7 +1602,7 @@ lg_get_last_message(_LUser, _LServer, GUser, GServer, <<"both">>) ->
     GServer,
     ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
     " from archive where username=%(GUser)s  and txt notnull and txt !='' "
-    " and %(GServer)H order by timestamp desc NULLS LAST limit 1")) of
+    " and %(GServer)H order by timestamp desc limit 1")) of
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
       convert_message(TS, XML, Peer, Kind, Nick, GUser, GServer);
     _ ->
@@ -2193,7 +2193,7 @@ get_invite(LServer, LUser, PUser, PServer) ->
         LServer,
         ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
         " from archive where username = %(LUser)s and timestamp = %(TS)d "
-        " and %(LServer)H order by timestamp desc NULLS LAST limit 1")) of
+        " and %(LServer)H ")) of
         {selected,[<<>>]} ->
           [];
         {selected,[{TS, XML, Peer, Kind, Nick}]}->

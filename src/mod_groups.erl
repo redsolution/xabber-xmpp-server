@@ -64,7 +64,6 @@ mod_options(Host) ->
   [
     {session_lifetime, 45},
     {remove_empty, true},
-    {group_servers, [Host]},
     {global_indexs, []}
   ].
 
@@ -73,9 +72,6 @@ mod_opt_type(session_lifetime) ->
 
 mod_opt_type(remove_empty) ->
   fun (B) when is_boolean(B) -> B end;
-
-mod_opt_type(group_servers) ->
-  fun (L) -> lists:map(fun iolist_to_binary/1, L) end;
 
 mod_opt_type(global_indexs) ->
   fun (L) -> lists:map(fun iolist_to_binary/1, L) end.

@@ -130,11 +130,15 @@ code_change(_OldVsn, State = #xabber_sm_state{}, _Extra) ->
 %%%===================================================================
 
 start_entities(Pid) ->
-  lists:map(fun(Host) ->
-    Groups = mod_groups_chats:get_all(Host),
-    start_entities(Groups,Host,Pid,<<"Group">>)
-            end, ?MYHOSTS
-  ).
+  lists:foreach(fun(Host) ->
+    try
+      Groups = mod_groups_chats:get_all(Host),
+      start_entities(Groups,Host,Pid,<<"Group">>)
+    catch
+        _:Why ->
+          ?ERROR_MSG("Group sessions cannot be started: ~p",[Why])
+    end
+                end, ?MYHOSTS).
 
 start_entities(Chats,Server,Pid,Resource) ->
   lists:foreach(fun(C) ->

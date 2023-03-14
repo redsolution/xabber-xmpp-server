@@ -117,11 +117,15 @@ code_change(_OldVsn, State = #xabber_sm_state{}, _Extra) ->
 %%%===================================================================
 
 start_entities(Pid) ->
-  lists:map(fun(Host) ->
-    Channels = mod_channels:get_all(Host),
-    start_entities(Channels,Host,Pid,<<"Channel">>)
-            end, ?MYHOSTS
-  ).
+  lists:foreach(fun(Host) ->
+    try
+      Channels = mod_channels:get_all(Host),
+      start_entities(Channels,Host,Pid,<<"Channel">>)
+    catch
+      _:Why ->
+        ?ERROR_MSG("Channel sessions cannot be started: ~p",[Why])
+    end
+                end, ?MYHOSTS).
 
 start_entities(Entities,Server,Pid,Resource) ->
   lists:foreach(fun(C) ->

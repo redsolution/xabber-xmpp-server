@@ -667,14 +667,18 @@ insert_nickname(LServer,User,Chat,NickRaw) ->
     LServer,
     ?SQL("update groupchat_users set nickname = %(Nick)s, user_updated_at = (now() at time zone 'utc') where chatgroup=%(Chat)s and username=%(User)s")).
 
-insert_incognito_nickname(LServer,User,Chat) ->
+insert_incognito_nickname(LServer, User, Chat) ->
+  UserID = get_user_id(LServer, User, Chat),
+  insert_incognito_nickname(LServer, User, Chat, UserID).
+
+insert_incognito_nickname(LServer,User,Chat, UserID) ->
   Nickname = string:trim(mod_groups_users:get_nick_in_chat(LServer,User,Chat)),
   if
     Nickname == <<>> orelse Nickname == [] ->
       RandomNick =  case nick_generator:random_nick(LServer,User,Chat) of
                       {Nick,{_FileName, Bin}} ->
                         %% todo: make a function for this in vcard module
-                        case mod_groups_vcard:store_user_avatar_file(LServer, Bin) of
+                        case mod_groups_vcard:store_user_avatar_file(LServer, Bin, UserID) of
                           #avatar_info{bytes = Size, id = ID, type = Type, url = Url} ->
                             mod_groups_vcard:update_avatar(LServer, User, Chat, ID, Type, Size, Url);
                           _ -> ok
@@ -715,6 +719,16 @@ is_duplicated_nick(LServer,Chat,Nick,User) ->
   case get_nick_in_chat(LServer,User,Chat) of
     Nick -> true;
     _ -> false
+  end.
+
+get_user_id(LServer, User, Chat) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(id)s from groupchat_users where chatgroup=%(Chat)s and username=%(User)s")) of
+    {selected,[{UserID}]} ->
+      UserID;
+    _ ->
+      undefined
   end.
 
 get_user_by_id(Server,Chat,Id) ->
@@ -796,7 +810,7 @@ get_user_info(User,Chat) ->
            empty when IsAnon == no->
              Username;
            empty when IsAnon == yes ->
-             insert_incognito_nickname(Server,Username,Chat);
+             insert_incognito_nickname(Server,Username,Chat,UserId);
            {ok,Value} ->
              Value;
            _ ->
@@ -1533,7 +1547,7 @@ get_user_from_chat(LServer,Chat,User,ID) ->
                empty when IsAnon == no->
                  Username;
                empty when IsAnon == yes ->
-                 insert_incognito_nickname(LServer,Username,Chat);
+                 insert_incognito_nickname(LServer,Username,Chat,Id);
                {ok,Value} ->
                  Value;
                _ ->

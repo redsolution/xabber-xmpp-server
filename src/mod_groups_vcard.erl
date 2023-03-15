@@ -46,7 +46,7 @@
   get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, create_p2p_avatar/6,
   handle_iq/1
 ]).
--export([publish_avatar/3, make_http_request/6, store_user_avatar_file/2]).
+-export([publish_avatar/3, make_http_request/6, store_user_avatar_file/3]).
 -export([maybe_update_avatar/3]).
 %% gen_mod behavior
 -export([start/2, stop/1, mod_options/1, depends/2]).
@@ -57,6 +57,7 @@
 
 -define(RESOURCE, <<"Group">>).
 -define(AVATARS_PATH, <<"groups/mavatars">>).
+-define(AVATAR_NAME_SALT, atom_to_binary(erlang:get_cookie(),latin1)).
 
 start(_Host, _) ->
   ok.
@@ -545,31 +546,32 @@ http_response_process(Server, User, ID, Type, Size, Data) ->
   end.
 
 store_user_avatar(Server, User, ID, AvaType, AvaSize, Data) ->
-  <<"image/",Type/binary>> = AvaType,
-  FileName = <<ID/binary, ".", Type/binary >>,
+  FileName = make_user_string(jid:from_string(User), salt),
   DocRoot = get_docroot(Server),
   FullPath = filename:join([DocRoot, ?AVATARS_PATH, FileName]),
   case do_store_file(FullPath, Data, undefined, undefined) of
     ok ->
       Url = get_root_url(Server),
-      AvatarUrl = <<Url/binary, $/,?AVATARS_PATH/binary,$/,FileName/binary>>,
+      AvatarUrl = <<Url/binary, $/,?AVATARS_PATH/binary,$/,FileName/binary,"?v=",ID/binary>>,
       update_avatar_url_chats(Server,User,ID,AvaType,AvaSize,AvatarUrl),
       set_update_status(Server,User,<<"false">>);
     Err ->
+      ?ERROR_MSG("Error storing user avatar: ~p ~p ~p",[User, FileName, Err]),
       Err
   end.
 
-store_user_avatar_file(Server, Data) ->
+store_user_avatar_file(Server, Data, UserID) ->
   ID = get_hash(Data),
   Type = atom_to_binary(eimp:get_type(Data), latin1),
   Size = byte_size(Data),
-  FileName = <<ID/binary, ".", Type/binary >>,
+  Salt = ?AVATAR_NAME_SALT,
+  FileName = str:sha(<<UserID/binary, Salt/binary>>),
   DocRoot = get_docroot(Server),
   FullPath = filename:join([DocRoot, ?AVATARS_PATH, FileName]),
   case do_store_file(FullPath, Data, undefined, undefined) of
     ok ->
       Url = get_root_url(Server),
-      AvatarUrl = <<Url/binary, $/,?AVATARS_PATH/binary,$/,FileName/binary>>,
+      AvatarUrl = <<Url/binary, $/,?AVATARS_PATH/binary,$/,FileName/binary,"?v=",ID/binary>>,
       #avatar_info{bytes = Size, id = ID, type = <<"image/",Type/binary>>, url = AvatarUrl};
     Err ->
       Err
@@ -943,10 +945,9 @@ update_metadata_user_put_by_id(Server, UserID, AvatarID, AvatarType, AvatarSize,
 update_data_user_put(Server, UserID, Data, Hash, Chat) ->
   Path = get_docroot(Server),
   RootUrl = get_root_url(Server),
-  TypeRaw = eimp:get_type(Data),
-  Type = atom_to_binary(TypeRaw, latin1),
-  Name = <<Hash/binary, ".", Type/binary >>,
-  _Url = <<RootUrl/binary, $/, ?AVATARS_PATH/binary, $/, Name/binary>>,
+  Salt = ?AVATAR_NAME_SALT,
+  Name = str:sha(<<UserID/binary, Salt/binary>>),
+  _Url = <<RootUrl/binary, $/, ?AVATARS_PATH/binary, $/, Name/binary,"?v=",Hash/binary>>,
   FilePath = filename:join([Path, ?AVATARS_PATH, Name]),
   do_store_file(FilePath, Data, undefined, undefined),
   OldMeta = get_image_metadata_by_id(Server, UserID, Chat),
@@ -1306,16 +1307,17 @@ publish_avatar(#jid{lserver = Server} = Chat, Data, FileName)->
   JIDinURL = gen_mod:get_module_opt(Server,mod_http_upload,jid_in_url),
   UserStr = make_user_string(Chat, JIDinURL),
   DocRoot = get_docroot(Server),
-  FullPath = filename:join([DocRoot, UserStr, "avatar", FileName]),
+  FileName1 = make_user_string(Chat, salt),
+  FullPath = filename:join([DocRoot, UserStr, "avatar", FileName1]),
   case do_store_file(FullPath, Data, undefined, undefined) of
     ok ->
       Url = get_root_url(Server),
-      AvatarUrl = <<Url/binary, $/,UserStr/binary,$/,"avatar",$/,FileName/binary>>,
       Size = byte_size(Data),
       HashID = get_hash(Data),
       Type = lists:last(binary:split(FileName,<<".">>)),
       ImageType = <<"image/",Type/binary>>,
-
+      AvatarUrl = <<Url/binary, $/,UserStr/binary,$/,"avatar",$/,
+        FileName1/binary,"?v=",HashID/binary>>,
       AvatarInfo = #avatar_info{type = ImageType, bytes = Size, id = HashID, url = AvatarUrl},
       AvatarMeta = #avatar_meta{info = [AvatarInfo]},
       MetaItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarMeta)]},
@@ -1338,6 +1340,9 @@ publish_avatar(_, _, _) ->
 %% block from mod_http_upload
 
 -spec make_user_string(jid(), sha1 | node) -> binary().
+make_user_string(#jid{luser = U, lserver = S}, salt) ->
+  Salt = ?AVATAR_NAME_SALT,
+  str:sha(<<U/binary, $@, S/binary, Salt/binary>>);
 make_user_string(#jid{luser = U, lserver = S}, sha1) ->
   str:sha(<<U/binary, $@, S/binary>>);
 make_user_string(#jid{luser = U}, node) ->
@@ -1355,7 +1360,7 @@ replace_special_chars(S) ->
 do_store_file(Path, Data, FileMode, DirMode) ->
   try
     ok = filelib:ensure_dir(Path),
-    {ok, Io} = file:open(Path, [write, exclusive, raw]),
+    {ok, Io} = file:open(Path, [write, raw]),
     Ok = file:write(Io, Data),
     ok = file:close(Io),
     if is_integer(FileMode) ->

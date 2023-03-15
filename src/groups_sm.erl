@@ -141,10 +141,10 @@ start_entities(Pid) ->
                 end, ?MYHOSTS).
 
 start_entities(Chats,Server,Pid,Resource) ->
-  lists:foreach(fun(C) ->
-    {Chat} = C,
+  lists:foreach(fun(Chat) ->
     SID = {p1_time_compat:unique_timestamp(), Pid},
-    ejabberd_sm:open_session(SID, Chat, Server, Resource, 50, [{group, true}]) end, Chats).
+    ejabberd_sm:open_session(SID, Chat, Server, Resource,
+      50, [{group, true}]) end, Chats).
 
 activate(Server, GroupLocalPart) ->
   gen_server:cast(?MODULE, {group_created,Server,GroupLocalPart}).

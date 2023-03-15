@@ -298,12 +298,7 @@ message_invite(User,Chat,Admin,Reason) ->
   U = #xabbergroup_invite_user{jid = Admin},
   ChatJID = jid:from_string(Chat),
   LServer = ChatJID#jid.lserver,
-  Anonymous = case mod_groups_chats:is_anonim(LServer,Chat) of
-                yes ->
-                  <<"incognito">>;
-                _ ->
-                  <<"public">>
-              end,
+  {ok, Anonymous, _} = mod_groups_chats:get_type_and_parent(LServer,Chat),
   Text = <<"Add ",Chat/binary," to the contacts to join a group chat">>,
     #message{type = chat,to = jid:from_string(User), from = jid:from_string(Chat), id = randoms:get_string(),
       sub_els = [#xabbergroupchat_invite{user = U, reason = Reason, jid = ChatJID},

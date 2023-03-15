@@ -35,7 +35,7 @@
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 -export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all/1, get_all_info/3,
-  get_count_chats/1, get_depended_chats/2, get_detailed_information_of_chat/2]).
+  get_count_chats/1, get_detailed_information_of_chat/2, get_type_and_parent/2]).
 
 -export([check_creator/4, check_user/4, check_chat/4,
   create_peer_to_peer/4, send_invite/4, check_if_users_invited/4,
@@ -278,15 +278,9 @@ check_creator(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
 
 check_chat(_Acc, LServer, _Creator,  #xabbergroup_peer{jid = ChatJID}) ->
   Chat = jid:to_string(ChatJID),
-  Independet = is_independent(LServer,Chat),
-  case is_anonim(LServer,Chat) of
-    no ->
-      ?DEBUG("Chat no anon ~p",[Chat]),
-      {stop,not_exist};
-    _ when Independet == yes ->
-      ok;
-    _ ->
-      {stop,dependet}
+  case get_type_and_parent(LServer,Chat) of
+    {ok, <<"incognito">>, <<>>} -> ok;
+    _ -> {stop, notallowed}
   end.
 
 check_user(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID, id = UserID}) ->
@@ -303,11 +297,11 @@ check_user(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID, id = UserID
 
 check_if_peer_to_peer_exist(User, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
   Chat = jid:to_string(ChatJID),
-  case check_if_not_p2p_exist(LServer,Chat,Creator,User) of
-    {false,ExistedChat} ->
-      {exist,ExistedChat,User};
-    _ ->
-      User
+  case get_p2p_chat(LServer,Chat,Creator,User) of
+    notexist ->
+      User;
+    ExistedChat ->
+      {exist,ExistedChat,User}
   end.
 
 check_if_users_invited(Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
@@ -455,35 +449,24 @@ delete_chat(_Acc,{LServer,User,Chat,_UserCard,_Lang})->
   ok.
 
 is_anonim(LServer,Chat) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(jid)s from groupchats
-    where jid = %(Chat)s
-    and anonymous = 'incognito' and %(LServer)H")) of
-    {selected,[{null}]} ->
-      no;
-    {selected,[]} ->
-      no;
-    {selected,[{}]} ->
-      no;
-    _ ->
-      yes
+  case get_type_and_parent(LServer, Chat) of
+    {ok, <<"incognito">>, _} -> yes;
+    _ -> no
   end.
 
-is_independent(LServer,Chat) ->
+get_type_and_parent(LServer,Chat) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(jid)s from groupchats
-    where jid = %(Chat)s
-    and parent_chat = '0' and %(LServer)H")) of
-    {selected,[{null}]} ->
-      no;
+    ?SQL("select @(anonymous)s,@(parent_chat)s from groupchats "
+    " where jid = %(Chat)s and %(LServer)H")) of
     {selected,[]} ->
-      no;
-    {selected,[{}]} ->
-      no;
+      {error, notexist};
+    {selected, [{A, <<"0">>}]} ->
+      {ok, A, <<>>};
+    {selected, [{A, PC}]} ->
+      {ok, A, PC};
     _ ->
-      yes
+      {error, dberror}
   end.
 
 is_global_indexed(LServer,Chat) ->
@@ -492,28 +475,21 @@ is_global_indexed(LServer,Chat) ->
     ?SQL("select @(jid)s from groupchats
     where jid = %(Chat)s
     and searchable = 'global' and %(LServer)H")) of
-    {selected,[{null}]} ->
-      no;
     {selected,[]} ->
       no;
-    {selected,[{}]} ->
-      no;
+    {selected, _} ->
+      yes;
     _ ->
-      yes
+      no
   end.
 
 get_all(LServer) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(localpart)s from groupchats where %(LServer)H")) of
-    {selected,[{null}]} ->
-      [];
-    {selected,[]} ->
-      [];
-    {selected,[{}]} ->
-      [];
     {selected, Chats} ->
-      Chats
+      [C || {C} <- Chats];
+    _ -> []
   end.
 %%
 get_all_info(LServer,Limit,Page) ->
@@ -580,36 +556,31 @@ create_groupchat(Server,Localpart,CreatorJid,Name,ChatJid,Anon,Search,Model,Desc
 
 % Internal functions
 
-check_if_not_p2p_exist(LServer,ParentChat,User1,User2) ->
+get_p2p_chat(LServer,ParentChat,User1,User2) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(username)s,@(chatgroup)s from groupchat_users
-    left join groupchats on chatgroup = jid
-    where
-    groupchats.parent_chat = %(ParentChat)s
-    and (username = %(User1)s or username = %(User2)s) and %(LServer)H")) of
-    {selected,[{null}]} ->
-      true;
-    {selected,[]} ->
-      true;
-    {selected,[{}]} ->
-      true;
-    {selected,List} ->
-      check_if_not_duplicated(List)
+    ?SQL("select @(jid)s from groupchats where parent_chat = %(ParentChat)s "
+    " and (select count(*) from groupchat_users where "
+    " username in (%(User1)s,%(User2)s) and chatgroup = jid) = 2 "
+    " and %(LServer)H")) of
+    {selected,[{Chat}]} ->
+      Chat;
+    _ ->
+      notexist
   end.
 
-check_if_not_duplicated(List) ->
-  List1 = [C || {_U,C} <- List],
-  List2 = lists:usort(List1),
-  Len1 = length(List1),
-  Len2 = length(List2),
-  case Len1 of
-    Len2 ->
-      true;
-    _ ->
-      [Chat] = List1 -- List2,
-      {false, Chat}
-  end.
+%%check_if_not_duplicated(List) ->
+%%  List1 = [C || {_U,C} <- List],
+%%  List2 = lists:usort(List1),
+%%  Len1 = length(List1),
+%%  Len2 = length(List2),
+%%  case Len1 of
+%%    Len2 ->
+%%      true;
+%%    _ ->
+%%      [Chat] = List1 -- List2,
+%%      {false, Chat}
+%%  end.
 
 add_user_to_peer_to_peer_chat(LServer, User, NewChat,OldChat) ->
   {AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge} =
@@ -638,32 +609,15 @@ delete_depended_chats(ParentChat, LServer) ->
     LServer,
     ?SQL("delete from groupchats where parent_chat=%(ParentChat)s and %(LServer)H")).
 
-get_depended_chats(ParentChat, LServer) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(localpart)s from groupchats
-    where parent_chat = %(ParentChat)s and %(LServer)H")) of
-    {selected,[{null}]} ->
-      [];
-    {selected,[]} ->
-      [];
-    {selected,[{}]} ->
-      [];
-    {selected,List} ->
-      List
-  end.
-
 groupchat_exist(LUser, LServer) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(localpart)s from groupchats
     where localpart = %(LUser)s and %(LServer)H")) of
-    {selected,[{null}]} ->
+    {selected, []} ->
       false;
-    {selected,[]} ->
-      false;
-    {selected,[{}]} ->
-      false;
+    {selected, _} ->
+      true;
     _ ->
       true
   end.

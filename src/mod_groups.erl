@@ -60,7 +60,7 @@ stop(_Host) ->
 depends(_Host, _Opts) ->
   [{mod_http_upload, hard}].
 
-mod_options(Host) ->
+mod_options(_Host) ->
   [
     {session_lifetime, 45},
     {remove_empty, true},

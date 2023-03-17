@@ -43,7 +43,7 @@
   update_parse_avatar_option/4,
   get_photo_meta/3, get_photo_data/5, get_avatar_type/4, get_all_image_metadata/2, check_old_meta/2,
   make_chat_notification_message/3, get_pubsub_meta/0, get_pubsub_data/0, handle_pubsub/4, handle_pubsub/3, get_image_id/3,
-  get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, create_p2p_avatar/6,
+  get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, create_p2p_avatar/4,
   handle_iq/1
 ]).
 -export([publish_avatar/3, make_http_request/6, store_user_avatar_file/3]).
@@ -93,7 +93,7 @@ handle_decoded_request(Iq) ->
   Server = To#jid.lserver,
   UserJid = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
-  UserId = mod_groups_inspector:get_user_id(Server,UserJid,Chat),
+  UserId = mod_groups_users:get_user_id(Server,UserJid,Chat),
   NewIq = #iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = Decoded},
   Result = case Node of
     <<"urn:xmpp:avatar:data">> ->
@@ -158,7 +158,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
   #pubsub{publish = Publish} = Pubsub,
   #ps_publish{node = Node, items = Items} = Publish,
   Item = lists:keyfind(ps_item,1,Items),
-  UserId = mod_groups_inspector:get_user_id(Server,User,Chat),
+  UserId = mod_groups_users:get_user_id(Server,User,Chat),
   UserDataNodeId = <<"urn:xmpp:avatar:data#",UserId/binary>>,
   UserMetadataNodeId = <<"urn:xmpp:avatar:metadata#",UserId/binary>>,
   UserNickNodeId = <<"http://jabber.org/protocol/nick#",UserId/binary>>,
@@ -258,7 +258,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                NewDecoded = [NewPubsub],
                mod_pubsub:iq_sm(#iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = NewDecoded});
              <<"urn:xmpp:avatar:data#",SomeUserId/binary>> when CanChangeAva == true ->
-               SomeUser = mod_groups_inspector:get_user_by_id(Server,Chat,SomeUserId),
+               SomeUser = mod_groups_users:get_user_by_id(Server,Chat,SomeUserId),
                case mod_groups_restrictions:validate_users(Server,Chat,User,SomeUser) of
                  ok when SomeUser =/= none ->
                    #ps_item{id = ItemId,sub_els = [Sub]} = Item,
@@ -269,7 +269,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                    xmpp:make_error(Iq,xmpp:err_not_allowed(<<"You are not allowed to do it">>,Lang))
                end;
              <<"urn:xmpp:avatar:metadata#",SomeUserId/binary>> when CanChangeAva == true ->
-               SomeUser = mod_groups_inspector:get_user_by_id(Server,Chat,SomeUserId),
+               SomeUser = mod_groups_users:get_user_by_id(Server,Chat,SomeUserId),
                #ps_item{id = IdItem} = Item,
                case IdItem of
                  <<>> when SomeUser =/= none->
@@ -713,7 +713,7 @@ get_vcard_avatar(Server,Hash,UserID,UserNode,Chat) ->
       not_exist;
     {selected, [<<>>]} ->
       not_filed;
-    {selected,[{Username}]} when IsAnon == no ->
+    {selected,[{Username}]} when not IsAnon ->
       get_vcard_avatar_data(Server,Username,Hash,UserNode);
     _ ->
       error
@@ -855,13 +855,15 @@ get_image_metadata_by_id(Server, UserID, Chat) ->
       error
   end.
 
+%% todo: refactoring
 get_vcard_avatar(Server,Chat,User) ->
   IsAnon = mod_groups_chats:is_anonim(Server,Chat),
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(image)s,@(hash)s,@(image_type)s from groupchat_users_vcard
   where jid=%(User)s")) of
-    {selected,[{Image,Hash,ImageType}]} when Image =/= null andalso Hash =/= null andalso ImageType =/= null andalso IsAnon == no ->
+    {selected,[{Image,Hash,ImageType}]} when Image =/= null andalso
+      Hash =/= null andalso ImageType =/= null andalso not IsAnon ->
       Path = get_docroot(Server),
       File = filename:join(Path, Image),
       case file:read_file(File) of
@@ -1246,20 +1248,21 @@ get_root_url(Server) ->
             end,
   misc:expand_keyword(<<"@HOST@">>, str:strip(UrlOpt, right, $/), Server).
 
-create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2)
-  when is_binary(AvatarID1) == true andalso is_binary(AvatarID2) == true
-  andalso is_binary(AvatarType1) == true andalso is_binary(AvatarType2) ->
-  L1 = string:length(AvatarID1),
-  L2 = string:length(AvatarID2),
-  case L1 of
-    0 ->
-      ok;
-    _ when L2 > 0 ->
-      <<"image/", Type1/binary>> = AvatarType1,
-      <<"image/", Type2/binary>> = AvatarType2,
+get_file_from_url(Url) ->
+  [Url1, _] = binary:split(Url,<<$?>>),
+  Url2 = binary:split(Url1, <<$/>>,[global]),
+  lists:last(Url2).
+
+
+create_p2p_avatar(LServer,Chat, AvatarUrl1, AvatarUrl2)
+  when is_binary(AvatarUrl1) andalso is_binary(AvatarUrl2)->
+  L1 = size(AvatarUrl1),
+  L2 = size(AvatarUrl2),
+  if
+    L1 > 0 andalso L2 > 0 ->
       Path = get_docroot(LServer),
-      Name1 = <<AvatarID1/binary, ".", Type1/binary >>,
-      Name2 = <<AvatarID2/binary, ".", Type2/binary >>,
+      Name1 = get_file_from_url(AvatarUrl1),
+      Name2 = get_file_from_url(AvatarUrl2),
       File1 = filename:join([Path, ?AVATARS_PATH, Name1]),
       File2 = filename:join([Path, ?AVATARS_PATH, Name2]),
       case eavatartools:merge_avatars(File1,File2) of
@@ -1268,10 +1271,10 @@ create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2)
         _ ->
           ok
       end;
-    _ ->
+    true ->
       ok
   end;
-create_p2p_avatar(_LServer,_Chat,_AvatarID1,_AvatarType1,_AvatarID2,_AvatarType2) ->
+create_p2p_avatar(_LServer,_Chat,_AvatarID1,_AvatarID2) ->
   ok.
 
 %%put_avatar_into_pubsub(Chat,Data,Resource) ->
@@ -1331,6 +1334,7 @@ publish_avatar(#jid{lserver = Server} = Chat, Data, FileName)->
         meta = #{}},
       mod_pubsub:iq_sm(IQMeta);
     Err ->
+      ?ERROR_MSG("Error storing group avatar: ~p ~p ~p",[Chat, FullPath, Err]),
       Err
   end;
 

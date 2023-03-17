@@ -43,6 +43,7 @@
   form_user_updated/2,
   user_list_to_send/2,
   form_kicked/2,
+  add_user/6,
   delete_user/2,
   is_in_chat/3, is_duplicated_nick/4,
   check_if_exist/3,
@@ -51,7 +52,8 @@
   convert_from_datetime_to_unix_time/1,
   current_chat_version/2,
   subscribe_user/2,
-  get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/10,
+  get_user_id/3,
+  get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/4,
   update_user_status/3, user_no_read/2, get_users_page/3, get_nick_in_chat/3, get_user_by_id_and_allow_to_invite/3,
   pre_approval/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2, add_wait_for_vcard/2, change_peer_to_peer_invitation_state/4, check_if_unique/5
 ]).
@@ -342,24 +344,23 @@ get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
   From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   To = jid:remove_resource(UserJID),
   Nick = get_nick_in_chat(Server,User,Chat),
-  IsAnon = mod_groups_inspector:is_anonim(Server,Chat),
-  case IsAnon of
-    no when Status == not_exist ->
-      add_user_pre_approval(Server,User,<<"member">>,Chat,<<"wait">>),
+  case mod_groups_chats:is_anonim(Server,Chat) of
+    false when Status == not_exist ->
+      add_user(Server,User,<<"member">>,Chat,<<"wait">>,<<>>),
       add_wait_for_vcard(Server,User),
       ejabberd_router:route(From,To, mod_groups_vcard:get_vcard()),
       ejabberd_router:route(From,To, mod_groups_vcard:get_pubsub_meta()),
       {stop,ok};
-    no ->
+    false ->
       mod_groups_sql:set_update_status(Server,User,<<"true">>),
       ejabberd_router:route(From,To, mod_groups_vcard:get_vcard()),
       ejabberd_router:route(From,To, mod_groups_vcard:get_pubsub_meta()),
       ok;
-    yes when Nick == <<>> ->
+    true when Nick == <<>> ->
       mod_groups_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),
       insert_incognito_nickname(Server,User,Chat),
       ok;
-    yes when Nick =/= <<>> ->
+    true when Nick =/= <<>> ->
       mod_groups_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>),
       ok;
     _ ->
@@ -368,9 +369,8 @@ get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
 
 add_user_vcard(_Acc, {_Admin,Chat,Server,
   #xabbergroupchat_invite{invite_jid = User, reason = _Reason, send = _Send}}) ->
-  IsAnon = mod_groups_inspector:is_anonim(Server,Chat),
-  case IsAnon of
-    no ->
+  case mod_groups_chats:is_anonim(Server,Chat) of
+    false ->
       add_wait_for_vcard(Server,User),
       From = jid:from_string(Chat),
       To = jid:from_string(User),
@@ -391,7 +391,11 @@ subscribe_user(_Acc, Presence) ->
   Status = check_user_if_exist(Server,User,Chat),
   case Status of
     not_exist ->
-      add_user(Server,User,Role,Chat,Subscription);
+      case add_user(Server,User,Role,
+        Chat,Subscription, <<>>) of
+        ok -> {stop,ok};
+        _ ->  {stop,not_ok}
+      end;
     <<"none">> ->
       change_subscription(Server,Chat,User,Subscription),
       {stop,ok};
@@ -408,7 +412,7 @@ pre_approval(_Acc,{Server,To,Chat,_Lang}) ->
   Status = check_user_if_exist(Server,User,Chat),
   case Status of
     not_exist ->
-      add_user_pre_approval(Server,User,Role,Chat,Subscription);
+      add_user(Server,User,Role,Chat,Subscription,<<>>);
     <<"none">> ->
       change_subscription(Server,Chat,User,Subscription);
     <<"wait">> ->
@@ -461,7 +465,7 @@ is_anon_card(UserCard) ->
 form_user_card(User,Chat) ->
   {Role,UserJID,Badge,UserId,Nick,AvatarEl,IsAnon} = get_user_info(User,Chat),
   case IsAnon of
-    no ->
+    false ->
       #xabbergroupchat_user_card{role = Role, jid = UserJID, badge = Badge, id = UserId, nickname = Nick, avatar = AvatarEl};
     _ ->
       #xabbergroupchat_user_card{role = Role, badge = Badge, id = UserId, nickname = Nick, avatar = AvatarEl}
@@ -479,38 +483,27 @@ form_kicked(Users,Chat) ->
   #xabbergroupchat_kicked{users = UserCards}.
 
 % SQL functions
-add_user(Server,Member,Role,Groupchat,Subscription) ->
+add_user(Server, Member, Role, Group, Subs, InvitedBy) ->
   case mod_groups_sql:search_for_chat(Server,Member) of
     {selected,[]} ->
-      add_user_to_db(Server,Member,Role,Groupchat,Subscription),
-      {stop,ok};
-    {selected,[_Name]} ->
-      {stop,not_ok}
-  end.
-
-add_user_pre_approval(Server,Member,Role,Groupchat,Subscription) ->
-  case mod_groups_sql:search_for_chat(Server,Member) of
-    {selected,[]} ->
-      add_user_to_db(Server,Member,Role,Groupchat,Subscription),
+      add_user_to_db(Server, Member, Role, Group, Subs, InvitedBy),
       ok;
     {selected,[_Name]} ->
-      {stop,not_ok}
+      not_allowed
   end.
 
-add_user_to_db(Server,User,Role,Chatgroup,Subscription) ->
-  R = randoms:get_alphanum_string(16),
-  R_s = binary_to_list(R),
-  R_sl = string:to_lower(R_s),
-  Id = list_to_binary(R_sl),
+add_user_to_db(Server, User, Role, Group, Subs, InvitedBy) ->
+  ID = str:to_lower(randoms:get_alphanum_string(16)),
   ejabberd_sql:sql_query(
     Server,
     ?SQL_INSERT(
       "groupchat_users",
       ["username=%(User)s",
         "role=%(Role)s",
-        "chatgroup=%(Chatgroup)s",
-        "id=%(Id)s",
-        "subscription=%(Subscription)s"
+        "chatgroup=%(Group)s",
+        "id=%(ID)s",
+        "subscription=%(Subs)s",
+        "invited_by=%(InvitedBy)s"
       ])).
 
 user_list_to_send(Server, Groupchat) ->
@@ -724,17 +717,19 @@ is_duplicated_nick(LServer,Chat,Nick,User) ->
 get_user_id(LServer, User, Chat) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(id)s from groupchat_users where chatgroup=%(Chat)s and username=%(User)s")) of
+    ?SQL("select @(id)s from groupchat_users "
+    " where chatgroup=%(Chat)s and username=%(User)s")) of
     {selected,[{UserID}]} ->
       UserID;
     _ ->
-      undefined
+      <<>>
   end.
 
 get_user_by_id(Server,Chat,Id) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(username)s from groupchat_users where chatgroup=%(Chat)s and id=%(Id)s")) of
+    ?SQL("select @(username)s from groupchat_users "
+    " where chatgroup=%(Chat)s and id=%(Id)s")) of
     {selected,[{User}]} ->
       User;
     _ ->
@@ -744,7 +739,8 @@ get_user_by_id(Server,Chat,Id) ->
 get_existed_user_by_id(Server,Chat,Id) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(username)s from groupchat_users where chatgroup=%(Chat)s and id=%(Id)s and subscription='both'")) of
+    ?SQL("select @(username)s from groupchat_users "
+    " where chatgroup=%(Chat)s and id=%(Id)s and subscription='both'")) of
     {selected,[{User}]} ->
       User;
     _ ->
@@ -754,7 +750,8 @@ get_existed_user_by_id(Server,Chat,Id) ->
 get_user_by_id_and_allow_to_invite(Server,Chat,Id) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(username)s from groupchat_users where chatgroup=%(Chat)s and id=%(Id)s and p2p_state ='true' ")) of
+    ?SQL("select @(username)s from groupchat_users "
+    " where chatgroup=%(Chat)s and id=%(Id)s and p2p_state ='true' ")) of
     {selected,[{User}]} ->
       User;
     _ ->
@@ -807,9 +804,9 @@ get_user_info(User,Chat) ->
   [Username,Badge,UserId,Chat,_Rule,_RuleDesc,_Type,_Subscription,GV,FN,NickVcard,NickChat,_ValidFrom,_IssuedAt,_IssuedBy,_VcardImage,_Avatar,_LastSeen] = Item,
   UserRights = [{_R,_RD,T,_VF,_ISA,_ISB}||[UserS,_Badge,_UID,_C,_R,_RD,T,_S,_GV,_FN,_NV,_NC,_VF,_ISA,_ISB,_VI,_AV,_LS] <-Items, UserS == Username, T == <<"permission">> orelse T == <<"restriction">>],
   Nick = case nick(GV,FN,NickVcard,NickChat,IsAnon) of
-           empty when IsAnon == no->
+           empty when not IsAnon ->
              Username;
-           empty when IsAnon == yes ->
+           empty when IsAnon ->
              insert_incognito_nickname(Server,Username,Chat,UserId);
            {ok,Value} ->
              Value;
@@ -831,11 +828,11 @@ nick(GV,FN,NickVcard,NickChat,IsAnon) ->
       empty;
     _  when NickChat =/= null andalso NickChat =/= <<>>->
       {ok,NickChat};
-    _  when NickVcard =/= null andalso NickVcard =/= <<>> andalso IsAnon == no ->
+    _  when NickVcard =/= null andalso NickVcard =/= <<>> andalso not IsAnon ->
       {ok,NickVcard};
-    _  when GV =/= null andalso GV =/= <<>> andalso IsAnon == no ->
+    _  when GV =/= null andalso GV =/= <<>> andalso not IsAnon ->
       {ok,GV};
-    _  when FN =/= null andalso FN =/= <<>> andalso IsAnon == no ->
+    _  when FN =/= null andalso FN =/= <<>> andalso not IsAnon ->
       {ok,FN};
     _ ->
       empty
@@ -1144,7 +1141,9 @@ get_user_info_for_peer_to_peer(LServer,User,Chat) ->
       Info
   end.
 
-add_user_to_peer_to_peer_chat(LServer,User,Chat,AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge) ->
+add_user_to_peer_to_peer_chat(LServer,User,Chat,
+    {AvatarID,AvatarType,AvatarUrl,AvatarSize,
+      Nickname,ParseAvatar,Badge}) ->
   Role = <<"member">>,
   Subscription = <<"wait">>,
   R = randoms:get_alphanum_string(16),
@@ -1406,16 +1405,16 @@ form_options() ->
     #xdata_option{label = <<"Forever">>, value = [<<"0">>]}
   ].
 
-convert_time(Time) ->
-  TimeNow = calendar:datetime_to_gregorian_seconds(calendar:universal_time()) - 62167219200,
-  UnixTime = convert_from_datetime_to_unix_time(Time),
-  Diff = UnixTime - TimeNow,
-  case Diff of
-    _ when Diff < 3153600000 ->
-      integer_to_binary(UnixTime);
-    _ ->
-      <<"0">>
-  end.
+%%convert_time(Time) ->
+%%  TimeNow = calendar:datetime_to_gregorian_seconds(calendar:universal_time()) - 62167219200,
+%%  UnixTime = convert_from_datetime_to_unix_time(Time),
+%%  Diff = UnixTime - TimeNow,
+%%  case Diff of
+%%    _ when Diff < 3153600000 ->
+%%      integer_to_binary(UnixTime);
+%%    _ ->
+%%      <<"0">>
+%%  end.
 
 -spec decode(binary(),list()) -> list().
 decode(LServer, FS) ->
@@ -1544,9 +1543,9 @@ get_user_from_chat(LServer,Chat,User,ID) ->
       IsAnon = mod_groups_chats:is_anonim(LServer,Chat),
       [Username,Id,Badge,NickChat,Subscription,GF,FullName,NickVcard,LastSeen] = UserInfo,
       Nick = case nick(GF,FullName,NickVcard,NickChat,IsAnon) of
-               empty when IsAnon == no->
+               empty when not IsAnon ->
                  Username;
-               empty when IsAnon == yes ->
+               empty when IsAnon ->
                  insert_incognito_nickname(LServer,Username,Chat,Id);
                {ok,Value} ->
                  Value;
@@ -1567,7 +1566,7 @@ get_user_from_chat(LServer,Chat,User,ID) ->
       UserCard = #xabbergroupchat_user_card{subscription = Subscription, id = Id, nickname = Nick,
         role = Role, avatar = AvatarEl, badge = BadgeF, present = Present},
       SubEls = if
-                 IsAnon == yes andalso RequesterRole /= <<"owner">> -> [UserCard] ;
+                 IsAnon andalso RequesterRole /= <<"owner">> -> [UserCard] ;
                  true -> [UserCard#xabbergroupchat_user_card{jid = jid:from_string(Username)}]
                end,
       #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls};
@@ -1715,7 +1714,7 @@ make_query(LServer,RawData,RequesterUser,Chat) ->
                        undefined
                    end,
       case IsAnon of
-        no ->
+        false ->
           #xabbergroupchat_user_card{id = Id, jid = jid:from_string(Username), nickname = Nick, role = Role, avatar = AvatarEl, badge = BadgeF, present = Present, subscription = Subscription};
         _ when RequesterUser == Username ->
           #xabbergroupchat_user_card{id = Id, jid = jid:from_string(Username), nickname = Nick, role = Role, avatar = AvatarEl, badge = BadgeF, present = Present, subscription = Subscription};

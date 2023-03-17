@@ -52,7 +52,7 @@ unregister_hooks(Host) ->
 handle_call(_Request, _From, _State) ->
   erlang:error(not_implemented).
 
-handle_cast(#presence{to = To} = Presence, State) ->
+handle_cast(#presence{to = _To} = Presence, State) ->
   DecodedPresence = xmpp:decode_els(Presence),
   answer_presence(DecodedPresence),
   {noreply, State};
@@ -90,7 +90,7 @@ answer_presence(#presence{to = To, from = From, type = available, sub_els = SubE
   end,
   Presence = form_presence_with_info(LServer, Channel, From, available),
   ejabberd_router:route(Presence);
-answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} = Presence) ->
+answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = _Sub} = Presence) ->
   LServer = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
   Channel = jid:to_string(jid:remove_resource(To)),
@@ -145,9 +145,8 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
-  Exist = mod_groups_inspector_sql:check_user(User,Server,Chat),
-  case Exist of
-    exist ->
+  case mod_groups_users:check_if_exist(Server,Chat,User) of
+    true ->
       UserCard = mod_groups_users:form_user_card(User,Chat),
       ChatJIDRes = jid:replace_resource(ChatJID,<<"Channel">>),
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),

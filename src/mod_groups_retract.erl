@@ -175,7 +175,7 @@ delete_messages(_Acc, {Server,_User,Chat,_ID,_X,_V}) ->
 
 check_user_permission_to_delete_messages(_Acc, {Server,User,Chat,ID,_X,_V}) ->
   IsPermitted = mod_groups_restrictions:is_permitted(<<"delete-messages">>,User,Chat),
-  OwnerOfMessage = mod_groups_inspector:get_user_by_id(Server,Chat,ID),
+  OwnerOfMessage = mod_groups_users:get_user_by_id(Server,Chat,ID),
   case OwnerOfMessage of
     User ->
       ok;
@@ -186,7 +186,7 @@ check_user_permission_to_delete_messages(_Acc, {Server,User,Chat,ID,_X,_V}) ->
   end.
 
 check_and_unpin_message(_Acc, {Server,_U,Chat,ID,_X,_V}) ->
-  User = mod_groups_inspector:get_user_by_id(Server,Chat,ID),
+  User = mod_groups_users:get_user_by_id(Server,Chat,ID),
   case find_and_delete_pinned_message(Server,Chat,User) of
     {updated,1} ->
       P = mod_groups_presence:form_presence(Chat),
@@ -197,7 +197,7 @@ check_and_unpin_message(_Acc, {Server,_U,Chat,ID,_X,_V}) ->
   end.
 
 delete_user_messages(_Acc, {Server,_User,Chat,ID,_X,_V}) ->
-  User = mod_groups_inspector:get_user_by_id(Server,Chat,ID),
+  User = mod_groups_users:get_user_by_id(Server,Chat,ID),
   delete_user_messages_from_archive(Server,Chat,User),
   ok.
 

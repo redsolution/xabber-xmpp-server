@@ -243,8 +243,11 @@ answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
       Server = To#jid.lserver,
       Chat = jid:to_string(jid:remove_resource(To)),
       User = jid:to_string(jid:remove_resource(From)),
-      case mod_groups_inspector_sql:delete_user_from_chat(User,Server,Chat) of
+      Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook,
+        Server, [], [{Server,User,Chat,#xabbergroupchat_user_card{},<<"en">>}]),
+      case Result of
         ok ->
+          mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
           ejabberd_router:route(To,From,#presence{type = unsubscribe});
         _ ->
           ok
@@ -270,7 +273,7 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
           mod_groups_inspector:unblock_parse_chat(Server,User,ChatJid)
       end
   end,
-  IsAnon = mod_groups_inspector:is_anonim(Server,ChatJid),
+  IsAnon = mod_groups_chats:is_anonim(Server,ChatJid),
   PeerToPeer = lists:keyfind(xabbergroup_peer,1,Decoded),
   case PeerToPeer of
     false ->
@@ -279,7 +282,7 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
       {xabbergroup_peer,_JID,_ID,PeerState} = PeerToPeer,
       ValidStates = [<<"true">>,<<"false">>],
       case lists:member(PeerState,ValidStates) of
-        true when IsAnon == yes ->
+        true when IsAnon ->
           mod_groups_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
         _ ->
           ?DEBUG("Not change state",[])
@@ -331,9 +334,8 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
-  Exist = mod_groups_inspector_sql:check_user(User,Server,Chat),
-  case Exist of
-    exist ->
+  case mod_groups_users:check_if_exist(Server,Chat,User) of
+    true ->
       UserCard = mod_groups_users:form_user_card(User,Chat),
       ChatJIDRes = jid:replace_resource(ChatJID,<<"Group">>),
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
@@ -360,7 +362,7 @@ answer_presence(From, To, SubEls)->
   Resource = From#jid.lresource,
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
-  Status = mod_groups_inspector_sql:check_user(User,Server,ChatJid),
+  IsExist = mod_groups_users:check_if_exist(Server,ChatJid,User),
   Key = lists:keyfind(vcard_xupdate,1, SubEls),
   Collect = lists:keyfind(collect,1, SubEls),
   case Collect of
@@ -377,7 +379,7 @@ answer_presence(From, To, SubEls)->
   end,
   NewHash = search_for_hash(Key),
   OldHash = mod_groups_sql:get_hash(Server,User),
-  IsAnon = mod_groups_inspector:is_anonim(Server,ChatJid),
+  IsAnon = mod_groups_chats:is_anonim(Server,ChatJid),
   case NewHash of
     OldHash ->
       ok;
@@ -385,7 +387,7 @@ answer_presence(From, To, SubEls)->
       delete_photo_if_exist;
     undefined ->
       ok;
-    _ when IsAnon == no->
+    _ when not IsAnon ->
       ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From), mod_groups_vcard:get_vcard());
     _ ->
       ok
@@ -398,7 +400,7 @@ answer_presence(From, To, SubEls)->
       {xabbergroup_peer,_JID,_ID,PeerState} = PeerToPeer,
       ValidStates = [<<"true">>,<<"false">>],
       case lists:member(PeerState,ValidStates) of
-        true when IsAnon == yes ->
+        true when IsAnon ->
           mod_groups_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
         _ ->
           ok
@@ -409,15 +411,15 @@ answer_presence(From, To, SubEls)->
   NotPresent = lists:keyfind(x_not_present,1, SubEls),
   PresentNum = get_present(ChatJid),
   if
-    Present == false andalso NotPresent == false andalso Status == exist ->
+    Present == false andalso NotPresent == false andalso IsExist ->
       mod_groups_vcard:make_chat_notification_message(Server,ChatJid,From),
       ejabberd_router:route(FromChat,From,form_presence(ChatJid,User)),
       if
-        IsAnon == no ->
+        not IsAnon ->
           mod_groups_vcard:maybe_update_avatar(From,To,Server);
         true -> ok
       end;
-    Present =/= false andalso NotPresent == false andalso Status == exist ->
+    Present =/= false andalso NotPresent == false andalso IsExist ->
       mod_groups_sql:update_last_seen(Server,User,ChatJid),
       case mod_groups_present_mnesia:set_session(Resource, User, ChatJid) of
         ok ->
@@ -425,7 +427,7 @@ answer_presence(From, To, SubEls)->
         _ ->
           ignore
       end;
-    Present == false andalso NotPresent =/= false andalso Status == exist ->
+    Present == false andalso NotPresent =/= false andalso IsExist ->
       change_present_state(To,From);
     true ->
       ok
@@ -625,8 +627,16 @@ form_presence(Chat,User) ->
 info_about_chat(ChatJid) ->
   S = jid:from_string(ChatJid),
   Server = S#jid.lserver,
-  {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,ParentChat,Status}]} =
-    mod_groups_chats:get_all_information_chat(ChatJid,Server),
+  case mod_groups_chats:get_all_information_chat(ChatJid,Server) of
+    {selected,[{Name,Anonymous,_,_,_,Message,_,_,ParentChat,Status}]} ->
+      info_about_chat(ChatJid, {Name, Anonymous, Message, ParentChat, Status});
+    _ ->
+      %% Happens when deleting a group
+      {#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}, [],undefined}
+  end.
+info_about_chat(ChatJid, {Name, Anonymous, Message, ParentChat, Status}) ->
+  S = jid:from_string(ChatJid),
+  Server = S#jid.lserver,
   ChatSessions = mod_groups_present_mnesia:select_sessions('_',ChatJid),
   AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
   UniqueOnline = lists:usort(AllUsersSession),

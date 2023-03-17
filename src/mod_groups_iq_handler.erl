@@ -167,8 +167,8 @@ make_action(#iq{lang = Lang, to = To, from = From, type = get, sub_els = [#xmlel
   Chat = jid:to_string(jid:remove_resource(To)),
   User = jid:to_string(jid:remove_resource(From)),
   RightToBlock = mod_groups_restrictions:is_permitted(<<"set-restrictions">>,User,Chat),
-  case mod_groups_inspector_sql:check_user(User,Server,Chat) of
-    exist when RightToBlock == true ->
+  case mod_groups_users:check_if_exist(Server,Chat,User) of
+    true when RightToBlock == true ->
       ejabberd_router:route(xmpp:make_iq_result(Iq, mod_groups_block:query(To)));
     _ ->
       ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed("You do not have permission to see the list of blocked users.",Lang)))
@@ -838,22 +838,22 @@ process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type
   GlobalIndexs = mod_groups_presence:get_global_index(Server),
   IsIndex = lists:member(User,GlobalIndexs),
   IsRestrictedToRead = mod_groups_restrictions:is_restricted(<<"read-messages">>,User,Chat),
-  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
+%%  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
   IsGlobalIndexed = mod_groups_chats:is_global_indexed(Server,Chat),
   SubElD = xmpp:decode(SubEl),
   IQDecoded = #iq{from = To, lang = Lang, to = From, meta = Meta, sub_els = [SubElD], type = Type, id = Id},
   Query = get_query(SubElD,Lang),
   With = proplists:is_defined(with, Query),
-  case mod_groups_inspector_sql:check_user(User,Server,Chat) of
-    exist when IsRestrictedToRead == false andalso With =/= false ->
+  case mod_groups_users:check_if_exist(Server,Chat,User) of
+    true when IsRestrictedToRead == false andalso With =/= false ->
       WithValue = jid:to_string(proplists:get_value(with, Query)),
       M1 = change_id_to_jid(SubElD,Server,Chat,WithValue),
       IQDecoded2 = #iq{from = To, lang = Lang, to = From, meta = Meta, sub_els = [M1], type = Type, id = Id},
       mod_mam:process_iq_v0_3(IQDecoded2);
-    exist when IsRestrictedToRead == false andalso With == false ->
+    true when IsRestrictedToRead == false andalso With == false ->
       mod_mam:process_iq_v0_3(IQDecoded);
-    exist when IsRestrictedToRead == false andalso IsAnon == yes andalso With == false ->
-      mod_mam:process_iq_v0_3(IQDecoded);
+%%    true when IsRestrictedToRead == false andalso IsAnon andalso With == false ->
+%%      mod_mam:process_iq_v0_3(IQDecoded);
     _ when IsIndex == true andalso IsGlobalIndexed == yes ->
       mod_mam:process_iq_v0_3(IQDecoded);
     _ ->

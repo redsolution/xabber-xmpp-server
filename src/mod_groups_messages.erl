@@ -117,13 +117,13 @@ message_hook(#message{to =To, from = From} = Pkt) ->
       ElsSer = [#xabbergroupchat_x{no_permission = <<>>, xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}],
       MessageNew = #message{from = To, to = From, id = randoms:get_string(),
         type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
-      UserID = mod_groups_inspector:get_user_id(Server,User,Chat),
+      UserID = mod_groups_users:get_user_id(Server,User,Chat),
       ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
       send_message_no_permission_to_write(UserID,MessageNew);
     blocked ->
       Text = <<"You are blocked in this chat">>,
       BodySer = [#text{lang = <<>>,data = Text}],
-      UserID = mod_groups_inspector:get_user_id(Server,User,Chat),
+      UserID = mod_groups_users:get_user_id(Server,User,Chat),
       UserJID = jid:from_string(User),
       UserCard = #xabbergroupchat_user_card{id = UserID, jid = UserJID},
       ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = [UserCard]}],
@@ -140,7 +140,7 @@ message_hook(#message{to =To, from = From} = Pkt) ->
       ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}],
       MessageNew = #message{from = To, to = From, id = randoms:get_string(),
         type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
-      UserID = mod_groups_inspector:get_user_id(Server,User,Chat),
+      UserID = mod_groups_users:get_user_id(Server,User,Chat),
       ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
       send_message_no_permission_to_write(UserID,MessageNew);
     _ ->
@@ -151,8 +151,8 @@ message_hook(#message{to =To, from = From} = Pkt) ->
 check_permission_write(User,Chat) ->
   ChatJID = jid:from_string(Chat),
   Server = ChatJID#jid.lserver,
-  case mod_groups_inspector_sql:check_user(User,Server,Chat) of
-    exist ->
+  case mod_groups_users:check_if_exist(Server,Chat,User) of
+    true ->
       case mod_groups_restrictions:is_restricted(<<"send-messages">>,User,Chat) of
         true -> restricted;
         _ -> allowed

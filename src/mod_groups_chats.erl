@@ -39,7 +39,7 @@
 
 -export([check_creator/4, check_user/4, check_chat/4,
   create_peer_to_peer/4, send_invite/4, check_if_users_invited/4,
-  check_if_peer_to_peer_exist/4, groupchat_exist/2]).
+  check_if_peer_to_peer_exist/4, groupchat_exist/2, create_groupchat/13]).
 
 -export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5,
   change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5,
@@ -172,7 +172,7 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
         "owner=%(Creator)s"])) of
     {updated,_N} ->
       groups_sm:activate(Server,LocalPart),
-      mod_groups_inspector:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
+      mod_groups_users:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
       Expires = <<"0">>,
       IssuedBy = <<"server">>,
       Permissions = get_permissions(Server),
@@ -341,29 +341,24 @@ check_if_users_invited(Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID})
 create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
   Localpart = list_to_binary(string:to_lower(binary_to_list(create_localpart()))),
   OldChat = jid:to_string(jid:remove_resource(ChatJID)),
-  UserExist = ejabberd_auth:user_exists(Localpart,LServer),
-  case mod_groups_inspector_sql:check_jid(Localpart,LServer) of
-    {selected,[]} when UserExist == false ->
-      Chat = jid:to_string(jid:make(Localpart,LServer)),
-      User1Nick = mod_groups_users:get_nick_in_chat(LServer,Creator,OldChat),
-      User2Nick = mod_groups_users:get_nick_in_chat(LServer,User,OldChat),
-      ChatName = <<User1Nick/binary," and ",User2Nick/binary, " chat">>,
-      Desc = <<"Private chat">>,
-      create_groupchat(LServer,Localpart,Creator,ChatName,Chat,
-        <<"incognito">>,<<"none">>,<<"member-only">>,Desc,<<"0">>,<<"">>,<<"">>,OldChat),
-      groups_sm:activate(LServer,Localpart),
-      {AvatarID1,AvatarType1} = add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
-      {AvatarID2,AvatarType2} = add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
-      Expires = <<"0">>,
-      IssuedBy = <<"server">>,
-      Rule = <<"send-invitations">>,
-      mod_groups_restrictions:insert_rule(LServer,Chat,User,Rule,Expires,IssuedBy),
-      mod_groups_restrictions:insert_rule(LServer,Chat,Creator,Rule,Expires,IssuedBy),
-      mod_groups_vcard:create_p2p_avatar(LServer,Chat,AvatarID1,AvatarType1,AvatarID2,AvatarType2),
-      {User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, ChatJID};
-    _ ->
-      {stop, not_ok}
-  end.
+  Chat = jid:to_string(jid:make(Localpart,LServer)),
+  User1Nick = mod_groups_users:get_nick_in_chat(LServer,Creator,OldChat),
+  User2Nick = mod_groups_users:get_nick_in_chat(LServer,User,OldChat),
+  ChatName = <<User1Nick/binary," and ",User2Nick/binary, " chat">>,
+  Desc = <<"Private chat">>,
+  create_groupchat(LServer,Localpart,Creator,ChatName,Chat,
+    <<"incognito">>,<<"none">>,<<"member-only">>,Desc,<<"0">>,<<"">>,<<"">>,OldChat),
+  groups_sm:activate(LServer,Localpart),
+  Info1 = add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
+  Info2 = add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
+  %%  Info = {AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge}
+  Expires = <<"0">>,
+  IssuedBy = <<"server">>,
+  Rule = <<"send-invitations">>,
+  mod_groups_restrictions:insert_rule(LServer,Chat,User,Rule,Expires,IssuedBy),
+  mod_groups_restrictions:insert_rule(LServer,Chat,Creator,Rule,Expires,IssuedBy),
+  mod_groups_vcard:create_p2p_avatar(LServer,Chat,element(3,Info1),element(3,Info2)),
+  {User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, ChatJID}.
 
 send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJID}, LServer, _Creator, _X) ->
   Anonymous = <<"incognito">>,
@@ -450,8 +445,8 @@ delete_chat(_Acc,{LServer,User,Chat,_UserCard,_Lang})->
 
 is_anonim(LServer,Chat) ->
   case get_type_and_parent(LServer, Chat) of
-    {ok, <<"incognito">>, _} -> yes;
-    _ -> no
+    {ok, <<"incognito">>, _} -> true;
+    _ -> false
   end.
 
 get_type_and_parent(LServer,Chat) ->
@@ -583,10 +578,10 @@ get_p2p_chat(LServer,ParentChat,User1,User2) ->
 %%  end.
 
 add_user_to_peer_to_peer_chat(LServer, User, NewChat,OldChat) ->
-  {AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge} =
-    mod_groups_users:get_user_info_for_peer_to_peer(LServer,User,OldChat),
-  mod_groups_users:add_user_to_peer_to_peer_chat(LServer,User,NewChat,AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge),
-  {AvatarID,AvatarType}.
+%%  Info = {AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge}
+  Info = mod_groups_users:get_user_info_for_peer_to_peer(LServer,User,OldChat),
+  mod_groups_users:add_user_to_peer_to_peer_chat(LServer,User,NewChat, Info),
+  Info.
 
 delete(Chat) ->
   ChatJID = jid:from_string(Chat),

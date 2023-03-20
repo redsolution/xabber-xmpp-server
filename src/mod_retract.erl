@@ -432,10 +432,14 @@ process_iq(#iq{from = From,to = To, type = set,
       LUser = To#jid.luser,
       PeerString = get_bare_peer(LServer,LUser,StanzaID),
       PeerJID = jid:from_string(PeerString),
-      case PeerJID#jid.lserver of
+      {PUser, PServer, _} = jid:tolower(PeerJID),
+      case PServer of
+        LServer when LUser == PUser ->
+          %% replace saved(message to yourself) message
+          replace_saved_msg(LUser,LServer,StanzaID,Message,IQ);
         LServer ->
           Type = message_type(LServer,StanzaID),
-          start_local_replace(LUser,PeerJID#jid.luser,LServer,StanzaID,Message,IQ, Type);
+          start_local_replace(LUser,PUser,LServer,StanzaID,Message,IQ, Type);
         _ ->
           IQS = xmpp:set_from_to(IQ,To,PeerJID),
           Proc = gen_mod:get_module_proc(LServer, ?MODULE),
@@ -489,6 +493,19 @@ start_local_replace(User1,User2,LServer,StanzaID,Message,IQ,Type) ->
           xmpp:make_error(IQ, xmpp:err_not_allowed())
       end
   end.
+
+replace_saved_msg(LUser, LServer, StanzaID, Message, IQ) ->
+  Version = get_version(LServer,LUser,<<>>) + 1,
+  Replaced = #replaced{stamp = erlang:timestamp()},
+  NewMessage = Message#xabber_replace_message{replaced = Replaced},
+  RetractAsk = #xabber_replace{
+    xabber_replace_message = NewMessage,
+    type = <<>>,
+    xmlns = ?NS_XABBER_REWRITE_NOTIFY,
+    conversation = jid:make(LUser, LServer),
+    version = Version,
+    id = StanzaID},
+  start_rewrite_message(LUser, LServer, StanzaID, IQ, RetractAsk, Version).
 
 start_local_retract(User1,User2,LServer,StanzaID,IQ, Type) ->
   User1JID = jid:make(User1,LServer),

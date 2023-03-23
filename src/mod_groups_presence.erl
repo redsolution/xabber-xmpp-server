@@ -121,16 +121,15 @@ groupchat_changed(LServer, Chat, _User, ChatProperties, Status) ->
   Users = mod_groups_users:user_list_to_send(LServer,Chat),
   case Status of
     <<"inactive">> ->
-      maybe_send_to_index(LServer, Chat, ChatProperties),
       Ss = mod_groups_present_mnesia:select_sessions('_', ChatJID),
       lists:foreach(fun(Session) ->
         mod_groups_present_mnesia:delete_session(Session) end, Ss),
       send_presence(form_presence_unavailable(Chat),Users,FromChat);
     _ ->
       {HumanStatus, Show} = mod_groups_chats:define_human_status_and_show(LServer, Chat, Status),
-      maybe_send_to_index(LServer, Chat, ChatProperties),
       send_presence(form_presence(Chat,Show,HumanStatus),Users,FromChat)
-  end.
+  end,
+  maybe_send_to_index(LServer, Chat, ChatProperties).
 
 maybe_send_to_index(LServer, Chat, ChatProperties) ->
   IsIndexChanged = proplists:get_value(global_indexing_changed, ChatProperties),
@@ -485,24 +484,21 @@ get_global_index(Server) ->
 send_message_to_index(ChatJID, Message) ->
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  IsGlobalIndexed = mod_groups_chats:is_global_indexed(Server,Chat),
-  case IsGlobalIndexed of
-    yes ->
-      GlobalIndexs = get_global_index(Server),
+  case mod_groups_chats:is_global_indexed(Server,Chat) of
+    true ->
+      GlobalIndexes = get_global_index(Server),
       lists:foreach(fun(Index) ->
         To = jid:from_string(Index),
         MessageDecoded = xmpp:decode(Message),
         M = xmpp:set_from_to(MessageDecoded,ChatJID,To),
-        ejabberd_router:route(M) end, GlobalIndexs
-      );
+        ejabberd_router:route(M) end, GlobalIndexes);
     _ ->
       ok
   end.
 
 send_info_to_index(Server,Chat) ->
-  IsGlobalIndexed = mod_groups_chats:is_global_indexed(Server,Chat),
-  case IsGlobalIndexed of
-    yes ->
+  case mod_groups_chats:is_global_indexed(Server,Chat) of
+    true ->
       send_presence_to_index(Server, Chat);
     _ ->
       ok

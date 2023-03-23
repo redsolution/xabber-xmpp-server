@@ -30,20 +30,23 @@
 -export([
   get_vcard/0,
   give_vcard/2,
-  gen_vcard/2,
-  iq_vcard/3,
   handle/1,
-  give_client_vesrion/0,
   iq_last/0,
   handle_pubsub/1,
   handle_request/1,
   change_nick_in_vcard/3,
-  get_image_type/2,
-  update_metadata/6,
   update_parse_avatar_option/4,
-  get_photo_meta/3, get_photo_data/5, get_avatar_type/4, get_all_image_metadata/2, check_old_meta/2,
-  make_chat_notification_message/3, get_pubsub_meta/0, get_pubsub_data/0, handle_pubsub/4, handle_pubsub/3, get_image_id/3,
-  get_vcard/2, get_payload_from_pubsub/3, update_avatar/7, get_hash/1, create_p2p_avatar/4,
+  get_photo_meta/3,
+  get_all_image_metadata/2,
+  maybe_delete_avatar_file/2,
+  make_chat_notification_message/3,
+  get_pubsub_meta/0,
+  handle_avatar_data/4,
+  handle_avatar_meta/3,
+  get_image_id/3,
+  get_vcard/2,
+  update_avatar/7,
+  create_p2p_avatar/4,
   handle_iq/1
 ]).
 -export([publish_avatar/3, make_http_request/6, store_user_avatar_file/3]).
@@ -93,7 +96,6 @@ handle_decoded_request(Iq) ->
   Server = To#jid.lserver,
   UserJid = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
-  UserId = mod_groups_users:get_user_id(Server,UserJid,Chat),
   NewIq = #iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = Decoded},
   Result = case Node of
     <<"urn:xmpp:avatar:data">> ->
@@ -102,37 +104,52 @@ handle_decoded_request(Iq) ->
       mod_pubsub:iq_sm(NewIq);
     <<"http://jabber.org/protocol/nick">> ->
       mod_pubsub:iq_sm(NewIq);
-    <<"urn:xmpp:avatar:data#">> ->
-      UserDataNode = <<"urn:xmpp:avatar:data#",UserId/binary>>,
-      #ps_items{node = Node, items = Item} = Items,
-      Item_ps = lists:keyfind(ps_item,1,Item),
-      #ps_item{id = Hash} = Item_ps,
-      Data = get_photo_data(Server,Hash,UserDataNode,UserJid,Chat),
-      check_data(Data,Iq);
-    <<"urn:xmpp:avatar:metadata#">> ->
-      UserDataNode = <<"urn:xmpp:avatar:metadata#",UserId/binary>>,
-      #ps_items{node = Node, items = Item} = Items,
-      NewItems = #ps_items{node = UserDataNode, items = Item},
-      NewPubsub = #pubsub{items = NewItems},
-      NewDecoded = [NewPubsub],
-      NewIqUser = #iq{from = To,to = To,id = Id,type = Type,lang = Lang,meta = Meta,sub_els = NewDecoded},
-      mod_pubsub:iq_sm(NewIqUser);
     _ ->
-      node_analyse(Iq,Server,Node,Items,UserJid,Chat)
+      handle_decoded_request(Node, UserJid, Chat, Server, Items, Iq)
   end,
   Result#iq{from = To, to = From}.
 
-node_analyse(Iq,Server,Node,Items,User,Chat) ->
-  N = binary:split(Node,<<"#">>),
-  case N of
-    [<<"urn:xmpp:avatar:metadata">>,_UserID] ->
-      xmpp:make_error(Iq,xmpp:err_item_not_found());
-    [<<"urn:xmpp:avatar:data">>,_UserID] ->
-      #ps_items{node = Node, items = Item} = Items,
-      Item_ps = lists:keyfind(ps_item,1,Item),
-      #ps_item{id = Hash} = Item_ps,
-      Data = get_photo_data(Server,Hash,Node,User,Chat),
+handle_decoded_request(<<"urn:xmpp:avatar:data#",UserId/binary>> = Node,
+    User, Chat, Server, Items, Iq) ->
+  TargetUser = case UserId of
+                 <<>> ->
+                   User;
+                 _ ->
+                   mod_groups_users:get_user_by_id(Server , Chat, UserId)
+            end,
+  #ps_items{items = PSItems} = Items,
+  case lists:keyfind(ps_item, 1, PSItems)of
+    #ps_item{id = Hash} ->
+      Data = get_avatar_data(Server, Hash, TargetUser, Node, Chat),
       check_data(Data,Iq);
+    _ ->
+      xmpp:make_error(Iq, xmpp:err_bad_request())
+  end;
+handle_decoded_request(<<"urn:xmpp:avatar:metadata#",UserId/binary>>,
+    User, Chat, Server, Items, Iq) ->
+  TargetUser = case UserId of
+              <<>> ->
+                User;
+              _ ->
+                mod_groups_users:get_user_by_id(Server , Chat, UserId)
+            end,
+  AvatarMeta = get_photo_meta(Server, TargetUser, Chat),
+  case AvatarMeta of
+    %% is not empty
+    #avatar_meta{info = [#avatar_info{id = Hash}]} ->
+      #avatar_meta{info = [#avatar_info{id = Hash}]} = AvatarMeta,
+      #ps_items{items = PSItems} = Items,
+      RItem = #ps_item{id = Hash, sub_els = [AvatarMeta]},
+      RItems = #ps_items{items = [RItem], node = <<"urn:xmpp:avatar:metadata#">>},
+      IqResult = xmpp:make_iq_result(Iq,#pubsub{items = RItems}),
+      case lists:keyfind(ps_item, 1, PSItems) of
+        false ->
+          IqResult;
+        #ps_item{id = Hash} ->
+          IqResult;
+        _ ->
+          xmpp:make_error(Iq,xmpp:err_item_not_found())
+      end;
     _ ->
       xmpp:make_error(Iq,xmpp:err_item_not_found())
   end.
@@ -345,30 +362,8 @@ change_nick_in_vcard(LUser,LServer,NewNick) ->
   IqSet = #iq{from = Jid, type = set, id = randoms:get_string(), sub_els = [NewVcard]},
   mod_vcard:vcard_iq_set(IqSet).
 
-iq_vcard(JidS,Nick,Avatar) ->
-  Jid = jid:from_string(JidS),
-  #iq{id = randoms:get_string(),type = set, sub_els = [gen_vcard(Nick,Avatar)],to = Jid, from = Jid}.
-
-gen_vcard(Nick,Avatar) ->
-  Photo = #vcard_photo{binval = Avatar,type = <<"image/png">>},
-  #vcard_temp{nickname = Nick,photo = Photo}.
-
 iq_last() ->
 #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,<<"jabber:iq:last">>},{<<"seconds">>,<<"0">>}]}.
-
-give_client_vesrion() ->
-  #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,<<"jabber:iq:version">>}],
-    children = [name(<<"XabberGroupchat">>),version(<<"0.9">>),system_os(<<"Gentoo">>)]
-    }.
-
-name(Name) ->
-  #xmlel{name = <<"name">>,children = [{xmlcdata,Name}]}.
-
-version(Version) ->
-  #xmlel{name = <<"version">>,children = [{xmlcdata,Version}]}.
-
-system_os(Os) ->
-  #xmlel{name = <<"os">>,children = [{xmlcdata,Os}]}.
 
 give_vcard(User,Server) ->
   Vcard = mod_vcard:get_vcard(User,Server),
@@ -397,11 +392,6 @@ get_vcard() ->
 get_pubsub_meta() ->
   #iq{type = get, id = randoms:get_string(),
     sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:metadata">>}}]
-  }.
-
-get_pubsub_data() ->
-  #iq{type = get, id = randoms:get_string(),
-    sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:data">>}}]
   }.
 
 get_pubsub_data(ID) ->
@@ -449,14 +439,14 @@ handle(#iq{from = From, to = To, sub_els = Els}) ->
       end
   end.
 
-handle_pubsub(ChatJID,UserJID,#avatar_meta{info = AvatarINFO}) ->
+handle_avatar_meta(ChatJID,UserJID,#avatar_meta{info = AvatarINFO}) ->
   LServer = ChatJID#jid.lserver,
   User = jid:to_string(jid:remove_resource(UserJID)),
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   case AvatarINFO of
     [] ->
       OldMeta = get_image_metadata(LServer, User, Chat),
-      check_old_meta(LServer, OldMeta);
+      maybe_delete_avatar_file(LServer, OldMeta);
     [#avatar_info{bytes = Size, id = ID, type = Type0, url = Url}] ->
       %% set default type
       Type = case Type0 of <<>> -> <<"image/png">>; _-> Type0 end,
@@ -468,7 +458,7 @@ handle_pubsub(ChatJID,UserJID,#avatar_meta{info = AvatarINFO}) ->
         _ ->
 %%          check_old_meta(LServer, OldMeta),
           update_id_in_chats(LServer,User,ID,Type,Size,<<>>),
-          check_old_meta(LServer, OldMeta),
+          maybe_delete_avatar_file(LServer, OldMeta),
           case Url of
             <<>> ->
               ejabberd_router:route(ChatJID,UserJID,get_pubsub_data(ID));
@@ -479,10 +469,10 @@ handle_pubsub(ChatJID,UserJID,#avatar_meta{info = AvatarINFO}) ->
     _ ->
       ok
   end;
-handle_pubsub(_F,_T,false) ->
+handle_avatar_meta(_F,_T,false) ->
   ok.
 
-handle_pubsub(ChatJID,UserJID,ID,#avatar_data{data = Data}) ->
+handle_avatar_data(ChatJID,UserJID,ID,#avatar_data{data = Data}) ->
   Server = ChatJID#jid.lserver,
   User = jid:to_string(jid:remove_resource(UserJID)),
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
@@ -493,10 +483,11 @@ handle_pubsub(ChatJID,UserJID,ID,#avatar_data{data = Data}) ->
     _ ->
       ok
   end;
-handle_pubsub(_C,_U,_I,false) ->
+handle_avatar_data(_C,_U,_I,false) ->
   ok.
 
 update_vcard(Server,User,D,_Chat) ->
+  ?INFO_MSG("VCARD2  ~p\n ~p",[User, D#vcard_temp.photo]),
   Status = mod_groups_sql:get_update_status(Server,User),
 %%  Photo = set_value(D#vcard_temp.photo),
   FN = set_value(D#vcard_temp.fn),
@@ -670,7 +661,7 @@ parse_and_send(_Server,Chat,{Payload,Nodeid},To) ->
   ejabberd_router:route(M).
 
 get_photo_meta(Server,User,Chat)->
-  Meta = get_image_metadata(Server, User, Chat),
+  Meta = get_image_metadata_f(Server, User, Chat),
   Result = case Meta of
     not_exist ->
       #avatar_meta{};
@@ -685,45 +676,32 @@ get_photo_meta(Server,User,Chat)->
   end,
   Result.
 
-get_photo_data(Server,Hash,UserNode,_User,Chat) ->
-  <<"urn:xmpp:avatar:data#", UserID/binary>> = UserNode,
-  TypeRaw = get_avatar_type(Server, Hash, UserID,Chat),
-  case TypeRaw of
-    not_exist ->
-      get_vcard_avatar(Server,Hash,UserID,UserNode,Chat);
-    not_filed ->
-      get_vcard_avatar(Server,Hash,UserID,UserNode,Chat);
+get_avatar_data(Server, Hash, User, Node, Chat) ->
+  case get_image_metadata(Server, User, Chat) of
+    [{Hash, _Size, _Type, AvaUrl}] ->
+      Path = get_docroot(Server),
+      Name = get_file_from_url(AvaUrl),
+      File = filename:join([Path, ?AVATARS_PATH, Name]),
+      get_avatar_data(File, Hash, Node);
     error ->
       error;
     _ ->
-      <<"image/", Type/binary>> = TypeRaw,
-      Path = get_docroot(Server),
-      Name = <<Hash/binary, ".", Type/binary >>,
-      File = filename:join([Path, ?AVATARS_PATH, Name]),
-      get_avatar_data(File,Hash,UserNode)
+      get_vcard_avatar(Server, Hash, User, Node, Chat)
   end.
 
-get_vcard_avatar(Server,Hash,UserID,UserNode,Chat) ->
-  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(username)s from groupchat_users
-  where chatgroup=%(Chat)s and id=%(UserID)s")) of
-    {selected, []} ->
-      not_exist;
-    {selected, [<<>>]} ->
-      not_filed;
-    {selected,[{Username}]} when not IsAnon ->
-      get_vcard_avatar_data(Server,Username,Hash,UserNode);
+get_vcard_avatar(Server, Hash, User, Node, Chat) ->
+  case mod_groups_chats:is_anonim(Server,Chat) of
+    false ->
+      get_vcard_avatar_data(Server, User, Hash,Node);
     _ ->
       error
   end.
 
-get_vcard_avatar_data(Server,Username,Hash,UserNode) ->
+get_vcard_avatar_data(Server, User, Hash, Node) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(image)s from groupchat_users_vcard
-  where jid=%(Username)s")) of
+  where jid=%(User)s")) of
     {selected, []} ->
       not_exist;
     {selected, [<<>>]} ->
@@ -731,7 +709,7 @@ get_vcard_avatar_data(Server,Username,Hash,UserNode) ->
     {selected,[{Name}]} ->
       Path = get_docroot(Server),
       File = filename:join([Path, ?AVATARS_PATH, Name]),
-      get_avatar_data(File,Hash,UserNode);
+      get_avatar_data(File, Hash, Node);
     _ ->
       error
   end.
@@ -764,36 +742,6 @@ set_value(Value) ->
       Value
   end.
 
-get_image_type(Server, Hash) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(file)s from groupchat_users_vcard
-  where image=%(Hash)s")) of
-    {selected, []} ->
-      not_exist;
-    {selected, [<<>>]} ->
-      not_filed;
-    {selected,[{Type}]} ->
-      Type;
-    _ ->
-      error
-  end.
-
-get_avatar_type(Server, Hash, UserID,Chat) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(avatar_type)s from groupchat_users
-  where avatar_id=%(Hash)s and chatgroup=%(Chat)s and id=%(UserID)s")) of
-    {selected, []} ->
-      not_exist;
-    {selected, [<<>>]} ->
-      not_filed;
-    {selected,[{Type}]} ->
-      Type;
-    _ ->
-      error
-  end.
-
 get_image_id(Server, User, Chat) ->
   case ejabberd_sql:sql_query(
     Server,
@@ -816,18 +764,24 @@ get_image_metadata(Server, User, Chat) ->
   where username=%(User)s and chatgroup = %(Chat)s")) of
     {selected, []} ->
       not_exist;
-    {selected, [<<>>]} ->
-      get_vcard_avatar(Server,Chat,User);
-    {selected, [{_AvaID,0,null,null}]} ->
-      get_vcard_avatar(Server,Chat,User);
-    {selected, [{_AvaID,_AvaSize,null,null}]} ->
-      get_vcard_avatar(Server,Chat,User);
-    {selected, [{_AvaID,_AvaSize,_AvaType,null}]} ->
-      get_vcard_avatar(Server,Chat,User);
-    {selected, [{_AvaID,0,_AvaType,_AvaUrl}]} ->
-      get_vcard_avatar(Server,Chat,User);
     {selected,Meta} ->
       Meta;
+    _ ->
+      error
+  end.
+
+get_image_metadata_f(Server, User, Chat) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(avatar_id)s,@(avatar_size)d,@(avatar_type)s,@(avatar_url)s "
+    " from groupchat_users where username=%(User)s and chatgroup = %(Chat)s")) of
+    {selected, []} ->
+      not_exist;
+    {selected, [{_AvaID ,Size, _Type, Url}] = Meta}
+      when Size > 0 andalso Url /= null ->
+      Meta;
+    {selected, [_Meta]} ->
+      get_vcard_avatar(Server,Chat,User);
     _ ->
       error
   end.
@@ -855,17 +809,23 @@ get_image_metadata_by_id(Server, UserID, Chat) ->
       error
   end.
 
-%% todo: refactoring
-get_vcard_avatar(Server,Chat,User) ->
-  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
+get_vcard_avatar(Server, Chat, User) ->
+  case mod_groups_chats:is_anonim(Server,Chat) of
+    false ->
+      do_get_vcard_avatar(Server, User);
+    _ -> error
+  end.
+
+do_get_vcard_avatar(Server, User) ->
+  ?INFO_MSG("META 3.2 ~p ",[User]),
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(image)s,@(hash)s,@(image_type)s from groupchat_users_vcard
   where jid=%(User)s")) of
     {selected,[{Image,Hash,ImageType}]} when Image =/= null andalso
-      Hash =/= null andalso ImageType =/= null andalso not IsAnon ->
-      Path = get_docroot(Server),
-      File = filename:join(Path, Image),
+      Hash =/= null andalso ImageType =/= null ->
+      DocRoot = get_docroot(Server),
+      File = filename:join([DocRoot, ?AVATARS_PATH, Image]),
       case file:read_file(File) of
         {ok,Binary} ->
           Size = byte_size(Binary),
@@ -884,18 +844,6 @@ get_all_image_metadata(Server, Chat) ->
     Server,
     ?SQL("select @(avatar_id)s,@(avatar_size)d,@(avatar_type)s,@(avatar_url)s from groupchat_users
   where chatgroup = %(Chat)s")) of
-    {selected, []} ->
-      not_exist;
-    {selected, [<<>>]} ->
-      not_filed;
-    {selected, [{_AvaID,0,null,null}]} ->
-      not_filed;
-    {selected, [{_AvaID,_AvaSize,null,null}]} ->
-      not_filed;
-    {selected, [{_AvaID,_AvaSize,_AvaType,null}]} ->
-      not_filed;
-    {selected, [{_AvaID,0,_AvaType,_AvaUrl}]} ->
-      not_filed;
     {selected,Meta} ->
       Meta;
     _ ->
@@ -910,15 +858,6 @@ update_avatar(Server, User, Chat, AvatarID, AvatarType, AvatarSize, AvatarUrl) -
     avatar_id = %(AvatarID)s,
     avatar_url = %(AvatarUrl)s
   where username = %(User)s and chatgroup = %(Chat)s ")).
-
-update_metadata(Server, User, AvatarID, AvatarType, AvatarSize, AvatarUrl) ->
-  ejabberd_sql:sql_query(
-    Server,
-    ?SQL("update groupchat_users set avatar_size = %(AvatarSize)d,
-    avatar_type = %(AvatarType)s,
-    avatar_url = %(AvatarUrl)s,
-    avatar_id = %(AvatarID)s
-  where username = %(User)s and parse_avatar = 'yes' ")).
 
 update_parse_avatar_option(Server,User,Chat,Value) ->
   ejabberd_sql:sql_query(
@@ -960,7 +899,7 @@ update_data_user_put(Server, UserID, Data, Hash, Chat) ->
     parse_avatar = 'no',
     avatar_url = %(_Url)s
   where id = %(UserID)s and chatgroup = %(Chat)s ")),
-  check_old_meta(Server, OldMeta).
+  maybe_delete_avatar_file(Server, OldMeta).
 
 set_update_status(Server,Jid,Status) ->
   case ?SQL_UPSERT(Server, "groupchat_users_vcard",
@@ -1080,41 +1019,32 @@ trim(String) ->
       <<"">>
   end.
 
-check_old_meta(_Server,false)->
-  ok;
-check_old_meta(_Server,not_exist)->
-  ok;
-check_old_meta(_Server,not_filed)->
-  ok;
-check_old_meta(_Server,error)->
-  ok;
-check_old_meta(Server,Meta)->
+maybe_delete_avatar_file(Server, Meta) when is_list(Meta)->
   lists:foreach(fun(MetaEl) ->
-  {Hash,_AvatarSize,AvatarType,_AvatarUrl} = MetaEl,
-    case Hash of
-      null ->
-        ok;
-      _ when AvatarType =/= null ->
-        check_and_delete(Server, Hash, AvatarType);
-      _ ->
-        ok
-    end end, Meta).
+  {Hash, _Size, _Type, Url} = MetaEl,
+    if
+      Hash =/= null  andalso Url =/= null ->
+        check_and_delete_file(Server, Hash, Url);
+      true -> ok
+    end
+                end , Meta);
+maybe_delete_avatar_file(_Server, _Meta)->
+  ok.
 
-check_and_delete(Server, Hash, AvatarType) ->
+check_and_delete_file(Server, Hash, Url) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(avatar_id)s from groupchat_users
     where avatar_id = %(Hash)s")) of
     {selected,[]} ->
-      delete_file(Server, Hash, AvatarType);
+      delete_file(Server, Url);
     _ ->
-      not_delete
+      ok
   end.
 
-delete_file(Server, Hash, AvatarType) ->
+delete_file(Server,  Url) ->
   Path = get_docroot(Server),
-  <<"image/",Type/binary>> = AvatarType,
-  Name = <<Hash/binary, ".", Type/binary >>,
+  Name = get_file_from_url(Url),
   File = filename:join([Path, ?AVATARS_PATH, Name]),
   file:delete(File).
 
@@ -1131,7 +1061,6 @@ get_vcard(LUser,Server) ->
                   _ ->
                     <<"Private chat">>
                 end,
-  Avatar = get_avatar_from_pubsub(Chat,Server),
   [xmpp:encode(#vcard_temp{
     jabberid = Chat,
     nickname = Name,
@@ -1141,7 +1070,6 @@ get_vcard(LUser,Server) ->
     membership = Membership,
     parent = Parent,
     status = HumanStatus,
-    photo = Avatar,
     members = Members})].
 
 
@@ -1149,44 +1077,6 @@ define_parent_chat(<<"0">>) ->
   undefined;
 define_parent_chat(ParentChat) ->
   ParentChat.
-
-get_payload_from_pubsub(Chat,LServer,Node) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(payload)s from pubsub_item where nodeid = (select nodeid from pubsub_node where host = %(Chat)s and node = %(Node)s)")) of
-    {selected,[{Payload}]} ->
-      Payload;
-    _ ->
-      undefined
-  end.
-
-get_avatar_from_pubsub(Chat,LServer) ->
-  Data = get_payload_from_pubsub(Chat,LServer,<<"urn:xmpp:avatar:data">>),
-  case Data of
-    undefined ->
-      undefined;
-    _ ->
-      case xmpp:decode(fxml_stream:parse_element(Data)) of
-        #avatar_data{data = Binary} ->
-          get_type_and_create_photo_element(Chat,LServer,Binary);
-        _ ->
-          undefined
-      end
-  end.
-
-get_type_and_create_photo_element(Chat,LServer,Binary) ->
-  MetaData = get_payload_from_pubsub(Chat,LServer,<<"urn:xmpp:avatar:metadata">>),
-  case MetaData of
-    undefined ->
-      undefined;
-    _ ->
-      case xmpp:decode(fxml_stream:parse_element(MetaData)) of
-        #avatar_meta{info = [#avatar_info{type = Type}]} ->
-          #vcard_photo{binval = Binary, type = Type};
-        _ ->
-          undefined
-      end
-  end.
 
 handle_vcard_photo(_Server, undefined) ->
   ok;
@@ -1249,8 +1139,8 @@ get_root_url(Server) ->
   misc:expand_keyword(<<"@HOST@">>, str:strip(UrlOpt, right, $/), Server).
 
 get_file_from_url(Url) ->
-  [Url1, _] = binary:split(Url,<<$?>>),
-  Url2 = binary:split(Url1, <<$/>>,[global]),
+  Url1 = binary:split(Url,<<$?>>),
+  Url2 = binary:split(lists:nth(1,Url1), <<$/>>,[global]),
   lists:last(Url2).
 
 

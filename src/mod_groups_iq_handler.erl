@@ -194,10 +194,6 @@ make_action(#iq{to = To, type = set, sub_els = [#xmlel{name = <<"block">>,
       ejabberd_router:route(xmpp:make_iq_result(Iq))
   end;
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
-  attrs = [{<<"xmlns">>,<<"jabber:iq:version">>}]}]} = Iq) ->
-  Result = mod_groups_vcard:give_client_vesrion(),
-  ejabberd_router:route(xmpp:make_iq_result(Iq,Result));
-make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"jabber:iq:last">>}]}]} = Iq) ->
   Result = mod_groups_vcard:iq_last(),
   ejabberd_router:route(xmpp:make_iq_result(Iq,Result));
@@ -361,21 +357,25 @@ make_action(#iq{from = From, to = To, type = get,
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;
-make_action(#iq{from = UserJID, to = ChatJID, type = result, sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:metadata">>, items = [#ps_item{id = _Hash, sub_els = Subs}]}}]}) ->
+make_action(#iq{from = UserJID, to = ChatJID, type = result,
+  sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:metadata">>,
+    items = [#ps_item{id = _Hash, sub_els = Subs}]}}]}) ->
   ?DEBUG("Catch pubsub meta ~p",[Subs]),
   try
     MD = lists:map(fun(E) -> xmpp:decode(E) end, Subs),
     Meta = lists:keyfind(avatar_meta,1,MD),
-    mod_groups_vcard:handle_pubsub(ChatJID,UserJID,Meta)
+    mod_groups_vcard:handle_avatar_meta(ChatJID,UserJID,Meta)
   catch _:_ ->
     ok
   end;
-make_action(#iq{from = UserJID, to = ChatJID, type = result, sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:data">>, items = [#ps_item{id = Hash, sub_els = Subs}]}}]}) ->
+make_action(#iq{from = UserJID, to = ChatJID, type = result,
+  sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:data">>,
+    items = [#ps_item{id = Hash, sub_els = Subs}]}}]}) ->
   ?DEBUG("Catch pubsub data result1 iq ~p",[Hash]),
   try
     MD = lists:map(fun(E) -> xmpp:decode(E) end, Subs),
     Data = lists:keyfind(avatar_data,1,MD),
-    mod_groups_vcard:handle_pubsub(ChatJID,UserJID,Hash,Data)
+    mod_groups_vcard:handle_avatar_data(ChatJID,UserJID,Hash,Data)
   catch _:_ ->
     ok
   end;
@@ -835,11 +835,7 @@ process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
-  GlobalIndexs = mod_groups_presence:get_global_index(Server),
-  IsIndex = lists:member(User,GlobalIndexs),
   IsRestrictedToRead = mod_groups_restrictions:is_restricted(<<"read-messages">>,User,Chat),
-%%  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
-  IsGlobalIndexed = mod_groups_chats:is_global_indexed(Server,Chat),
   SubElD = xmpp:decode(SubEl),
   IQDecoded = #iq{from = To, lang = Lang, to = From, meta = Meta, sub_els = [SubElD], type = Type, id = Id},
   Query = get_query(SubElD,Lang),
@@ -852,13 +848,20 @@ process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type
       mod_mam:process_iq_v0_3(IQDecoded2);
     true when IsRestrictedToRead == false andalso With == false ->
       mod_mam:process_iq_v0_3(IQDecoded);
-%%    true when IsRestrictedToRead == false andalso IsAnon andalso With == false ->
-%%      mod_mam:process_iq_v0_3(IQDecoded);
-    _ when IsIndex == true andalso IsGlobalIndexed == yes ->
-      mod_mam:process_iq_v0_3(IQDecoded);
     _ ->
-      ?DEBUG("not allowed",[]),
-      xmpp:make_error(Iq, xmpp:err_not_allowed())
+      GlobalIndexes = mod_groups_presence:get_global_index(Server),
+      IsIndexed =  case lists:member(User,GlobalIndexes) of
+                   true ->
+                     mod_groups_chats:is_global_indexed(Server,Chat);
+                   _ -> false
+                 end,
+      if
+        IsIndexed ->
+          mod_mam:process_iq_v0_3(IQDecoded);
+        true ->
+          ?DEBUG("not allowed",[]),
+          xmpp:make_error(Iq, xmpp:err_not_allowed())
+      end
   end.
 
 get_query(SubEl,Lang)->

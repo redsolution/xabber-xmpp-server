@@ -195,6 +195,7 @@ process_messages() ->
   end.
 
 %% Internal functions
+%% todo: check this
 do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headline} = Message) ->
   Event = lists:keyfind(ps_event,1,Sub),
   FromChat = jid:replace_resource(From,<<"Group">>),
@@ -215,7 +216,7 @@ do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headlin
           {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
-          [AvatarI|_RestInfo] = AvatarInfo,
+          AvatarI = hd(AvatarInfo),
           IdAvatar = AvatarI#avatar_info.id,
           {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat),
@@ -249,13 +250,14 @@ do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline}
       [El|_R] = Decoded,
       case El of
         {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
-          [AvatarI|_RestInfo] = AvatarInfo,
+          AvatarI = hd(AvatarInfo),
           IdAvatar = AvatarI#avatar_info.id,
           OldID = mod_groups_vcard:get_image_id(LServer,User, Chat),
           case OldID of
             IdAvatar ->
               ok;
             _ ->
+              %% todo: why can't we use metadata from this message?
               ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From), mod_groups_vcard:get_pubsub_meta())
           end;
         _ ->

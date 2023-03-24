@@ -38,7 +38,7 @@
   update_parse_avatar_option/4,
   get_photo_meta/3,
   get_all_image_metadata/2,
-  maybe_delete_avatar_file/2,
+  maybe_delete_file/2,
   make_chat_notification_message/3,
   get_pubsub_meta/0,
   handle_avatar_data/4,
@@ -355,7 +355,7 @@ notificate_all(ChatJID,Message) ->
   mod_groups_messages:send_message(Message,AllUsers,FromChat).
 
 change_nick_in_vcard(LUser,LServer,NewNick) ->
-  [OldVcard|_R] = mod_vcard:get_vcard(LUser,LServer),
+  OldVcard = hd(mod_vcard:get_vcard(LUser,LServer)),
   #vcard_temp{photo = OldPhoto} = xmpp:decode(OldVcard),
   NewVcard = #vcard_temp{photo = OldPhoto, nickname = NewNick},
   Jid = jid:make(LUser,LServer,<<>>),
@@ -446,7 +446,8 @@ handle_avatar_meta(ChatJID,UserJID,#avatar_meta{info = AvatarINFO}) ->
   case AvatarINFO of
     [] ->
       OldMeta = get_image_metadata(LServer, User, Chat),
-      maybe_delete_avatar_file(LServer, OldMeta);
+      update_id_in_chats(LServer, User, <<>>, <<>>, 0, <<>>),
+      maybe_delete_file(LServer, OldMeta);
     [#avatar_info{bytes = Size, id = ID, type = Type0, url = Url}] ->
       %% set default type
       Type = case Type0 of <<>> -> <<"image/png">>; _-> Type0 end,
@@ -458,7 +459,7 @@ handle_avatar_meta(ChatJID,UserJID,#avatar_meta{info = AvatarINFO}) ->
         _ ->
 %%          check_old_meta(LServer, OldMeta),
           update_id_in_chats(LServer,User,ID,Type,Size,<<>>),
-          maybe_delete_avatar_file(LServer, OldMeta),
+          maybe_delete_file(LServer, OldMeta),
           case Url of
             <<>> ->
               ejabberd_router:route(ChatJID,UserJID,get_pubsub_data(ID));
@@ -487,7 +488,6 @@ handle_avatar_data(_C,_U,_I,false) ->
   ok.
 
 update_vcard(Server,User,D,_Chat) ->
-  ?INFO_MSG("VCARD2  ~p\n ~p",[User, D#vcard_temp.photo]),
   Status = mod_groups_sql:get_update_status(Server,User),
 %%  Photo = set_value(D#vcard_temp.photo),
   FN = set_value(D#vcard_temp.fn),
@@ -817,7 +817,6 @@ get_vcard_avatar(Server, Chat, User) ->
   end.
 
 do_get_vcard_avatar(Server, User) ->
-  ?INFO_MSG("META 3.2 ~p ",[User]),
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(image)s,@(hash)s,@(image_type)s from groupchat_users_vcard
@@ -899,7 +898,7 @@ update_data_user_put(Server, UserID, Data, Hash, Chat) ->
     parse_avatar = 'no',
     avatar_url = %(_Url)s
   where id = %(UserID)s and chatgroup = %(Chat)s ")),
-  maybe_delete_avatar_file(Server, OldMeta).
+  maybe_delete_file(Server, OldMeta).
 
 set_update_status(Server,Jid,Status) ->
   case ?SQL_UPSERT(Server, "groupchat_users_vcard",
@@ -1019,34 +1018,34 @@ trim(String) ->
       <<"">>
   end.
 
-maybe_delete_avatar_file(Server, Meta) when is_list(Meta)->
+maybe_delete_file(Server, Meta) when is_list(Meta)->
   lists:foreach(fun(MetaEl) ->
-  {Hash, _Size, _Type, Url} = MetaEl,
+    {_Hash, _Size, _Type, Url} = MetaEl,
     if
-      Hash =/= null  andalso Url =/= null ->
-        check_and_delete_file(Server, Hash, Url);
+      Url =/= null ->
+        check_and_delete_file(Server, Url);
       true -> ok
     end
                 end , Meta);
-maybe_delete_avatar_file(_Server, _Meta)->
-  ok.
+maybe_delete_file(_Server, _Meta) -> ok.
 
-check_and_delete_file(Server, Hash, Url) ->
+check_and_delete_file(Server, Url) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(avatar_id)s from groupchat_users
-    where avatar_id = %(Hash)s")) of
+    where avatar_url = %(Url)s")) of
     {selected,[]} ->
       delete_file(Server, Url);
     _ ->
       ok
   end.
 
-delete_file(Server,  Url) ->
+delete_file(Server,  Url) when is_binary(Url) andalso size(Url) > 0 ->
   Path = get_docroot(Server),
   Name = get_file_from_url(Url),
   File = filename:join([Path, ?AVATARS_PATH, Name]),
-  file:delete(File).
+  file:delete(File);
+delete_file(_Server,  _Url) -> ok.
 
 get_vcard(LUser,Server) ->
   Chat = jid:to_string(jid:make(LUser,Server)),
@@ -1139,8 +1138,8 @@ get_root_url(Server) ->
   misc:expand_keyword(<<"@HOST@">>, str:strip(UrlOpt, right, $/), Server).
 
 get_file_from_url(Url) ->
-  Url1 = binary:split(Url,<<$?>>),
-  Url2 = binary:split(lists:nth(1,Url1), <<$/>>,[global]),
+  Url1 = hd(binary:split(Url,<<$?>>)),
+  Url2 = binary:split(Url1, <<$/>>,[global]),
   lists:last(Url2).
 
 

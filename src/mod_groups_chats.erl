@@ -587,7 +587,7 @@ delete(Chat) ->
   ChatJID = jid:from_string(Chat),
   {Localpart,LServer,_} = jid:tolower(ChatJID),
   AllUserMeta = mod_groups_vcard:get_all_image_metadata(LServer,Chat),
-  mod_groups_vcard:maybe_delete_avatar_file(LServer,AllUserMeta),
+  mod_groups_vcard:maybe_delete_file(LServer,AllUserMeta),
   delete_groupchat(LServer, Chat),
   delete_depended_chats(Chat, LServer),
   groups_sm:deactivate(LServer,Localpart),

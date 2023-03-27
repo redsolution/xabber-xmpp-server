@@ -35,7 +35,6 @@
 -export([
          form_presence/2, form_presence/1,
          form_presence_unavailable/0,
-         form_presence_vcard_update/1,
          form_unsubscribe_presence/0,
          form_unsubscribed_presence/0,
          process_presence/1,
@@ -665,22 +664,6 @@ info_about_chat(ChatJid, {Name, Anonymous, Message, ParentChat, Status}) ->
         #xabbergroupchat_privacy{cdata = Anonymous},
         #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)}
       ]}, HumanStatus, Show}.
-
-
-form_presence_vcard_update(Hash) ->
-  #xmlel{
-     name = <<"presence">>,
-     attrs = [
-              {<<"type">>, <<"available">>},
-              {<<"xmlns">>, <<"jabber:client">>}
-              ],
-     children = [#xmlel{
-                    name = <<"x">>,
-                    attrs = [{<<"xmlns">>, <<"vcard-temp:x:update">>}],
-                    children = [#xmlel{name = <<"photo">>, children = [{xmlcdata,Hash}]}]
-                       }
-                ] 
-        }.
 
 form_unsubscribe_presence() ->
       #xmlel{

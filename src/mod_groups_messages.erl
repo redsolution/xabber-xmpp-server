@@ -213,21 +213,19 @@ do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headlin
       case El of
         {nick,Nickname} when Node == <<"http://jabber.org/protocol/nick">> ->
           mod_groups_vcard:change_nick_in_vcard(From#jid.luser,From#jid.lserver,Nickname),
-          {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
+          AllUsers = mod_groups_users:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
           AvatarI = hd(AvatarInfo),
           IdAvatar = AvatarI#avatar_info.id,
-          {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
+          AllUsers = mod_groups_users:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat),
-          mod_groups_inspector:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar),
-          Presence = mod_groups_presence:form_presence_vcard_update(IdAvatar),
-          mod_groups_presence:send_presence(Presence,AllUsers,FromChat);
+          mod_groups_inspector:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar);
         {avatar_meta,_AvatarInfo,_Smth} ->
-          {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
+          AllUsers = mod_groups_users:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         {nick,_Nickname} ->
-          {selected, AllUsers} = mod_groups_sql:user_list_to_send(From#jid.lserver,Chat),
+          AllUsers = mod_groups_users:user_list_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         _ ->
           ok

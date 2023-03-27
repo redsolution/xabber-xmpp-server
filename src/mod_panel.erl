@@ -150,36 +150,36 @@ process(Path, #request{method = Method, data = Data, q = Q, headers = Headers} =
     {error, _} -> unauthorized_response();
     cronjob ->
       json_format(
-        handle_reuest(Method, Path, Req, {false,<<"cronjob">>}, <<>>, <<>>));
+        handle_request(Method, Path, Req, {false,<<"cronjob">>}, <<>>, <<>>));
     Auth when is_map(Auth) ->
       {User, Server, <<"">>} = maps:get(usr, Auth),
       Result = case get_permissions(User, Server) of
                  {error, notfound} ->
                    case Path of
                      [<<"issue_token">>] ->
-                       handle_reuest(Method, Path, Req, {}, User, Server);
+                       handle_request(Method, Path, Req, {}, User, Server);
                      _ ->
                        forbidden_response()
                    end;
                  {error, _} ->
                    {500, <<>>};
                  Perms ->
-                   handle_reuest(Method, Path, Req, Perms, User, Server)
+                   handle_request(Method, Path, Req, Perms, User, Server)
       end,
       json_format(Result);
     _ ->
       unauthorized_response()
   end.
 
-handle_reuest('POST',[<<"issue_token">>], _Req, _Perms, User, Server) ->
+handle_request('POST',[<<"issue_token">>], _Req, _Perms, User, Server) ->
   issue_token(User, Server, ?TOKEN_TTL);
-handle_reuest('POST',[<<"revoke_token">>], #request{data = Data}, _Perms, User, Server) ->
+handle_request('POST',[<<"revoke_token">>], #request{data = Data}, _Perms, User, Server) ->
   case extract_args(Data, [token]) of
     error -> badrequest_response();
     Args ->
       revoke_token(User, Server, proplists:get_value(token, Args))
   end;
-handle_reuest('GET',[<<"registration">>,<<"keys">>], #request{q = Q}, {true, _}, _User, _Server) ->
+handle_request('GET',[<<"registration">>,<<"keys">>], #request{q = Q}, {true, _}, _User, _Server) ->
   Args = check_args(Q, [host]),
   case check_args(Q, [host]) of
     error ->
@@ -187,107 +187,107 @@ handle_reuest('GET',[<<"registration">>,<<"keys">>], #request{q = Q}, {true, _},
     Args ->
       get_reg_keys(Args)
   end;
-handle_reuest('POST',[<<"registration">>,<<"keys">>], #request{data = Data}, {true, _}, _User, _Server) ->
+handle_request('POST',[<<"registration">>,<<"keys">>], #request{data = Data}, {true, _}, _User, _Server) ->
   case extract_args(Data, [host, expire, description]) of
     error -> badrequest_response();
     Args ->
       make_reg_key(Args)
   end;
-handle_reuest('PUT',[<<"registration">>,<<"keys">>,Key], #request{data = Data}, {true, _}, _User, _Server) ->
+handle_request('PUT',[<<"registration">>,<<"keys">>,Key], #request{data = Data}, {true, _}, _User, _Server) ->
   case extract_args(Data, [host, expire, description]) of
     error -> badrequest_response();
     Args ->
       update_reg_key(Key,Args)
   end;
-handle_reuest('DELETE',[<<"registration">>,<<"keys">>,Key], #request{data = Data}, {true, _}, _User, _Server) ->
+handle_request('DELETE',[<<"registration">>,<<"keys">>,Key], #request{data = Data}, {true, _}, _User, _Server) ->
   case extract_args(Data, [host]) of
     error -> badrequest_response();
     Args ->
       remove_reg_key(Key, Args)
   end;
-handle_reuest('POST',[<<"permissions">>], #request{data = Data}, {true, _}, _User, _Server) ->
+handle_request('POST',[<<"permissions">>], #request{data = Data}, {true, _}, _User, _Server) ->
   case extract_args(Data, [username, host, permissions]) of
     error -> badrequest_response();
     Args ->
       set_permissions(Args)
   end;
-handle_reuest('POST',[<<"admins">>], #request{data = Data}, {true, _}, _User, _Server) ->
+handle_request('POST',[<<"admins">>], #request{data = Data}, {true, _}, _User, _Server) ->
   case extract_args(Data, [username, host]) of
     error -> badrequest_response();
     Args ->
       set_admin(Args)
   end;
-handle_reuest('DELETE',[<<"admins">>], #request{data = Data}, {true, _}, _User, _Server) ->
+handle_request('DELETE',[<<"admins">>], #request{data = Data}, {true, _}, _User, _Server) ->
   case extract_args(Data, [username, host]) of
     error -> badrequest_response();
     Args ->
       remove_admin(Args)
   end;
-handle_reuest('GET',[<<"vhosts">>], _Req, _Perms, _User, _Server) ->
+handle_request('GET',[<<"vhosts">>], _Req, _Perms, _User, _Server) ->
   Result = {[{vhosts,  ejabberd_config:get_myhosts()}]},
   {200, Result};
-handle_reuest('POST',[<<"users">>], #request{data = Data},
+handle_request('POST',[<<"users">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, password]),
   check_and_run(Adm, Server, Args, fun create_user/1);
-handle_reuest('DELETE',[<<"users">>], #request{data = Data},
+handle_request('DELETE',[<<"users">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
   check_and_run(Adm, Server, Args,fun remove_user/1);
-handle_reuest('GET',[<<"users">>], #request{q = Q}, {_, <<"cronjob">>}, _, _) ->
+handle_request('GET',[<<"users">>], #request{q = Q}, {_, <<"cronjob">>}, _, _) ->
   Args = check_args(Q, [host]),
   check_and_run(true, <<>>, Args,fun get_users/1);
-handle_reuest('GET',[<<"users">>], #request{q = Q},
+handle_request('GET',[<<"users">>], #request{q = Q},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
   Args = check_args(Q, [host]),
   check_and_run(Adm, Server, Args,fun get_users/1);
-handle_reuest('GET',[<<"users">>,<<"count">>], #request{q = Q},
+handle_request('GET',[<<"users">>,<<"count">>], #request{q = Q},
     {Adm, <<_:8,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
   Args = check_args(Q, [host]),
   check_and_run(Adm, Server, Args,fun get_users_count/1);
-handle_reuest('GET',[<<"users">>,<<"online">>], #request{q = Q},
+handle_request('GET',[<<"users">>,<<"online">>], #request{q = Q},
     {Adm, <<_:8,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
   Args = check_args(Q, [host]),
   check_and_run(Adm, Server, Args,fun get_online_count/1);
-handle_reuest('PUT',[<<"users">>,<<"set_password">>], #request{data = Data},
+handle_request('PUT',[<<"users">>,<<"set_password">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, password]),
   check_and_run(Adm, Server, Args, fun set_password/1);
-handle_reuest('POST',[<<"users">>,<<"block">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
+handle_request('POST',[<<"users">>,<<"block">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
   Args = extract_args(Data, [username, host, reason]),
   check_and_run(true, <<>>, Args, fun block_user/1);
-handle_reuest('POST',[<<"users">>,<<"block">>], #request{data = Data},
+handle_request('POST',[<<"users">>,<<"block">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, reason]),
   check_and_run(Adm, Server, Args, fun block_user/1);
-handle_reuest('DELETE',[<<"users">>,<<"block">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
+handle_request('DELETE',[<<"users">>,<<"block">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
   Args = extract_args(Data, [username, host]),
   check_and_run(true, <<>>, Args, fun unblock_user/1);
-handle_reuest('DELETE',[<<"users">>,<<"block">>], #request{data = Data},
+handle_request('DELETE',[<<"users">>,<<"block">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
   check_and_run(Adm, Server, Args, fun unblock_user/1);
-handle_reuest('POST',[<<"users">>,<<"ban">>], #request{data = Data},
+handle_request('POST',[<<"users">>,<<"ban">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
   check_and_run(Adm, Server, Args, fun ban_user/1);
-handle_reuest('DELETE',[<<"users">>,<<"ban">>], #request{data = Data},
+handle_request('DELETE',[<<"users">>,<<"ban">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
   check_and_run(Adm, Server, Args, fun unban_user/1);
-handle_reuest(_,[<<"users">>], _, _, _, _) ->
+handle_request(_,[<<"users">>], _, _, _, _) ->
   forbidden_response();
-handle_reuest(_,[<<"users">>| _], _, _, _, _) ->
+handle_request(_,[<<"users">>| _], _, _, _, _) ->
   forbidden_response();
-handle_reuest('POST',[<<"groups">>], #request{data = Data},
+handle_request('POST',[<<"groups">>], #request{data = Data},
     {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [localpart, host, owner, name, privacy, index, membership]),
   check_and_run(Adm, Server, Args, fun add_group/1);
-handle_reuest('DELETE',[<<"groups">>], #request{data = Data},
+handle_request('DELETE',[<<"groups">>], #request{data = Data},
     {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [localpart, host]),
   check_and_run(Adm, Server, Args , fun remove_group/1);
-handle_reuest('GET',[<<"groups">>], #request{q = Q},
+handle_request('GET',[<<"groups">>], #request{q = Q},
     {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r->
   ArgsHost = check_args(Q, [host]),
   Args = case check_args(Q, [limit, page]) of
@@ -296,57 +296,57 @@ handle_reuest('GET',[<<"groups">>], #request{q = Q},
            _ -> error
          end,
   check_and_run(Adm, Server, Args , fun get_groups/1);
-handle_reuest('GET',[<<"groups">>,<<"count">>], #request{q = Q},
+handle_request('GET',[<<"groups">>,<<"count">>], #request{q = Q},
     {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r->
   Args = check_args(Q, [host]),
   check_and_run(Adm, Server, Args , fun get_groups_count/1);
-handle_reuest(_,[<<"groups">>], _, _, _, _) ->
+handle_request(_,[<<"groups">>], _, _, _, _) ->
   forbidden_response();
-handle_reuest(_,[<<"groups">>| _], _, _, _, _) ->
+handle_request(_,[<<"groups">>| _], _, _, _, _) ->
   forbidden_response();
-handle_reuest('POST',[<<"vcard">>], #request{data = Data},
+handle_request('POST',[<<"vcard">>], #request{data = Data},
     {Adm, <<_:56,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, vcard]),
   check_and_run(Adm, Server, Args, fun update_vcard/1);
-handle_reuest('GET',[<<"vcard">>], #request{q = Q},
+handle_request('GET',[<<"vcard">>], #request{q = Q},
     {Adm, <<_:56,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r->
   Args = check_args(Q, [username, host]),
   check_and_run(Adm, Server, Args , fun get_vcard/1);
-handle_reuest(_,[<<"vcard">>], _, _, _, _) ->
+handle_request(_,[<<"vcard">>], _, _, _, _) ->
   forbidden_response();
-handle_reuest('POST',[<<"circles">>], #request{data = Data},
+handle_request('POST',[<<"circles">>], #request{data = Data},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [circle, host, name, description, display]),
   check_and_run(Adm, Server, Args, fun add_circle/1);
-handle_reuest('DELETE',[<<"circles">>], #request{data = Data},
+handle_request('DELETE',[<<"circles">>], #request{data = Data},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [circle, host]),
   check_and_run(Adm, Server, Args, fun remove_circle/1);
-handle_reuest('GET',[<<"circles">>], #request{q = Q},
+handle_request('GET',[<<"circles">>], #request{q = Q},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
   Args = check_args(Q, [host]),
   check_and_run(Adm, Server, Args , fun get_circles/1);
-handle_reuest('GET',[<<"circles">>, <<"info">>], #request{q = Q},
+handle_request('GET',[<<"circles">>, <<"info">>], #request{q = Q},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
   Args = check_args(Q, [host, circle]),
   check_and_run(Adm, Server, Args , fun get_circle_info/1);
-handle_reuest('POST',[<<"circles">>, <<"members">>], #request{data = Data},
+handle_request('POST',[<<"circles">>, <<"members">>], #request{data = Data},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server)  when Adm orelse P == $w ->
   Args = extract_args(Data, [circle, host, members]),
   check_and_run(Adm, Server, Args, fun circle_add_members/1);
-handle_reuest('DELETE',[<<"circles">>, <<"members">>], #request{data = Data},
+handle_request('DELETE',[<<"circles">>, <<"members">>], #request{data = Data},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [circle, host, members]),
   check_and_run(Adm, Server, Args, fun circle_remove_members/1);
-handle_reuest('GET',[<<"circles">>, <<"members">>], #request{q = Q},
+handle_request('GET',[<<"circles">>, <<"members">>], #request{q = Q},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
   Args = check_args(Q, [host, circle]),
   check_and_run(Adm, Server, Args , fun get_circle_members/1);
-handle_reuest(_,[<<"circles">>], _, _, _, _) ->
+handle_request(_,[<<"circles">>], _, _, _, _) ->
   forbidden_response();
-handle_reuest(_,[<<"circles">>| _], _, _, _, _) ->
+handle_request(_,[<<"circles">>| _], _, _, _, _) ->
   forbidden_response();
-handle_reuest(Method, Path, _Req, _Perms, _User, _Server) ->
+handle_request(Method, Path, _Req, _Perms, _User, _Server) ->
   ?DEBUG("Path not found ~p ~p~n",[Method,Path]),
   {404, [], [<<"path no found">>]}.
 

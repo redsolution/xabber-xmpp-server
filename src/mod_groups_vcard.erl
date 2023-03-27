@@ -39,6 +39,7 @@
   get_photo_meta/3,
   get_all_image_metadata/2,
   maybe_delete_file/2,
+  delete_group_avatar_file/1,
   make_chat_notification_message/3,
   get_pubsub_meta/0,
   handle_avatar_data/4,
@@ -1018,6 +1019,15 @@ trim(String) ->
       <<"">>
   end.
 
+delete_group_avatar_file(Group) when is_binary(Group) ->
+  delete_group_avatar_file(jid:from_string(Group));
+delete_group_avatar_file(#jid{lserver = Server} = Group)->
+  JIDinURL = gen_mod:get_module_opt(Server,mod_http_upload,jid_in_url),
+  UserStr = make_user_string(Group, JIDinURL),
+  DocRoot = get_docroot(Server),
+  FullPath = filename:join([DocRoot, UserStr]),
+  del_dir_r(FullPath).
+
 maybe_delete_file(Server, Meta) when is_list(Meta)->
   lists:foreach(fun(MetaEl) ->
     {_Hash, _Size, _Type, Url} = MetaEl,
@@ -1046,6 +1056,20 @@ delete_file(Server,  Url) when is_binary(Url) andalso size(Url) > 0 ->
   File = filename:join([Path, ?AVATARS_PATH, Name]),
   file:delete(File);
 delete_file(_Server,  _Url) -> ok.
+
+del_dir_r(File) ->
+  case filelib:is_dir(File) of
+    true ->
+      case file:list_dir_all(File) of
+        {ok, Names} ->
+          lists:foreach(fun(Name) ->
+            del_dir_r(filename:join(File, Name))
+                        end, Names);
+        {error, _Reason} -> ok
+      end,
+      file:del_dir(File);
+    _ -> file:delete(File)
+  end.
 
 get_vcard(LUser,Server) ->
   Chat = jid:to_string(jid:make(LUser,Server)),

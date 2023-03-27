@@ -823,7 +823,6 @@ remove_group(Args) ->
   JID = jid:make(LUser, LServer),
   case mod_xabber_entity:is_group(LUser, LServer) of
     true ->
-      mod_groups_users:unsubscribe_all_participants([], LServer, <<>>, jid:to_string(JID)),
       mod_groups_chats:delete_chat_hook([], LServer, <<>>, jid:to_string(JID)),
       {200, <<>>};
     _ ->

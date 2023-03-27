@@ -102,7 +102,7 @@ mod_options(_Host) -> [].
 
 % delete chat hook
 delete_chat_hook(_Acc, _LServer, _User, Chat) ->
-  delete(Chat),
+  delete_group(Chat, false, false),
   {stop, ok}.
 
 check_localpart(_Acc,Server,_CreatorLUser,_CreatorLServer,SubEls) ->
@@ -424,21 +424,19 @@ send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
     sub_els = [Invite,ChatInfo]},
   ejabberd_router:route(Message).
 
-delete_chat(_Acc,{LServer,User,Chat,_UserCard,_Lang})->
+delete_chat(_Acc,{LServer, _User, Chat, _UserCard, _Lang})->
   DeleteIfEmpty = gen_mod:get_module_opt(LServer, mod_groups, remove_empty),
   if
     DeleteIfEmpty ->
       case count_users(LServer,Chat) of
-        0 -> delete(Chat);
+        0 -> delete_group(Chat, false, true);
         _ -> pass
       end;
     true ->
       pass
   end,
   case mod_groups_restrictions:get_owners(LServer,Chat) of
-    [] ->
-      mod_groups_users:unsubscribe_all_participants([],LServer,User,Chat),
-      delete(Chat);
+    [] -> delete_group(Chat, false, false);
     _ -> pass
   end,
   ok.
@@ -564,45 +562,51 @@ get_p2p_chat(LServer,ParentChat,User1,User2) ->
       notexist
   end.
 
-%%check_if_not_duplicated(List) ->
-%%  List1 = [C || {_U,C} <- List],
-%%  List2 = lists:usort(List1),
-%%  Len1 = length(List1),
-%%  Len2 = length(List2),
-%%  case Len1 of
-%%    Len2 ->
-%%      true;
-%%    _ ->
-%%      [Chat] = List1 -- List2,
-%%      {false, Chat}
-%%  end.
-
 add_user_to_peer_to_peer_chat(LServer, User, NewChat,OldChat) ->
 %%  Info = {AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge}
   Info = mod_groups_users:get_user_info_for_peer_to_peer(LServer,User,OldChat),
   mod_groups_users:add_user_to_peer_to_peer_chat(LServer,User,NewChat, Info),
   Info.
 
-delete(Chat) ->
-  ChatJID = jid:from_string(Chat),
-  {Localpart,LServer,_} = jid:tolower(ChatJID),
+
+delete_group(Chat, IsP2P, IsEmpty) ->
+  {LocalPart, LServer,_} = jid:tolower(jid:from_string(Chat)),
+  case IsP2P of
+    false ->
+      lists:foreach(fun(G)->
+        delete_group(G, true, false)
+                    end,
+        get_dependent_groups(LServer, Chat));
+    _ -> ok
+  end,
+  groups_sm:deactivate(LServer,LocalPart),
   AllUserMeta = mod_groups_vcard:get_all_image_metadata(LServer,Chat),
+  case IsEmpty of
+    false ->
+      mod_groups_users:unsubscribe_all_for_delete(LServer, Chat);
+    _ -> ok
+  end,
+  sql_delete_group(LServer, Chat),
+%%  delete archive
+  mod_mam:remove_user(LocalPart, LServer),
+%%  delete user avatars
   mod_groups_vcard:maybe_delete_file(LServer,AllUserMeta),
-  delete_groupchat(LServer, Chat),
-  delete_depended_chats(Chat, LServer),
-  groups_sm:deactivate(LServer,Localpart),
-  ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("delete from archive where username=%(Localpart)s and %(LServer)H")).
+%%  delete group avatar
+  mod_groups_vcard:delete_group_avatar_file(Chat).
 
 create_localpart() ->
   list_to_binary(
     [randoms:get_alphanum_string(2),randoms:get_string(),randoms:get_alphanum_string(3)]).
 
-delete_depended_chats(ParentChat, LServer) ->
-  ejabberd_sql:sql_query(
+get_dependent_groups(LServer, Chat) ->
+  case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("delete from groupchats where parent_chat=%(ParentChat)s and %(LServer)H")).
+    ?SQL("select @(jid)s from groupchats
+    where parent_chat = %(Chat)s and %(LServer)H")) of
+    {selected, Groups} -> [G || {G} <- Groups];
+    _ ->
+      []
+  end.
 
 groupchat_exist(LUser, LServer) ->
   case ejabberd_sql:sql_query(
@@ -617,10 +621,10 @@ groupchat_exist(LUser, LServer) ->
       true
   end.
 
-delete_groupchat(LServer, Chat) ->
+sql_delete_group(LServer, Chat) ->
   ejabberd_sql:sql_query(
     LServer,
-    ?SQL("delete from groupchats where jid=%(Chat)s")
+    ?SQL("delete from groupchats where jid=%(Chat)s and %(LServer)H")
   ).
 
 get_chat_name(Chat,Server) ->

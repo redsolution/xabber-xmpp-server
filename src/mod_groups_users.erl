@@ -70,7 +70,7 @@
 -export([validate_data/8, validate_rights/8, update_user/8]).
 
 % Delete chat
--export([check_if_user_owner/4, unsubscribe_all_participants/4]).
+-export([check_if_user_owner/4, unsubscribe_all_for_delete/2]).
 
 % Kick user from groupchat
 -export([check_if_user_can/6, check_kick/6, kick_user/6]).
@@ -86,7 +86,6 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
   ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, check_if_user_owner, 10),
-  ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, unsubscribe_all_participants, 20),
   ejabberd_hooks:add(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
   ejabberd_hooks:add(request_own_rights, Host, ?MODULE, send_user_rights, 20),
   ejabberd_hooks:add(request_change_user_settings, Host, ?MODULE, check_if_exist, 10),
@@ -113,7 +112,6 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
   ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, check_if_user_owner, 10),
-  ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, unsubscribe_all_participants, 20),
   ejabberd_hooks:delete(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
   ejabberd_hooks:delete(request_own_rights, Host, ?MODULE, send_user_rights, 20),
   ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, check_if_exist, 10),
@@ -229,14 +227,15 @@ check_if_user_owner(_Acc, LServer, User, Chat) ->
       {stop,{error, xmpp:err_not_allowed()}}
   end.
 
-unsubscribe_all_participants(_Acc, LServer, _User, Chat) ->
-  Users = get_all_user(LServer,Chat),
+unsubscribe_all_for_delete(LServer,Chat) ->
+  Users = get_all_participants(LServer,Chat),
   From = jid:from_string(Chat),
-  lists:foreach(fun(U) ->
-    {Participant} = U,
+  lists:foreach(fun(Participant) ->
     To = jid:from_string(Participant),
-    ejabberd_router:route(#presence{type = unsubscribe, id = randoms:get_string(), from = From, to = To}),
-    ejabberd_router:route(#presence{type = unsubscribed, id = randoms:get_string(), from = From, to = To})
+    ejabberd_router:route(#presence{type = unsubscribe,
+      id = randoms:get_string(), from = From, to = To}),
+    ejabberd_router:route(#presence{type = unsubscribed,
+      id = randoms:get_string(), from = From, to = To})
                 end,
     Users
   ).
@@ -509,13 +508,14 @@ add_user_to_db(Server, User, Role, Group, Subs, InvitedBy) ->
 user_list_to_send(Server, Groupchat) ->
  case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(username)s from groupchat_users where chatgroup=%(Groupchat)s and subscription='both'")) of
+    ?SQL("select @(username)s from groupchat_users "
+    " where chatgroup=%(Groupchat)s and subscription='both'")) of
    {selected,[]} ->
      [];
-   {selected,[<<>>]} ->
-     [];
    {selected,Users} ->
-     Users
+     Users;
+   _ ->
+     []
  end.
 
 change_subscription(Server,Chat,Username,State) ->
@@ -1751,14 +1751,14 @@ calculate_role(LServer,Username,Chat) ->
       <<"owner">>
   end.
 
-get_all_user(LServer,Chat) ->
+%% Participants for notification of group deletion
+get_all_participants(LServer,Chat) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(username)s from groupchat_users where chatgroup=%(Chat)s")) of
-    {selected,Users} ->
-      Users;
-    _ ->
-      []
+    ?SQL("select @(username)s from groupchat_users "
+    " where chatgroup=%(Chat)s and subscription != 'none'")) of
+    {selected,Users} -> [User || {User} <- Users];
+    _ -> []
   end.
 
 now_to_timestamp({MSec, Sec, _USec}) ->

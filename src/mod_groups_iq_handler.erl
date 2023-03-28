@@ -32,7 +32,7 @@
 -include("xmpp.hrl").
 -export([start/2, stop/1, depends/2, mod_options/1, disco_sm_features/5,
   init/1, handle_call/3, handle_cast/2, terminate/2]).
--export([process_groupchat/1,process_iq/1,make_action/1]).
+-export([process_groupchat/1,make_action/1]).
 
 %% records
 -record(state, {host = <<"">> :: binary()}).
@@ -89,13 +89,13 @@ handle_cast({groupchat_created,Server,User,Chat,Lang}, State) ->
 handle_cast(_Request, State) ->
   {noreply, State}.
 
-process_iq(#iq{to = To} = Iq) ->
-  process_iq(mod_groups_sql:search_for_chat(To#jid.server,To#jid.user),Iq).
-
-process_iq({selected,[]},Iq) ->
-  Iq;
-process_iq({selected,[_Name]},Iq) ->
-  make_action(Iq).
+%%process_iq(#iq{to = To} = Iq) ->
+%%  process_iq(mod_groups_sql:search_for_chat(To#jid.server,To#jid.user),Iq).
+%%
+%%process_iq({selected,[]},Iq) ->
+%%  Iq;
+%%process_iq({selected,[_Name]},Iq) ->
+%%  make_action(Iq).
 
 process_groupchat(#iq{type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE, sub_els = []}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
@@ -318,8 +318,8 @@ make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/disco#info">>}]}]} = Iq) ->
   ChatJID = jid:to_string(jid:tolower(jid:remove_resource(To))),
   Server = To#jid.lserver,
-  {selected,[{Name,Anonymous,_Search,Model,Desc,_Message,_ContactList,_DomainList}]} =
-    mod_groups_sql:get_information_of_chat(ChatJID,Server),
+  {selected,[{Name, Anonymous, _Search, Model, Desc, _, _, _, _}]} =
+    mod_groups_chats:get_information_of_chat(ChatJID,Server),
   Identity = #xmlel{name = <<"identity">>,
   attrs = [{<<"category">>,<<"conference">>},{<<"type">>,<<"groupchat">>},{<<"name">>,Name}]},
   FeatureList = [<<"urn:xmpp:avatar:metadata">>,<<"urn:xmpp:avatar:data">>,

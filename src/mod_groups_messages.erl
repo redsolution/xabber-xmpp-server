@@ -391,7 +391,7 @@ transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
   Length = binary_length(Username),
   Reference = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, 'begin' = 0, 'end' = Length, sub_els = [UserCard]}]},
   NewBody = [#text{lang = <<>>,data = <<Username/binary, Text/binary >>}],
-  {selected, AllUsers} = mod_groups_sql:user_list_to_send(Server,Chat),
+  AllUsers = mod_groups_users:user_list_to_send(Server,Chat),
   {selected, NoReaders} = mod_groups_users:user_no_read(Server,Chat),
   UsersWithoutSender = AllUsers -- [{Jid}],
   Users = UsersWithoutSender -- NoReaders,

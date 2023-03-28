@@ -152,11 +152,11 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
       X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
       By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
 
-      {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,Status}]} =
+      {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,_Status}]} =
         mod_groups_chats:get_information_of_chat(Chat,LServer),
       Group_X = #xabbergroupchat_x{
         xmlns = ?NS_GROUPCHAT,
-        members = integer_to_binary(mod_groups_chats:count_users(LServer,Chat)),
+        members = mod_groups_chats:count_users(LServer,Chat),
         sub_els =
         [
           #xabbergroupchat_name{cdata = Name},

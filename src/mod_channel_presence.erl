@@ -76,7 +76,7 @@ answer_presence(#presence{to = To, from = From, type = available, sub_els = SubE
   LServer = To#jid.lserver,
   Key = lists:keyfind(vcard_xupdate,1,SubEls),
   NewHash = search_for_hash(Key),
-  OldHash = mod_groups_sql:get_hash(LServer,User),
+  OldHash = mod_groups_vcard:get_vcard_avatar_hash(LServer,User),
   case NewHash of
     OldHash ->
       ok;
@@ -85,8 +85,8 @@ answer_presence(#presence{to = To, from = From, type = available, sub_els = SubE
     undefined ->
       ok;
     _ ->
-      mod_groups_sql:update_hash(LServer,User,NewHash),
-      mod_groups_sql:set_update_status(LServer,User,<<"true">>)
+      ejabberd_router:route(jid:replace_resource(To,<<"Channel">>),
+        jid:remove_resource(From), mod_groups_vcard:get_vcard())
   end,
   Presence = form_presence_with_info(LServer, Channel, From, available),
   ejabberd_router:route(Presence);

@@ -52,6 +52,7 @@
   convert_from_datetime_to_unix_time/1,
   current_chat_version/2,
   subscribe_user/2,
+  update_last_seen/3,
   get_user_id/3,
   get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/4,
   update_user_status/3, user_no_read/2, get_users_page/3, get_nick_in_chat/3, get_user_by_id_and_allow_to_invite/3,
@@ -209,7 +210,7 @@ kick_user_from_chat(LServer,Chat,User) ->
          username=%(User)s and chatgroup=%(Chat)s and (subscription != 'none' or subscription !='wait')")) of
     {updated,1} ->
       mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
-      mod_groups_sql:update_last_seen(LServer,User,Chat),
+      update_last_seen(LServer,User,Chat),
       UserJID = jid:from_string(User),
       ChatJID = jid:from_string(Chat),
       ejabberd_router:route(ChatJID,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
@@ -351,7 +352,7 @@ get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
       ejabberd_router:route(From,To, mod_groups_vcard:get_pubsub_meta()),
       {stop,ok};
     false ->
-      mod_groups_sql:set_update_status(Server,User,<<"true">>),
+      mod_groups_vcard:set_update_status(Server,User,<<"true">>),
       ejabberd_router:route(From,To, mod_groups_vcard:get_vcard()),
       ejabberd_router:route(From,To, mod_groups_vcard:get_pubsub_meta()),
       ok;
@@ -483,11 +484,12 @@ form_kicked(Users,Chat) ->
 
 % SQL functions
 add_user(Server, Member, Role, Group, Subs, InvitedBy) ->
-  case mod_groups_sql:search_for_chat(Server,Member) of
-    {selected,[]} ->
+  {MUser, MServer, _} = jid:tolower(jid:from_string(Member)),
+  case mod_xabber_entity:is_group(MUser, MServer) of
+    false ->
       add_user_to_db(Server, Member, Role, Group, Subs, InvitedBy),
       ok;
-    {selected,[_Name]} ->
+    _ ->
       not_allowed
   end.
 
@@ -639,6 +641,12 @@ update_user_status(Server,User,Chat) ->
     [
       <<"update groupchat_users set user_updated_at = (now() at time zone 'utc') where chatgroup='">>,ejabberd_sql:escape(Chat),<<"' and username = '">>,ejabberd_sql:escape(User),<<"';">>
     ]).
+
+update_last_seen(Server,User,Chat) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchat_users set last_seen = (now() at time zone 'utc')
+  where chatgroup=%(Chat)s and username=%(User)s")).
 
 insert_badge(_L,_U,_C,undefined) ->
   ok;

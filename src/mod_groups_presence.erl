@@ -103,7 +103,7 @@ delete_session_from_counter_after(GroupJID, UserJID, Timeout) ->
       PresentNum = get_present(Chat),
       Ss = mod_groups_present_mnesia:select_session(Resource,Username,Chat),
       lists:foreach(fun(S) -> mnesia:dirty_delete_object(S) end, Ss),
-      mod_groups_sql:update_last_seen(Server,Username,Chat),
+      mod_groups_users:update_last_seen(Server,Username,Chat),
       send_notification(UserJID, GroupJID, PresentNum, not_present)
   end.
 
@@ -160,8 +160,7 @@ form_presence_with_type(LServer, User, Chat, Type) ->
   To = jid:from_string(User),
   {selected,[{Name,Anonymous,_Search,_Model,_Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
     mod_groups_chats:get_all_information_chat(Chat,LServer),
-  {selected,_Ct,MembersC} = mod_groups_sql:count_users(LServer,Chat),
-  Members = list_to_binary(MembersC),
+  Members = mod_groups_chats:count_users(LServer,Chat),
   {CollectState,P2PState} = mod_groups_inspector:get_collect_state(Chat,User),
   Hash = mod_groups_inspector:get_chat_avatar_id(Chat),
   VcardX = #vcard_xupdate{hash = Hash},
@@ -228,7 +227,7 @@ is_chat(Sub) ->
 search_for_hash(Hash) ->
  case Hash of
    false ->
-     <<>>;
+     undefined;
    _ ->
      Hash#vcard_xupdate.hash
  end.
@@ -376,15 +375,12 @@ answer_presence(From, To, SubEls)->
       end
   end,
   NewHash = search_for_hash(Key),
-  OldHash = mod_groups_sql:get_hash(Server,User),
+  OldHash = mod_groups_vcard:get_vcard_avatar_hash(Server,User),
   IsAnon = mod_groups_chats:is_anonim(Server,ChatJid),
   case NewHash of
-    OldHash ->
-      ok;
-    <<>> ->
-      delete_photo_if_exist;
-    undefined ->
-      ok;
+    OldHash -> ok;
+    <<>> -> delete_photo_if_exist;
+    undefined -> ok;
     _ when not IsAnon ->
       ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From), mod_groups_vcard:get_vcard());
     _ ->
@@ -418,7 +414,7 @@ answer_presence(From, To, SubEls)->
         true -> ok
       end;
     Present =/= false andalso NotPresent == false andalso IsExist ->
-      mod_groups_sql:update_last_seen(Server,User,ChatJid),
+      mod_groups_users:update_last_seen(Server,User,ChatJid),
       case mod_groups_present_mnesia:set_session(Resource, User, ChatJid) of
         ok ->
           send_notification(From, To, PresentNum, present);
@@ -445,7 +441,7 @@ change_present_state(To,From) ->
   Username = jid:to_string(jid:remove_resource(From)),
   PresentNum = get_present(Chat),
   mod_groups_present_mnesia:delete_session(Resource,Username,Chat),
-  mod_groups_sql:update_last_seen(Server,Username,Chat),
+  mod_groups_users:update_last_seen(Server,Username,Chat),
   send_notification(From, To, PresentNum, not_present).
 
 send_notification(From, To, PresentNum, PresentType) ->
@@ -523,7 +519,7 @@ send_presence_to_index(Server, Chat) ->
              end,
     Groupchat_x = #xabbergroupchat_x{
       xmlns = ?NS_GROUPCHAT,
-      members = integer_to_binary(mod_groups_chats:count_users(Server,Chat)),
+      members = mod_groups_chats:count_users(Server,Chat),
       parent = Parent,
       sub_els =
       [
@@ -575,8 +571,7 @@ form_presence(Chat,User) ->
   LServer = ChatJID#jid.lserver,
   {selected,[{Name,Anonymous,_Search,_Model,_Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
     mod_groups_chats:get_all_information_chat(Chat,LServer),
-  {selected,_Ct,MembersC} = mod_groups_sql:count_users(LServer,Chat),
-  Members = list_to_binary(MembersC),
+  Members = mod_groups_chats:count_users(LServer,Chat),
   {CollectState,P2PState} = mod_groups_inspector:get_collect_state(Chat,User),
   Hash = mod_groups_inspector:get_chat_avatar_id(Chat),
   VcardX = #vcard_xupdate{hash = Hash},
@@ -655,7 +650,7 @@ info_about_chat(ChatJid, {Name, Anonymous, Message, ParentChat, Status}) ->
            end,
   {#xabbergroupchat_x{
       xmlns = ?NS_GROUPCHAT,
-      members = integer_to_binary(mod_groups_chats:count_users(Server,ChatJid)),
+      members = mod_groups_chats:count_users(Server,ChatJid),
       present = Present,
       parent = Parent,
       sub_els =

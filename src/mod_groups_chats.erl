@@ -429,7 +429,7 @@ delete_chat(_Acc,{LServer, _User, Chat, _UserCard, _Lang})->
   if
     DeleteIfEmpty ->
       case count_users(LServer,Chat) of
-        0 -> delete_group(Chat, false, true);
+        <<"0">> -> delete_group(Chat, false, true);
         _ -> pass
       end;
     true ->
@@ -868,9 +868,9 @@ get_chat_active(Server,Chat) ->
 count_users(LServer,Chat) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(count(username))d from groupchat_users where chatgroup = %(Chat)s and subscription = 'both'")) of
+    ?SQL("select @(count(*))s from groupchat_users where chatgroup = %(Chat)s and subscription = 'both'")) of
     {selected,[{Num}]} -> Num;
-    _ -> 0
+    _ -> <<"0">>
   end.
 
 create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,Contacts,Domains) ->

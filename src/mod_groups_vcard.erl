@@ -48,7 +48,9 @@
   get_vcard/2,
   update_avatar/7,
   create_p2p_avatar/4,
-  handle_iq/1
+  handle_iq/1,
+  get_vcard_avatar_hash/2,
+  set_update_status/3
 ]).
 -export([publish_avatar/3, make_http_request/6, store_user_avatar_file/3]).
 -export([maybe_update_avatar/3]).
@@ -352,7 +354,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
 notificate_all(ChatJID,Message) ->
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   FromChat = jid:replace_resource(ChatJID,?RESOURCE),
-  {selected, AllUsers} = mod_groups_sql:user_list_to_send(ChatJID#jid.lserver,Chat),
+  AllUsers = mod_groups_users:user_list_to_send(ChatJID#jid.lserver,Chat),
   mod_groups_messages:send_message(Message,AllUsers,FromChat).
 
 change_nick_in_vcard(LUser,LServer,NewNick) ->
@@ -489,7 +491,7 @@ handle_avatar_data(_C,_U,_I,false) ->
   ok.
 
 update_vcard(Server,User,D,_Chat) ->
-  Status = mod_groups_sql:get_update_status(Server,User),
+  Status = get_update_status(Server,User),
 %%  Photo = set_value(D#vcard_temp.photo),
   FN = set_value(D#vcard_temp.fn),
   LF = get_lf(D#vcard_temp.n),
@@ -715,6 +717,15 @@ get_vcard_avatar_data(Server, User, Hash, Node) ->
       error
   end.
 
+get_vcard_avatar_hash(Server,SJID) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(hash)s
+       from groupchat_users_vcard where jid=%(SJID)s")) of
+    {selected,[{Hash}]} -> Hash;
+    _ -> <<>>
+  end.
+
 get_avatar_data(File,Hash,UserNode) ->
   case file:read_file(File) of
     {ok,Binary} ->
@@ -911,6 +922,17 @@ set_update_status(Server,Jid,Status) ->
       {error, db_failure}
   end.
 
+get_update_status(Server,Jid) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(fullupdate)s
+       from groupchat_users_vcard where jid=%(Jid)s")) of
+    {selected,[]} ->
+      <<>>;
+    {selected,[{Status}]} ->
+      Status
+  end.
+
 update_id_in_chats(Server,User,Hash,AvatarType,AvatarSize,AvatarUrl) ->
   case ejabberd_sql:sql_query(
     Server,
@@ -1076,8 +1098,7 @@ get_vcard(LUser,Server) ->
   {selected,[{Name,Privacy,Index,Membership,Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
     mod_groups_chats:get_all_information_chat(Chat,Server),
   Parent = define_parent_chat(ParentChat),
-  {selected,_Ct,MembersC} = mod_groups_sql:count_users(Server,Chat),
-  Members = list_to_binary(MembersC),
+  Members = mod_groups_chats:count_users(Server,Chat),
   HumanStatus = case ParentChat of
                   <<"0">> ->
                     mod_groups_chats:define_human_status(Server, Chat, Status);

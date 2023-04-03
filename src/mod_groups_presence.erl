@@ -29,8 +29,7 @@
 -behavior(gen_server).
 -include("logger.hrl").
 -include("xmpp.hrl").
--include("mod_groups_present.hrl").
--export([init/1, handle_call/3, handle_cast/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, terminate/2, handle_info/2]).
 -export([start/2, stop/1, depends/2, mod_options/1]).
 -export([
          form_presence/2, form_presence/1,
@@ -40,15 +39,19 @@
          process_presence/1,
   send_info_to_index/2, get_global_index/1, send_message_to_index/2,
   chat_created/4, groupchat_changed/5, send_presence/3,
-  change_present_state/2, revoke_invite/2,
-  delete_session_from_counter_after/3
+  change_present_state/2, revoke_invite/2
         ]).
+-export([
+  get_present/1,
+  select_sessions/2,
+  delete_all_user_sessions/2]).
 
 %% records
 -type state() :: map().
 -export_type([state/0]).
 
 -record(presence_state, {host = <<"">> :: binary()}).
+-record(participant_session, {group, username, server, resource, ts}).
 
 start(Host, Opts) ->
   gen_mod:start_child(?MODULE, Host, Opts).
@@ -62,6 +65,19 @@ mod_options(_Host) -> [].
 
 init([Host, _Opts]) ->
   register_hooks(Host),
+  ejabberd_mnesia:create(?MODULE, participant_session,
+    [{ram_copies, [node()]},
+      {attributes, record_info(fields, participant_session)},
+      {type, bag}]),
+  Hosts = lists:sort(ejabberd_config:get_myhosts()),
+  %% run task once for all hosts
+  case Hosts of
+    [Host | _] ->
+      erlang:send_after(3600000, %% 60 minutes
+        self(), 'delete_zombie_sessions');
+    _ ->
+      ok
+  end,
   {ok, #presence_state{host = Host}}.
 
 terminate(_Reason, State) ->
@@ -89,23 +105,32 @@ handle_cast(#presence{to = To} = Presence, State) ->
 handle_cast(_Request, State) ->
   {noreply, State}.
 
-delete_session_from_counter_after(GroupJID, UserJID, Timeout) ->
-  timer:sleep(Timeout),
-%%  checking if the group was deleted
-  case ejabberd_sm:get_session_sid(GroupJID#jid.luser, GroupJID#jid.lserver, <<"Group">>) of
-    none ->
-      ok;
-    _ ->
-      Resource = UserJID#jid.lresource,
-      Server = GroupJID#jid.lserver,
-      Chat = jid:to_string(jid:remove_resource(GroupJID)),
-      Username = jid:to_string(jid:remove_resource(UserJID)),
-      PresentNum = get_present(Chat),
-      Ss = mod_groups_present_mnesia:select_session(Resource,Username,Chat),
-      lists:foreach(fun(S) -> mnesia:dirty_delete_object(S) end, Ss),
-      mod_groups_users:update_last_seen(Server,Username,Chat),
-      send_notification(UserJID, GroupJID, PresentNum, not_present)
-  end.
+handle_info('delete_zombie_sessions', State) ->
+  kill_zombies(),
+  erlang:send_after(1200000, %% 20 minutes
+    self(), 'delete_zombie_sessions'),
+  {noreply, State};
+
+handle_info(_Info, State) ->
+  {noreply, State}.
+
+%%delete_session_from_counter_after(GroupJID, UserJID, Timeout) ->
+%%  timer:sleep(Timeout),
+%%%%  checking if the group was deleted
+%%  case ejabberd_sm:get_session_sid(GroupJID#jid.luser, GroupJID#jid.lserver, <<"Group">>) of
+%%    none ->
+%%      ok;
+%%    _ ->
+%%      Resource = UserJID#jid.lresource,
+%%      Server = GroupJID#jid.lserver,
+%%      Chat = jid:to_string(jid:remove_resource(GroupJID)),
+%%      Username = jid:to_string(jid:remove_resource(UserJID)),
+%%      PresentNum = get_present(Chat),
+%%      Ss = select_session(Resource,Username,Chat),
+%%      lists:foreach(fun(S) -> mnesia:dirty_delete_object(S) end, Ss),
+%%      mod_groups_users:update_last_seen(Server,Username,Chat),
+%%      send_notification(UserJID, GroupJID, PresentNum, not_present)
+%%  end.
 
 revoke_invite(Chat,User) ->
   ChatJID = jid:from_string(Chat),
@@ -120,9 +145,7 @@ groupchat_changed(LServer, Chat, _User, ChatProperties, Status) ->
   Users = mod_groups_users:user_list_to_send(LServer,Chat),
   case Status of
     <<"inactive">> ->
-      Ss = mod_groups_present_mnesia:select_sessions('_', ChatJID),
-      lists:foreach(fun(Session) ->
-        mod_groups_present_mnesia:delete_session(Session) end, Ss),
+      delete_all_sessions(Chat),
       send_presence(form_presence_unavailable(Chat),Users,FromChat);
     _ ->
       {HumanStatus, Show} = mod_groups_chats:define_human_status_and_show(LServer, Chat, Status),
@@ -244,7 +267,7 @@ answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
         Server, [], [{Server,User,Chat,#xabbergroupchat_user_card{},<<"en">>}]),
       case Result of
         ok ->
-          mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
+          delete_all_user_sessions(User,Chat),
           ejabberd_router:route(To,From,#presence{type = unsubscribe});
         _ ->
           ok
@@ -319,7 +342,7 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
   case Result of
     ok ->
-      mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
+      delete_all_user_sessions(User,Chat),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
     alone ->
@@ -338,7 +361,7 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
       case Result of
         ok ->
-          mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
+          delete_all_user_sessions(User,Chat),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
         alone ->
@@ -415,7 +438,7 @@ answer_presence(From, To, SubEls)->
       end;
     Present =/= false andalso NotPresent == false andalso IsExist ->
       mod_groups_users:update_last_seen(Server,User,ChatJid),
-      case mod_groups_present_mnesia:set_session(Resource, User, ChatJid) of
+      case set_session(Resource, User, ChatJid) of
         ok ->
           send_notification(From, To, PresentNum, present);
         _ ->
@@ -427,12 +450,11 @@ answer_presence(From, To, SubEls)->
       ok
   end.
 
-get_present(Chat) ->
-  ChatSessions = mod_groups_present_mnesia:select_sessions('_',Chat),
-  AllUsersSession = [{X,Y}||{chat_session,_ID,_Z,X,Y} <- ChatSessions],
+get_present(Group) ->
+  Sessions = select_all_sessions(Group),
+  AllUsersSession = [{U,S}||{participant_session, _G, U, S, _R, _TS} <- Sessions],
   UniqueOnline = lists:usort(AllUsersSession),
-  Present = integer_to_binary(length(UniqueOnline)),
-  Present.
+  integer_to_binary(length(UniqueOnline)).
 
 change_present_state(To,From) ->
   Resource = From#jid.lresource,
@@ -440,7 +462,7 @@ change_present_state(To,From) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Username = jid:to_string(jid:remove_resource(From)),
   PresentNum = get_present(Chat),
-  mod_groups_present_mnesia:delete_session(Resource,Username,Chat),
+  delete_session(Resource,Username,Chat),
   mod_groups_users:update_last_seen(Server,Username,Chat),
   send_notification(From, To, PresentNum, not_present).
 
@@ -459,19 +481,14 @@ send_notification(From, To, PresentNum, PresentType) ->
     _ ->
       %% notify everyone about the counter change
       Users = get_users_with_session(Chat),
-      send_presence(form_presence(Chat),Users,FromChat)
+      send_presence(form_presence(Chat), Users, FromChat)
   end.
 
 get_users_with_session(Chat) ->
-  SS = mod_groups_present_mnesia:select_sessions('_',Chat),
-  Users = [{U,R}||{chat_session,_ID,R,U,_C} <- SS],
-  lists:map(fun(UR) ->
-    {U,R} = UR,
-    BareJID = jid:from_string(U),
-    JID = jid:replace_resource(BareJID,R),
-    JIDs = jid:to_string(JID),
-    {JIDs} end, Users
-  ).
+  SS = select_all_sessions(Chat),
+  Users = [jid:make(U,S,R)||{participant_session, _, U, S, R, _} <- SS],
+%%  todo: refactoring
+  [{jid:to_string(J)} || J <- Users].
 
 get_global_index(Server) ->
   gen_mod:get_module_opt(Server, mod_groups, global_indexs).
@@ -627,14 +644,11 @@ info_about_chat(ChatJid) ->
 info_about_chat(ChatJid, {Name, Anonymous, Message, ParentChat, Status}) ->
   S = jid:from_string(ChatJid),
   Server = S#jid.lserver,
-  ChatSessions = mod_groups_present_mnesia:select_sessions('_',ChatJid),
-  AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
-  UniqueOnline = lists:usort(AllUsersSession),
   Present = case Status of
               <<"inactive">> ->
                 <<"0">>;
               _ ->
-                integer_to_binary(length(UniqueOnline))
+                get_present(ChatJid)
             end,
   {HumanStatus, Show} =  case ParentChat of
                    <<"0">> ->
@@ -675,3 +689,81 @@ form_unsubscribed_presence() ->
                   {<<"type">>, <<"unsubscribed">>}
                  ]
         }.
+
+%%%===================================================================
+%%% present functions
+%%%===================================================================
+-spec set_session(binary(),binary(),binary()) -> ok | ignore.
+set_session(Resource, User, Group) ->
+  {Username, Server, _} = jid:tolower(jid:from_string(User)),
+  Result = case select_session(Resource, User, Group) of
+             [#participant_session{} = SS] ->
+               delete_session(SS),
+               ignore;
+             _ -> ok
+           end,
+  Session = #participant_session{
+    group = Group,
+    username = Username,
+    server = Server,
+    resource =  Resource,
+    ts = misc:now_to_usec(erlang:now())
+  },
+  mnesia:dirty_write(Session),
+  Result.
+
+delete_session(Resource, User, Group) ->
+  S = select_session(Resource, User, Group),
+  lists:foreach(fun(N) -> delete_session(N) end, S).
+
+-spec delete_session(#participant_session{}) -> ok.
+delete_session(S) ->
+  mnesia:dirty_delete_object(S).
+
+select_session(Resource, User, Group) ->
+  {LUser, LServer, _} = jid:tolower(jid:from_string(User)),
+  FN = fun()->
+    mnesia:match_object(participant_session,
+      {participant_session, Group, LUser, LServer, Resource, '_'},
+      read)
+       end,
+  {atomic,Session} = mnesia:transaction(FN),
+  Session.
+
+select_all_sessions(Group) ->
+  mnesia:dirty_read(participant_session, Group).
+
+select_sessions(User, Group) ->
+  {LUser, LServer, _} = jid:tolower(jid:from_string(User)),
+  FN = fun()->
+    mnesia:match_object(participant_session,
+      {participant_session, Group, LUser, LServer, '_', '_'},
+      read)
+       end,
+  {atomic,Sessions} = mnesia:transaction(FN),
+  Sessions.
+
+delete_all_user_sessions(User, Chat) ->
+  Sessions = select_sessions(User,Chat),
+  lists:foreach(fun(Session) ->
+    delete_session(Session) end, Sessions).
+
+delete_all_sessions(Chat) ->
+  Sessions = select_all_sessions(Chat),
+  lists:foreach(fun(Session) ->
+    delete_session(Session) end, Sessions).
+
+%% delete sessions older than 1 hour
+kill_zombies() ->
+  FN = fun()->
+    TS = misc:now_to_usec(erlang:now()) - 3600000000,
+    MatchHead = #participant_session{_='_', _='_' , _='_', _='_', ts = '$1'},
+    Guards = [{'<', '$1', TS}],
+    SS = mnesia:select(participant_session,[{MatchHead, Guards, ['$_']}]),
+    lists:foreach(fun(O) ->
+      ?WARNING_MSG("Delete session older than 1 hour. Group: ~p; user: ~p",
+        [O#participant_session.group, #participant_session.username]),
+      mnesia:delete_object(O) end, SS)
+       end,
+  mnesia:transaction(FN),
+  ok.

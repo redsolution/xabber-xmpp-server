@@ -375,7 +375,7 @@ case ejabberd_sql:sql_query(
     Unsubscribe = mod_groups_presence:form_unsubscribe_presence(),
     Unavailable = mod_groups_presence:form_presence_unavailable(),
     ejabberd_router:route(Msg),
-    mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
+    mod_groups_presence:delete_all_user_sessions(User,Chat),
     mod_groups_presence:send_presence(Unsubscribe,[{User}],FromChat),
     mod_groups_presence:send_presence(Unavailable,[{User}],FromChat);
   _ ->
@@ -406,10 +406,7 @@ chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,M,ContactList,DomainLi
   Server = J#jid.lserver,
   Localpart = J#jid.luser,
   Members = mod_groups_chats:count_users(Server,ChatJid),
-  ChatSessions = mod_groups_present_mnesia:select_sessions('_',ChatJid),
-  AllUsersSession = [{X,Y}||{chat_session,_Id,_Z,X,Y} <- ChatSessions],
-  UniqueOnline = lists:usort(AllUsersSession),
-  Present = integer_to_binary(length(UniqueOnline)),
+  Present = mod_groups_presence:get_present(ChatJid),
   Message = case M of
               null ->
                 <<>>;

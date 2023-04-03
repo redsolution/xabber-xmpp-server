@@ -41,7 +41,6 @@
   mod_groups_iq_handler,
   mod_groups_messages,
   mod_groups_presence,
-  mod_groups_present_mnesia,
   mod_groups_retract,
   mod_groups_system_message,
   mod_groups_users,

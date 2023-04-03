@@ -152,7 +152,6 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
       case Result of
         ok ->
-          mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
         alone ->

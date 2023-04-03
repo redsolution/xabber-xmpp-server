@@ -209,7 +209,7 @@ kick_user_from_chat(LServer,Chat,User) ->
     ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc') where
          username=%(User)s and chatgroup=%(Chat)s and (subscription != 'none' or subscription !='wait')")) of
     {updated,1} ->
-      mod_groups_present_mnesia:delete_all_user_sessions(User,Chat),
+      mod_groups_presence:delete_all_user_sessions(User,Chat),
       update_last_seen(LServer,User,Chat),
       UserJID = jid:from_string(User),
       ChatJID = jid:from_string(Chat),
@@ -1563,7 +1563,7 @@ get_user_from_chat(LServer,Chat,User,ID) ->
       Role = calculate_role(LServer,Username,Chat),
       AvatarEl = mod_groups_vcard:get_photo_meta(LServer,Username,Chat),
       BadgeF = validate_badge_and_nick(LServer,Chat,Username,Nick,Badge),
-      S = mod_groups_present_mnesia:select_sessions(Username,Chat),
+      S = mod_groups_presence:select_sessions(Username,Chat),
       L = length(S),
       Present = case L of
                   0 ->
@@ -1713,7 +1713,7 @@ make_query(LServer,RawData,RequesterUser,Chat) ->
       Role = calculate_role(LServer,Username,Chat),
       AvatarEl = mod_groups_vcard:get_photo_meta(LServer,Username,Chat),
       BadgeF = validate_badge_and_nick(LServer,Chat,Username,Nick,Badge),
-      S = mod_groups_present_mnesia:select_sessions(Username,Chat),
+      S = mod_groups_presence:select_sessions(Username,Chat),
       L = length(S),
       Present = case L of
                      0 ->

@@ -60,7 +60,7 @@
 -type(sasl_mechanism() :: #sasl_mechanism{}).
 -type error_reason() :: cyrsasl_digest:error_reason() |
 			cyrsasl_oauth:error_reason() |
-      cyrsasl_xtoken:error_reason() |
+      cyrsasl_hotp:error_reason() |
 			cyrsasl_plain:error_reason() |
 			cyrsasl_scram:error_reason() |
 			unsupported_mechanism | nodeprep_failed |
@@ -98,7 +98,6 @@ init([]) ->
     cyrsasl_scram:start([]),
     cyrsasl_anonymous:start([]),
     cyrsasl_oauth:start([]),
-    cyrsasl_xtoken:start([]),
     cyrsasl_hotp:start([]),
     {ok, #state{}}.
 
@@ -118,7 +117,7 @@ terminate(_Reason, _State) ->
     cyrsasl_scram:stop(),
     cyrsasl_anonymous:stop(),
     cyrsasl_oauth:stop(),
-    cyrsasl_xtoken:stop().
+    cyrsasl_hotp:stop().
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.

@@ -237,7 +237,7 @@ handle_archive(LServer, LUser, StanzaID, To) ->
 
 extract_auth(_, undefined) ->
   {error, unknown_host};
-extract_auth(#request{auth = HTTPAuth}, Host) ->
+extract_auth(#request{auth = HTTPAuth}, _Host) ->
   case HTTPAuth of
     {SJID, Pass} ->
       try jid:decode(SJID) of
@@ -261,13 +261,7 @@ extract_auth(#request{auth = HTTPAuth}, Host) ->
         {ok, {U, S}, Scope} ->
           #{usr => {U, S, <<"">>}, oauth_scope => Scope, caller_server => S};
         {false, Reason} ->
-          case mod_x_auth_token:user_token_info(Host, Token) of
-            {ok,[{SJID,_}]} ->
-              JID = jid:from_string(SJID),
-              #{usr => jid:tolower(JID), caller_server => JID#jid.lserver};
-            _ ->
-              {error, Reason}
-          end
+          {error, Reason}
       end;
     _ ->
       {error, invalid_auth}

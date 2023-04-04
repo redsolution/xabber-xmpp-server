@@ -23,6 +23,8 @@
 %%%
 %%%----------------------------------------------------------------------
 
+%% Deprecated module !!!
+
 -module(cyrsasl_xtoken).
 
 -author('andrey.gagarin@redsolution.com').

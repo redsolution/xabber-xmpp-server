@@ -23,6 +23,8 @@
 %%%
 %%%----------------------------------------------------------------------
 
+%% Deprecated module !!!
+
 -module(mod_x_auth_token).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).

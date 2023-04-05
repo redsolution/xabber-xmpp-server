@@ -1176,16 +1176,16 @@ add_user_to_peer_to_peer_chat(LServer,User,Chat,
         "badge=%(Badge)s"
       ])).
 
-change_peer_to_peer_invitation_state(LServer,User,Chat,State) ->
-  case ejabberd_sql:sql_query(
+change_peer_to_peer_invitation_state(LServer, User, Chat, State)
+  when State == <<"true">> orelse State == <<"false">> ->
+  ejabberd_sql:sql_query(
     LServer,
-    ?SQL("update groupchat_users set p2p_state = %(State)s where
-         username=%(User)s and chatgroup=%(Chat)s")) of
-    {updated,1} ->
-      ok;
-    _ ->
-      {stop,no_user}
-  end.
+    ?SQL("update groupchat_users set p2p_state = %(State)s where "
+    " username = %(User)s and chatgroup = %(Chat)s and 'incognito' ="
+    " (select anonymous from groupchats where jid = %(Chat)s and %(LServer)H)"
+    )),
+    ok;
+change_peer_to_peer_invitation_state(_, _, _, _S) ->?INFO_MSG("P2P2 ~p",[_S]), ok.
 
 %% user rights change functions
 user_rights(LServer,Chat,User) ->

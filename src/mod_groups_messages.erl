@@ -244,35 +244,54 @@ do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline}
       #ps_items{items = ItemList, node = Node} = Items,
       Item = lists:keyfind(ps_item,1,ItemList),
       #ps_item{sub_els = Els} = Item,
-      Decoded = lists:map(fun(N) -> xmpp:decode(N) end, Els),
-      [El|_R] = Decoded,
-      case El of
-        {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
+      AvatarMeta = case Els of
+                     [] -> undefined;
+                     _ -> xmpp:decode(hd(Els))
+                   end,
+      case AvatarMeta of
+        #avatar_meta{info = AvatarInfo} when Node == <<"urn:xmpp:avatar:metadata">> ->
           AvatarI = hd(AvatarInfo),
           IdAvatar = AvatarI#avatar_info.id,
           OldID = mod_groups_vcard:get_image_id(LServer,User, Chat),
           case OldID of
-            IdAvatar ->
-              ok;
+            IdAvatar -> ok;
             _ ->
-              %% todo: why can't we use metadata from this message?
-              ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From), mod_groups_vcard:get_pubsub_meta())
+              mod_groups_vcard:handle_avatar_meta(
+                jid:replace_resource(To,<<"Group">>),
+                jid:remove_resource(From),
+                AvatarMeta)
           end;
         _ ->
           ok
       end
   end;
 do_route(#message{body=[], from = From, type = chat, to = To} = Msg) ->
+  {_, LServer, _} = jid:tolower(To),
+  ChatJID = jid:remove_resource(To),
+  SUser = jid:to_string(jid:remove_resource(From)),
   Displayed = xmpp:get_subtag(Msg, #message_displayed{}),
-  case Displayed of
-    #message_displayed{id = OriginID,sub_els = _Sub} ->
-      {LName,LServer,_} = jid:tolower(To),
-      ChatJID = jid:make(LName,LServer),
+  PresentType = lists:foldl(fun(CType, Result) ->
+    case xmpp:get_subtag(Msg, #chatstate{type = CType}) of
+      false -> Result;
+      _ when CType == active -> present;
+      _ -> not_present
+    end end, false, [active, gone, inactive]),
+  IsAllowed = case {Displayed, PresentType} of
+              {false, false} -> false;
+              _ ->
+                mod_groups_users:check_if_exist(LServer,
+                  jid:to_string(ChatJID), SUser)
+            end,
+  if
+    Displayed /= false  andalso IsAllowed ->
+      #message_displayed{id = OriginID} = Displayed,
       Displayed2 = filter_packet(Displayed,ChatJID),
       StanzaID = get_stanza_id(Displayed2,ChatJID,LServer,OriginID),
       ejabberd_hooks:run(groupchat_got_displayed,LServer,[From,ChatJID,StanzaID]),
       send_displayed(ChatJID,StanzaID,OriginID);
-    _ ->
+    PresentType /= false andalso IsAllowed ->
+      mod_groups_presence:change_present_state(To, From, PresentType);
+    true ->
       ok
   end;
 do_route(#message{body=_Body, type = Type} = Message) when Type == normal orelse Type == chat->

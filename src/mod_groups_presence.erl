@@ -39,9 +39,10 @@
          process_presence/1,
   send_info_to_index/2, get_global_index/1, send_message_to_index/2,
   chat_created/4, groupchat_changed/5, send_presence/3,
-  change_present_state/2, revoke_invite/2
+  change_present_state/3, revoke_invite/2
         ]).
 -export([
+  set_session/3,
   get_present/1,
   select_sessions/2,
   delete_all_user_sessions/2]).
@@ -246,23 +247,14 @@ is_chat(Sub) ->
       true
   end.
 
-
-search_for_hash(Hash) ->
- case Hash of
-   false ->
-     undefined;
-   _ ->
-     Hash#vcard_xupdate.hash
- end.
-
 answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
+  Server = To#jid.lserver,
+  Chat = jid:to_string(jid:remove_resource(To)),
+  User = jid:to_string(jid:remove_resource(From)),
   DecodedPresence = xmpp:decode_els(Presence),
   Decoded = DecodedPresence#presence.sub_els,
   case is_chat(Decoded) of
     true ->
-      Server = To#jid.lserver,
-      Chat = jid:to_string(jid:remove_resource(To)),
-      User = jid:to_string(jid:remove_resource(From)),
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook,
         Server, [], [{Server,User,Chat,#xabbergroupchat_user_card{},<<"en">>}]),
       case Result of
@@ -273,40 +265,28 @@ answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
           ok
       end;
     false ->
-      answer_presence(From, To, Decoded)
+      case mod_groups_users:check_if_exist(Server, Chat, User) of
+        true -> answer_presence(From, To, Decoded);
+        _ -> ok
+      end
   end;
 answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} = Presence) ->
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
   ChatJid = jid:to_string(jid:remove_resource(To)),
   Decoded = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
-  Collect = lists:keyfind(collect,1,Decoded),
-  case Collect of
-    false ->
-      ok;
-    _ ->
-      {collect,Status} = Collect,
-      case Status of
-        <<"false">> ->
-          mod_groups_inspector:block_parse_chat(Server,User,ChatJid);
-        <<"true">> ->
-          mod_groups_inspector:unblock_parse_chat(Server,User,ChatJid)
-      end
+  case lists:keyfind(collect,1,Decoded) of
+    {collect, <<"false">>} ->
+      mod_groups_inspector:block_parse_chat(Server,User,ChatJid);
+    {collect, <<"true">>} ->
+      mod_groups_inspector:unblock_parse_chat(Server,User,ChatJid);
+    _ -> ok
   end,
-  IsAnon = mod_groups_chats:is_anonim(Server,ChatJid),
-  PeerToPeer = lists:keyfind(xabbergroup_peer,1,Decoded),
-  case PeerToPeer of
-    false ->
-      ok;
-    _ ->
-      {xabbergroup_peer,_JID,_ID,PeerState} = PeerToPeer,
-      ValidStates = [<<"true">>,<<"false">>],
-      case lists:member(PeerState,ValidStates) of
-        true when IsAnon ->
-          mod_groups_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
-        _ ->
-          ?DEBUG("Not change state",[])
-      end
+  case lists:keyfind(xabbergroup_peer, 1, Decoded) of
+      {xabbergroup_peer,_JID,_ID, PeerState} ->
+        mod_groups_users:change_peer_to_peer_invitation_state(
+          Server, User, ChatJid, PeerState);
+       _ -> ok
   end,
   Result = ejabberd_hooks:run_fold(groupchat_presence_hook, Server, [], [Presence]),
   FromChat = jid:replace_resource(To,<<"Group">>),
@@ -379,25 +359,19 @@ answer_presence(Presence) ->
 
 answer_presence(From, To, SubEls)->
   ChatJid = jid:to_string(jid:make(To#jid.luser,To#jid.lserver,<<>>)),
-  Resource = From#jid.lresource,
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
-  IsExist = mod_groups_users:check_if_exist(Server,ChatJid,User),
-  Key = lists:keyfind(vcard_xupdate,1, SubEls),
-  Collect = lists:keyfind(collect,1, SubEls),
-  case Collect of
-    false ->
-      ok;
-    _ ->
-      {collect,CStatus} = Collect,
-      case CStatus of
-        <<"false">> ->
-          mod_groups_inspector:block_parse_chat(Server,User,ChatJid);
-        <<"true">> ->
-          mod_groups_inspector:unblock_parse_chat(Server,User,ChatJid)
-      end
+  case lists:keyfind(collect, 1, SubEls) of
+    {collect, <<"false">>} ->
+      mod_groups_inspector:block_parse_chat(Server,User,ChatJid);
+    {collect, <<"true">>} ->
+      mod_groups_inspector:unblock_parse_chat(Server,User,ChatJid);
+    _ -> ok
   end,
-  NewHash = search_for_hash(Key),
+  NewHash = case lists:keyfind(vcard_xupdate,1, SubEls) of
+              false -> undefined;
+              Hash -> Hash#vcard_xupdate.hash
+            end,
   OldHash = mod_groups_vcard:get_vcard_avatar_hash(Server,User),
   IsAnon = mod_groups_chats:is_anonim(Server,ChatJid),
   case NewHash of
@@ -405,30 +379,21 @@ answer_presence(From, To, SubEls)->
     <<>> -> delete_photo_if_exist;
     undefined -> ok;
     _ when not IsAnon ->
-      ejabberd_router:route(jid:replace_resource(To,<<"Group">>),jid:remove_resource(From), mod_groups_vcard:get_vcard());
+      ejabberd_router:route(jid:replace_resource(To,<<"Group">>),
+        jid:remove_resource(From), mod_groups_vcard:get_vcard());
     _ ->
       ok
   end,
-  PeerToPeer = lists:keyfind(xabbergroup_peer,1, SubEls),
-  case PeerToPeer of
-    false ->
-      ok;
-    _ ->
-      {xabbergroup_peer,_JID,_ID,PeerState} = PeerToPeer,
-      ValidStates = [<<"true">>,<<"false">>],
-      case lists:member(PeerState,ValidStates) of
-        true when IsAnon ->
-          mod_groups_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
-        _ ->
-          ok
-      end
+  case lists:keyfind(xabbergroup_peer,1, SubEls) of
+    {xabbergroup_peer, _JID, _ID, PeerState} ->
+      mod_groups_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
+    _ -> ok
   end,
   FromChat = jid:replace_resource(To,<<"Group">>),
   Present = lists:keyfind(x_present,1, SubEls),
   NotPresent = lists:keyfind(x_not_present,1, SubEls),
-  PresentNum = get_present(ChatJid),
   if
-    Present == false andalso NotPresent == false andalso IsExist ->
+    Present == false andalso NotPresent == false ->
       mod_groups_vcard:make_chat_notification_message(Server,ChatJid,From),
       ejabberd_router:route(FromChat,From,form_presence(ChatJid,User)),
       if
@@ -436,16 +401,6 @@ answer_presence(From, To, SubEls)->
           mod_groups_vcard:maybe_update_avatar(From,To,Server);
         true -> ok
       end;
-    Present =/= false andalso NotPresent == false andalso IsExist ->
-      mod_groups_users:update_last_seen(Server,User,ChatJid),
-      case set_session(Resource, User, ChatJid) of
-        ok ->
-          send_notification(From, To, PresentNum, present);
-        _ ->
-          ignore
-      end;
-    Present == false andalso NotPresent =/= false andalso IsExist ->
-      change_present_state(To,From);
     true ->
       ok
   end.
@@ -455,6 +410,24 @@ get_present(Group) ->
   AllUsersSession = [{U,S}||{participant_session, _G, U, S, _R, _TS} <- Sessions],
   UniqueOnline = lists:usort(AllUsersSession),
   integer_to_binary(length(UniqueOnline)).
+
+change_present_state(GroupJID, UserJID, PresentType) ->
+  Resource = UserJID#jid.lresource,
+  Server = GroupJID#jid.lserver,
+  Group = jid:to_string(jid:remove_resource(GroupJID)),
+  Username = jid:to_string(jid:remove_resource(UserJID)),
+  PresentNum = get_present(Group),
+  Result  = case PresentType of
+              present ->
+                set_session(Resource, Username, Group);
+              not_present ->
+                delete_session(Resource,Username,Group)
+            end,
+  mod_groups_users:update_last_seen(Server, Username, Group),
+  case Result of
+    ok -> send_notification(UserJID, GroupJID, PresentNum, PresentType);
+    _ -> ignore
+  end.
 
 change_present_state(To,From) ->
   Resource = From#jid.lresource,
@@ -762,7 +735,7 @@ kill_zombies() ->
     SS = mnesia:select(participant_session,[{MatchHead, Guards, ['$_']}]),
     lists:foreach(fun(O) ->
       ?WARNING_MSG("Delete session older than 1 hour. Group: ~p; user: ~p",
-        [O#participant_session.group, #participant_session.username]),
+        [O#participant_session.group, O#participant_session.username]),
       mnesia:delete_object(O) end, SS)
        end,
   mnesia:transaction(FN),

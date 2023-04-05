@@ -194,6 +194,14 @@ make_action(#iq{to = To, type = set, sub_els = [#xmlel{name = <<"block">>,
       ejabberd_router:route(xmpp:make_iq_result(Iq))
   end;
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
+  attrs = [{<<"xmlns">>, ?NS_VERSION}]}]} = Iq) ->
+  Name = #xmlel{name = <<"name">>,children = [{xmlcdata, <<"XabberGroups">>}]},
+  Version = #xmlel{name = <<"version">>,children = [{xmlcdata, <<"0.1">>}]},
+  Result =   #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>, ?NS_VERSION}],
+    children = [Name, Version]
+  },
+  ejabberd_router:route(xmpp:make_iq_result(Iq,Result));
+make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"jabber:iq:last">>}]}]} = Iq) ->
   Result = mod_groups_vcard:iq_last(),
   ejabberd_router:route(xmpp:make_iq_result(Iq,Result));
@@ -326,7 +334,7 @@ make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
     <<"jabber:iq:last">>,<<"urn:xmpp:time">>,<<"jabber:iq:version">>,<<"urn:xmpp:avatar:metadata+notify">>,
     <<"https://xabber.com/protocol/groups">>,<<"https://xabber.com/protocol/groups#voice-permissions">>,
   <<"http://jabber.org/protocol/disco#info">>,<<"http://jabber.org/protocol/disco#items">>,
-    <<"http://jabber.org/protocol/caps">>],
+    <<"http://jabber.org/protocol/caps">>,<<"http://jabber.org/protocol/chatstates">>],
   Features = lists:map(fun(N) ->
     #xmlel{name = <<"feature">>,
       attrs = [{<<"var">>,N}]} end, lists:sort(FeatureList)

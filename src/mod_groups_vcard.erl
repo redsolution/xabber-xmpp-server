@@ -88,7 +88,7 @@ handle_request(Iq) ->
     DecodedIQ ->
       handle_decoded_request(DecodedIQ)
   catch _:_ ->
-    error
+    xmpp:make_error(Iq, xmpp:err_bad_request())
   end.
 
 handle_decoded_request(Iq) ->
@@ -155,7 +155,9 @@ handle_decoded_request(<<"urn:xmpp:avatar:metadata#",UserId/binary>>,
       end;
     _ ->
       xmpp:make_error(Iq,xmpp:err_item_not_found())
-  end.
+  end;
+handle_decoded_request(_, _, _, _, _, Iq) ->
+  xmpp:make_error(Iq,xmpp:err_feature_not_implemented()).
 
 check_data(not_exist,Iq) ->
   xmpp:make_error(Iq,xmpp:err_item_not_found());
@@ -354,7 +356,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
 notificate_all(ChatJID,Message) ->
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   FromChat = jid:replace_resource(ChatJID,?RESOURCE),
-  AllUsers = mod_groups_users:user_list_to_send(ChatJID#jid.lserver,Chat),
+  AllUsers = mod_groups_users:users_to_send(ChatJID#jid.lserver,Chat),
   mod_groups_messages:send_message(Message,AllUsers,FromChat).
 
 change_nick_in_vcard(LUser,LServer,NewNick) ->
@@ -1095,8 +1097,8 @@ del_dir_r(File) ->
 
 get_vcard(LUser,Server) ->
   Chat = jid:to_string(jid:make(LUser,Server)),
-  {selected,[{Name,Privacy,Index,Membership,Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
-    mod_groups_chats:get_all_information_chat(Chat,Server),
+  {Name, Privacy, Index, Membership, Desc, _ChatMessage, _Contacts,
+    _Domains, ParentChat, Status} = mod_groups_chats:get_info(Chat, Server),
   Parent = define_parent_chat(ParentChat),
   Members = mod_groups_chats:count_users(Server,Chat),
   HumanStatus = case ParentChat of

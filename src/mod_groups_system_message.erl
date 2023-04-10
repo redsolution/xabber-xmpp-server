@@ -107,53 +107,44 @@ groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
   IsStatusChanged =  proplists:get_value(status_changed, ChatProperties),
   IsPinnedChanged = proplists:get_value(pinned_changed, ChatProperties),
   IsOtherChanged = proplists:get_value(properties_changed, ChatProperties),
-  case IsNameChanged of
-    false when IsDescChanged == false andalso IsStatusChanged == false
-      andalso IsPinnedChanged == false andalso IsOtherChanged == false ->
+  case lists:keyfind(true, 2, ChatProperties) of
+    false ->
       ok;
     _ ->
-      %%  Label = mod_groups_chats:get_status_label_name(LServer,Chat,Status),
       ByUserCard = mod_groups_users:form_user_card(User,Chat),
-      UserID = case anon(ByUserCard) of
-                 public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-                   ByUserCard#xabbergroupchat_user_card.nickname;
-                 public ->
-                   jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
-                 anonim ->
-                   ByUserCard#xabbergroupchat_user_card.nickname
-               end,
-      MsgTxt = case IsNameChanged of
-                 true when IsOtherChanged =/= true andalso IsDescChanged =/= true
-                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-                   <<UserID/binary, " changed group name">>;
-                 true when IsOtherChanged == true andalso IsDescChanged =/= true
-                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-                   <<UserID/binary, " changed group name and updated propeties">>;
-                 true when IsOtherChanged =/= true andalso IsDescChanged == true
-                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-                   <<UserID/binary, " changed group name and description">>;
-                 true when IsOtherChanged == true andalso IsDescChanged == true
-                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-                   <<UserID/binary, " changed group name, description and updated properties">>;
-                 _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged == true
-                   andalso IsStatusChanged =/= true andalso IsPinnedChanged =/= true ->
-                   <<UserID/binary, " changed group description">>;
-                 _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged =/= true
-                   andalso IsStatusChanged =/= true andalso IsPinnedChanged == true ->
-                   <<UserID/binary, " pinned a message">>;
-                 _ when IsNameChanged =/= true andalso IsOtherChanged =/= true andalso IsDescChanged =/= true
-                   andalso IsStatusChanged == true andalso IsPinnedChanged =/= true ->
+      {Name, Anonymous, _Search, _Model, _Desc, Message, _Contacts,
+        _Domains, _Parent, _Status} = mod_groups_chats:get_info(Chat, LServer),
+      UserID = ByUserCard#xabbergroupchat_user_card.nickname,
+      Txt = if
+              IsNameChanged andalso not IsOtherChanged andalso not IsDescChanged
+                andalso not IsStatusChanged andalso not IsPinnedChanged ->
+                <<" changed group name">>;
+              IsNameChanged andalso IsOtherChanged andalso not IsDescChanged
+                andalso not IsStatusChanged andalso not IsPinnedChanged ->
+                <<" changed group name and updated propeties">>;
+              IsNameChanged andalso IsDescChanged andalso not IsOtherChanged
+                andalso not IsStatusChanged andalso IsPinnedChanged ->
+                <<" changed group name and description">>;
+              IsNameChanged andalso IsOtherChanged andalso IsDescChanged
+                andalso not IsStatusChanged andalso not IsPinnedChanged ->
+                <<" changed group name, description and updated properties">>;
+              not IsNameChanged andalso IsDescChanged andalso not IsOtherChanged
+                andalso not IsStatusChanged andalso not IsPinnedChanged ->
+                <<" changed group description">>;
+              not IsNameChanged andalso IsPinnedChanged andalso not IsOtherChanged
+                andalso not IsDescChanged andalso not IsStatusChanged ->
+                <<" pinned a message">>;
+              not IsNameChanged andalso IsStatusChanged andalso  not IsOtherChanged
+                andalso not IsDescChanged andalso not IsPinnedChanged ->
                    HumanStatus = mod_groups_chats:define_human_status(LServer, Chat, Status),
-                   <<UserID/binary, " changed group status to ", HumanStatus/binary>>;
-                 _ ->
-                   <<UserID/binary, " updated group properties">>
+                   <<" changed group status to ", HumanStatus/binary>>;
+              true->
+                   <<" updated group properties">>
                end,
+      MsgTxt = <<UserID/binary, Txt/binary>>,
       Body = [#text{lang = <<>>,data = MsgTxt}],
       X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
       By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
-
-      {selected,[{Name,Anonymous,_Search,_Model,_Desc,Message,_ContactList,_DomainList,_Status}]} =
-        mod_groups_chats:get_information_of_chat(Chat,LServer),
       Group_X = #xabbergroupchat_x{
         xmlns = ?NS_GROUPCHAT,
         members = mod_groups_chats:count_users(LServer,Chat),
@@ -231,8 +222,8 @@ chat_created(LServer,User,Chat,Lang) ->
              anonim ->
                X#xabbergroupchat_user_card.nickname
            end,
-  {selected,[{Name,Anonymous,Search,Model,Desc,_Message,_ContactList,_DomainList,_ParentChat}]} =
-    mod_groups_chats:get_detailed_information_of_chat(Chat,LServer),
+  {Name, Anonymous, Search, Model, Desc, _ChatMessage, _Contacts,
+    _Domains, _Parent, _Status} = mod_groups_chats:get_info(Chat, LServer),
   Txt =  <<"created ",Anonymous/binary," group">>,
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
@@ -544,7 +535,7 @@ new_restriction_text(Restrictions) ->
 
 send_presences(Server,Chat) ->
   To = jid:from_string(Chat),
-  Users = mod_groups_users:user_list_to_send(Server,Chat),
+  Users = mod_groups_users:users_to_send(Server,Chat),
   FromChat = jid:replace_resource(To,<<"Group">>),
   mod_groups_presence:send_presence(mod_groups_presence:form_presence(Chat),Users,FromChat).
 
@@ -559,15 +550,15 @@ send_to_all(Chat,Stanza) ->
   #message{meta = #{stanza_id := TS}} = Pkt2,
   #origin_id{id = OriginID} = xmpp:get_subtag(Pkt2,#origin_id{}),
   mod_groups_messages:set_displayed(ChatJID,ChatJID,TS,OriginID),
-  ListAll = mod_groups_users:user_list_to_send(Server,Chat),
-  {selected, NoReaders} = mod_groups_users:user_no_read(Server,Chat),
+  ListAll = mod_groups_users:users_to_send(Server,Chat),
+  NoReaders = mod_groups_users:users_no_read(Server,Chat),
   ListTo = ListAll -- NoReaders,
   case ListTo of
     [] ->
       ok;
     _ ->
       lists:foreach(fun(U) ->
-        {Member} = U,
+        Member = U,
         To = jid:from_string(Member),
         ejabberd_router:route(FromChat,To,Pkt2) end, ListTo)
   end.

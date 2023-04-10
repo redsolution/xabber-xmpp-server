@@ -143,7 +143,7 @@ revoke_invite(Chat,User) ->
 groupchat_changed(LServer, Chat, _User, ChatProperties, Status) ->
   ChatJID = jid:from_string(Chat),
   FromChat = jid:replace_resource(ChatJID,<<"Group">>),
-  Users = mod_groups_users:user_list_to_send(LServer,Chat),
+  Users = mod_groups_users:users_to_send(LServer,Chat),
   case Status of
     <<"inactive">> ->
       delete_all_sessions(Chat),
@@ -166,7 +166,7 @@ maybe_send_to_index(LServer, Chat, ChatProperties) ->
 send_presence(_Message,[],_From) ->
   ok;
 send_presence(Message,Users,From) ->
-  [{User}|RestUsers] = Users,
+  [User|RestUsers] = Users,
   To = jid:from_string(User),
   ejabberd_router:route(From,To,Message),
   send_presence(Message,RestUsers,From).
@@ -182,8 +182,8 @@ form_presence_with_type(LServer, User, Chat, Type) ->
   send_info_to_index(LServer,Chat),
   From = jid:replace_resource(ChatJID,<<"Group">>),
   To = jid:from_string(User),
-  {selected,[{Name,Anonymous,_Search,_Model,_Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
-    mod_groups_chats:get_all_information_chat(Chat,LServer),
+  {Name, Anonymous, _Search, _Model, _Desc, _ChatMessage, _Contacts,
+    _Domains, ParentChat, Status} = mod_groups_chats:get_info(Chat, LServer),
   Members = mod_groups_chats:count_users(LServer,Chat),
   {CollectState,P2PState} = mod_groups_inspector:get_collect_state(Chat,User),
   Hash = mod_groups_inspector:get_chat_avatar_id(Chat),
@@ -446,7 +446,7 @@ send_notification(From, To, PresentNum, PresentType) ->
   case ActualPresentNum of
     PresentNum  when PresentType == present ->
       %% notify only the connecting device about the actual count
-      User = [{jid:to_string(From)}],
+      User = [jid:to_string(From)],
       send_presence(form_presence(Chat),User,FromChat);
     PresentNum ->
       %% someone left, but the counter didn't change
@@ -460,8 +460,7 @@ send_notification(From, To, PresentNum, PresentType) ->
 get_users_with_session(Chat) ->
   SS = select_all_sessions(Chat),
   Users = [jid:make(U,S,R)||{participant_session, _, U, S, R, _} <- SS],
-%%  todo: refactoring
-  [{jid:to_string(J)} || J <- Users].
+  [jid:to_string(J) || J <- Users].
 
 get_global_index(Server) ->
   gen_mod:get_module_opt(Server, mod_groups, global_indexs).
@@ -493,8 +492,8 @@ send_presence_to_index(Server, Chat) ->
   GlobalIndexs =   get_global_index(Server),
   ChatJID = jid:from_string(Chat),
   lists:foreach(fun(Index) ->
-    {selected,[{Name,Anonymous,IndexValue,Model,Desc,Message,_ContactList,_DomainList,ParentChat,Status}]} =
-      mod_groups_chats:get_all_information_chat(Chat,Server),
+    {Name, Anonymous, IndexValue, Model, Desc, Message, _Contacts,
+      _Domains, ParentChat, Status} = mod_groups_chats:get_info(Chat, Server),
     {HumanStatus, Show} =  case ParentChat of
                              <<"0">> ->
                                mod_groups_chats:define_human_status_and_show(Server, Chat, Status);
@@ -559,8 +558,8 @@ form_presence(ChatJID, Show, Status) ->
 form_presence(Chat,User) ->
   ChatJID = jid:from_string(Chat),
   LServer = ChatJID#jid.lserver,
-  {selected,[{Name,Anonymous,_Search,_Model,_Desc,_Message,_ContactList,_DomainList,ParentChat,Status}]} =
-    mod_groups_chats:get_all_information_chat(Chat,LServer),
+  {Name, Anonymous, _Search, _Model, _Desc, _ChatMessage, _Contacts,
+    _Domains, ParentChat, Status} = mod_groups_chats:get_info(Chat, LServer),
   Members = mod_groups_chats:count_users(LServer,Chat),
   {CollectState,P2PState} = mod_groups_inspector:get_collect_state(Chat,User),
   Hash = mod_groups_inspector:get_chat_avatar_id(Chat),
@@ -607,8 +606,9 @@ form_presence(Chat,User) ->
 info_about_chat(ChatJid) ->
   S = jid:from_string(ChatJid),
   Server = S#jid.lserver,
-  case mod_groups_chats:get_all_information_chat(ChatJid,Server) of
-    {selected,[{Name,Anonymous,_,_,_,Message,_,_,ParentChat,Status}]} ->
+  case mod_groups_chats:get_info(ChatJid,Server) of
+    {Name, Anonymous, _Search, _Model, _Desc, Message, _Contacts,
+      _Domains, ParentChat, Status} ->
       info_about_chat(ChatJid, {Name, Anonymous, Message, ParentChat, Status});
     _ ->
       %% Happens when deleting a group

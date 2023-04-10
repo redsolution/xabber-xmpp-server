@@ -217,29 +217,12 @@ make_action(#iq{type = set, to = To, from = From,
   {<<"xmlns">>,?NS_GROUPCHAT}], children = _Children} = X]} = Iq) ->
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
-  ChatJid = jid:to_string(jid:remove_resource(To)),
-  IsOwner = mod_groups_restrictions:is_owner(Server,ChatJid,User),
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,ChatJid) of
-    true ->
-      Xa = xmpp:decode(X),
-      NewOwner = Xa#xabbergroupchat_update.owner,
-      case NewOwner of
-        undefined ->
-          case mod_groups_inspector:update_chat(Server,To,ChatJid,User,Xa) of
-            ok ->
-              ejabberd_router:route(xmpp:make_iq_result(Iq));
-            {error, Err} ->
-              ejabberd_router:route(xmpp:make_error(Iq,Err))
-          end;
-        _  when IsOwner == yes->
-          Expires = <<"0">>,
-          Rule1 = <<"owner">>,
-          IssuedBy = User,
-          mod_groups_restrictions:insert_rule(Server,ChatJid,NewOwner,Rule1,Expires,IssuedBy),
-          mod_groups_restrictions:delete_rule(Server,ChatJid,User,<<"owner">>)
-      end;
-    _ ->
-      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed()))
+  Group = jid:to_string(jid:remove_resource(To)),
+  case mod_groups_chats:handle_update_query(Server, Group, User, xmpp:decode(X)) of
+    ok ->
+      ejabberd_router:route(xmpp:make_iq_result(Iq));
+    {error, Err} ->
+      ejabberd_router:route(xmpp:make_error(Iq,Err))
   end;
 make_action(#iq{type = set, sub_els = [#xmlel{name = <<"pubsub">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/pubsub">>}]}]} = Iq) ->
@@ -326,8 +309,8 @@ make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/disco#info">>}]}]} = Iq) ->
   ChatJID = jid:to_string(jid:tolower(jid:remove_resource(To))),
   Server = To#jid.lserver,
-  {selected,[{Name, Anonymous, _Search, Model, Desc, _, _, _, _}]} =
-    mod_groups_chats:get_information_of_chat(ChatJID,Server),
+  {Name, Anonymous, _Search, Model, Desc, _ChatMessage, _Contacts,
+    _Domains, _Parent, _Status} = mod_groups_chats:get_info(ChatJID, Server),
   Identity = #xmlel{name = <<"identity">>,
   attrs = [{<<"category">>,<<"conference">>},{<<"type">>,<<"groupchat">>},{<<"name">>,Name}]},
   FeatureList = [<<"urn:xmpp:avatar:metadata">>,<<"urn:xmpp:avatar:data">>,

@@ -42,6 +42,7 @@
   form_user_card/2,
   form_user_updated/2,
   user_list_to_send/2,
+  users_to_send/2,
   form_kicked/2,
   add_user/6,
   delete_user/2,
@@ -54,6 +55,7 @@
   subscribe_user/2,
   update_last_seen/3,
   get_user_id/3,
+  users_no_read/2,
   get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/4,
   update_user_status/3, user_no_read/2, get_users_page/3, get_nick_in_chat/3, get_user_by_id_and_allow_to_invite/3,
   pre_approval/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2, add_wait_for_vcard/2, change_peer_to_peer_invitation_state/4, check_if_unique/5
@@ -463,12 +465,15 @@ is_anon_card(UserCard) ->
   end.
 
 form_user_card(User,Chat) ->
-  {Role,UserJID,Badge,UserId,Nick,AvatarEl,IsAnon} = get_user_info(User,Chat),
-  case IsAnon of
-    false ->
-      #xabbergroupchat_user_card{role = Role, jid = UserJID, badge = Badge, id = UserId, nickname = Nick, avatar = AvatarEl};
-    _ ->
-      #xabbergroupchat_user_card{role = Role, badge = Badge, id = UserId, nickname = Nick, avatar = AvatarEl}
+  case get_user_info(User,Chat) of
+    error ->
+      #xabbergroupchat_user_card{};
+    {Role, UserJID, Badge, UserId, Nick, AvatarEl, false} ->
+      #xabbergroupchat_user_card{role = Role, jid = UserJID,
+        badge = Badge, id = UserId, nickname = Nick, avatar = AvatarEl};
+    {Role, _UserJID, Badge, UserId, Nick, AvatarEl, true} ->
+      #xabbergroupchat_user_card{role = Role, badge = Badge,
+        id = UserId, nickname = Nick, avatar = AvatarEl}
   end.
 
 form_user_updated(User,Chat) ->
@@ -507,6 +512,7 @@ add_user_to_db(Server, User, Role, Group, Subs, InvitedBy) ->
         "invited_by=%(InvitedBy)s"
       ])).
 
+%% for backward compatibility
 user_list_to_send(Server, Groupchat) ->
  case ejabberd_sql:sql_query(
     Server,
@@ -520,6 +526,15 @@ user_list_to_send(Server, Groupchat) ->
      []
  end.
 
+users_to_send(Server, Group) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s from groupchat_users "
+    " where chatgroup=%(Group)s and subscription='both'")) of
+    {selected, Users} -> [U || {U} <- Users];
+    _ -> []
+  end.
+
 change_subscription(Server,Chat,Username,State) ->
   case ?SQL_UPSERT(Server, "groupchat_users",
     ["!username=%(Username)s",
@@ -532,35 +547,51 @@ change_subscription(Server,Chat,Username,State) ->
       {error, db_failure}
   end.
 
-get_user_rules(Server,User,Chat) ->
+get_user_info(Server, User, Group) ->
+  F = fun () ->
+   case get_user_info_t(User, Group) of
+     {selected, _, [Info]} ->
+       Role = get_user_role_t(User, Group),
+       Info ++ [Role];
+     _ ->
+       {error, not_exist}
+   end end,
+  case ejabberd_sql:sql_transaction(Server, F) of
+    {atomic, Res} -> replace_nulls(Res);
+    {aborted, _Reason} -> {error, db_failure}
+  end.
+
+get_user_info_t(User, Group) ->
+  ejabberd_sql:sql_query_t(
+  [<<"select groupchat_users.username as jid, "
+  " groupchat_users.badge, groupchat_users.id, "
+  " groupchat_users_vcard.givenfamily as vcard_givenfamily, "
+  " groupchat_users_vcard.fn as vcard_fn, "
+  " groupchat_users_vcard.nickname as vcard_nick, "
+  "  groupchat_users.nickname as nick "
+  " from groupchat_users LEFT JOIN groupchat_users_vcard "
+  " ON groupchat_users_vcard.jid = groupchat_users.username "
+  " where groupchat_users.chatgroup = '">>,Group,<<"' and "
+  " groupchat_users.username = '">>,User,<<"'">>]).
+
+get_user_role_t(User, Group) ->
   TS = now_to_timestamp(now()),
-ejabberd_sql:sql_query(
-Server,
-[
-<<"select groupchat_users.username,groupchat_users.badge,groupchat_users.id,
-  groupchat_users.chatgroup,groupchat_policy.right_name,groupchat_rights.description,
-  groupchat_rights.type, groupchat_users.subscription,
-  groupchat_users_vcard.givenfamily,groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,groupchat_users.nickname,
-  groupchat_policy.valid_until,
-  COALESCE(to_char(groupchat_policy.issued_at, 'YYYY-MM-DD hh24:mi:ss')),
-  groupchat_policy.issued_by,groupchat_users_vcard.image,groupchat_users.avatar_id,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DDZhh24:mi:ssT'))
-  from ((((groupchat_users LEFT JOIN  groupchat_policy on
-  groupchat_policy.username = groupchat_users.username and
-  groupchat_policy.chatgroup = groupchat_users.chatgroup)
-  LEFT JOIN groupchat_rights on
-  groupchat_rights.name = groupchat_policy.right_name and (groupchat_policy.valid_until = 0 or groupchat_policy.valid_until > ">>,integer_to_binary(TS) ,<<" ) )
-  LEFT JOIN groupchat_users_vcard ON groupchat_users_vcard.jid = groupchat_users.username)
-  LEFT JOIN groupchat_users_info ON groupchat_users_info.username = groupchat_users.username and
-   groupchat_users_info.chatgroup = groupchat_users.chatgroup)
-  where groupchat_users.chatgroup = ">>,
-<<"'">>,Chat,<<"' and groupchat_users.username =">>,
-<<"'">>, User, <<"'">>,
-<<"ORDER BY groupchat_users.username
-      ">>
-])
-.
+  Rights =  case ejabberd_sql:sql_query_t(
+    ?SQL("select @(right_name)s,@(type)s from groupchat_policy "
+    " left join groupchat_rights on groupchat_rights.name = right_name "
+    " where username=%(User)s and chatgroup=%(Group)s "
+    " and (valid_until = 0 or valid_until > %(TS)d )")) of
+              {selected, Res} -> Res;
+              _ -> []
+            end,
+  case lists:keyfind(<<"owner">>, 1, Rights) of
+    false ->
+      case lists:keyfind(<<"permission">>, 2, Rights) of
+        false -> <<"member">>;
+        _ -> <<"admin">>
+      end;
+    _ -> <<"owner">>
+  end.
 
 
 get_chat_version(Server,Chat) ->
@@ -806,45 +837,42 @@ convert_from_datetime_to_unix_time(DateTime) ->
 get_user_info(User,Chat) ->
   ChatJID = jid:from_string(Chat),
   Server = ChatJID#jid.lserver,
-  IsAnon = mod_groups_chats:is_anonim(Server,Chat),
-  {selected,_Tables,Items} = get_user_rules(Server,User,Chat),
-  [Item|_] = Items,
-  [Username,Badge,UserId,Chat,_Rule,_RuleDesc,_Type,_Subscription,GV,FN,NickVcard,NickChat,_ValidFrom,_IssuedAt,_IssuedBy,_VcardImage,_Avatar,_LastSeen] = Item,
-  UserRights = [{_R,_RD,T,_VF,_ISA,_ISB}||[UserS,_Badge,_UID,_C,_R,_RD,T,_S,_GV,_FN,_NV,_NC,_VF,_ISA,_ISB,_VI,_AV,_LS] <-Items, UserS == Username, T == <<"permission">> orelse T == <<"restriction">>],
-  Nick = case nick(GV,FN,NickVcard,NickChat,IsAnon) of
-           empty when not IsAnon ->
-             Username;
-           empty when IsAnon ->
-             insert_incognito_nickname(Server,Username,Chat,UserId);
-           {ok,Value} ->
-             Value;
-           _ ->
-             <<>>
-         end,
-  Role = calculate_role(UserRights),
-  UserJID = jid:from_string(User),
-  AvatarEl = mod_groups_vcard:get_photo_meta(Server,Username,Chat),
-  BadgeF = validate_badge_and_nick(Server,Chat,User,Nick,Badge),
-  {Role,UserJID,BadgeF,UserId,Nick,AvatarEl,IsAnon}.
-
-nick(GV,FN,NickVcard,NickChat,IsAnon) ->
-  case NickChat of
-    _ when (GV == null orelse GV == <<>>)
-      andalso (FN == null orelse FN == <<>>)
-      andalso (NickVcard == null orelse NickVcard == <<>>)
-      andalso (NickChat == null orelse NickChat == <<>>)->
-      empty;
-    _  when NickChat =/= null andalso NickChat =/= <<>>->
-      {ok,NickChat};
-    _  when NickVcard =/= null andalso NickVcard =/= <<>> andalso not IsAnon ->
-      {ok,NickVcard};
-    _  when GV =/= null andalso GV =/= <<>> andalso not IsAnon ->
-      {ok,GV};
-    _  when FN =/= null andalso FN =/= <<>> andalso not IsAnon ->
-      {ok,FN};
+  case get_user_info(Server, User, Chat) of
+    [Username, Badge, UserId, GV, FN, NickVcard, NickChat, Role] ->
+      IsAnon = mod_groups_chats:is_anonim(Server,Chat),
+      Nick = case nick(GV,FN,NickVcard,NickChat,IsAnon) of
+               empty when not IsAnon ->
+                 Username;
+               empty when IsAnon ->
+                 ?WARNING_MSG("Empty empty nickname for
+                  the user ~p in group: ~p",[User, Chat]),
+                 insert_incognito_nickname(Server,Username,Chat,UserId);
+               {ok,Value} ->
+                 Value;
+               _ ->
+                 <<>>
+             end,
+      UserJID = jid:from_string(User),
+      AvatarEl = mod_groups_vcard:get_photo_meta(Server,Username,Chat),
+      BadgeF = validate_badge_and_nick(Server,Chat,User,Nick,Badge),
+      {Role, UserJID, BadgeF, UserId, Nick, AvatarEl, IsAnon};
     _ ->
-      empty
+      error
   end.
+
+
+nick(<<>>, <<>>, <<>>, <<>>, _IsAnon) ->
+  empty;
+nick(_, _, _, NickChat, _) when NickChat =/= <<>> ->
+  {ok,NickChat};
+nick(_, _, NickVcard, _, false) when NickVcard =/= <<>> ->
+  {ok,NickVcard};
+nick(GV, _, _, _, false) when GV =/= <<>> ->
+  {ok,GV};
+nick(_, FN, _, _, false) when FN =/= <<>> ->
+  {ok,FN};
+nick(_GV, _FN, _NickVcard, _NickChat, _IsAnon) ->
+  empty.
 
 validate_badge_and_nick(LServer,Chat,User,Nick,Badge) ->
   case check_if_unique(LServer,Chat,User,Nick,Badge) of
@@ -893,21 +921,6 @@ check_if_unique(LServer,Chat,User,Nick,Badge) ->
       [B || {B,_N} <- List, B == Badge];
     _ ->
       []
-  end.
-
-calculate_role(UserPerm) ->
-  IsOwner = [R||{R,_RD,_T,_VF,_IssiedAt,_IssiedBy} <-UserPerm, R == <<"owner">>],
-  case length(IsOwner) of
-    0 ->
-      IsAdmin = [T||{_R,_RD,T,_VF,_VU,_S} <-UserPerm, T == <<"permission">>],
-      case length(IsAdmin) of
-        0 ->
-          <<"member">>;
-        _ ->
-          <<"admin">>
-      end;
-    _ ->
-      <<"owner">>
   end.
 
 validate_data(_Acc, _LServer,_Chat,_Admin,_ID,undefined, undefined,_Lang) ->
@@ -1084,12 +1097,23 @@ update_user(User, LServer,Chat, _Admin,_ID,Nickname,Badge,_Lang) ->
   insert_nickname(LServer,User,Chat,Nickname),
   {User,UserCard}.
 
+%% for backward compatibility
 user_no_read(Server,Chat) ->
   TS = now_to_timestamp(now()),
   ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(username)s from groupchat_policy where chatgroup=%(Chat)s and right_name='read-messages'
     and (valid_until = 0 or valid_until > %(TS)d )")).
+
+users_no_read(Server,Chat) ->
+  TS = now_to_timestamp(now()),
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s from groupchat_policy where chatgroup=%(Chat)s and right_name='read-messages'
+    and (valid_until = 0 or valid_until > %(TS)d )")) of
+    {selected, Users} -> [U || {U} <- Users];
+    _ -> []
+  end.
 
 get_nick_in_chat(Server,User,Chat) ->
   case ejabberd_sql:sql_query(
@@ -1549,7 +1573,7 @@ get_user_from_chat(LServer,Chat,User,ID) ->
     {selected, _, []} -> [];
     {selected, _, [UserInfo]}->
       IsAnon = mod_groups_chats:is_anonim(LServer,Chat),
-      [Username,Id,Badge,NickChat,Subscription,GF,FullName,NickVcard,LastSeen] = UserInfo,
+      [Username,Id,Badge,NickChat,Subscription,GF,FullName,NickVcard,LastSeen] = replace_nulls(UserInfo),
       Nick = case nick(GF,FullName,NickVcard,NickChat,IsAnon) of
                empty when not IsAnon ->
                  Username;
@@ -1563,13 +1587,9 @@ get_user_from_chat(LServer,Chat,User,ID) ->
       Role = calculate_role(LServer,Username,Chat),
       AvatarEl = mod_groups_vcard:get_photo_meta(LServer,Username,Chat),
       BadgeF = validate_badge_and_nick(LServer,Chat,Username,Nick,Badge),
-      S = mod_groups_presence:select_sessions(Username,Chat),
-      L = length(S),
-      Present = case L of
-                  0 ->
-                    LastSeen;
-                  _ ->
-                    undefined
+      Present = case mod_groups_presence:select_sessions(Username,Chat) of
+                  [] -> LastSeen;
+                  _ -> undefined
                 end,
       UserCard = #xabbergroupchat_user_card{subscription = Subscription, id = Id, nickname = Nick,
         role = Role, avatar = AvatarEl, badge = BadgeF, present = Present},
@@ -1771,3 +1791,8 @@ get_all_participants(LServer,Chat) ->
 
 now_to_timestamp({MSec, Sec, _USec}) ->
   (MSec * 1000000 + Sec).
+
+replace_nulls(List) ->
+  lists:map(fun(null) -> <<>>;
+               (V) -> V
+            end, List).

@@ -46,7 +46,7 @@
   chat_information/9,
   block_parse_chat/3,
   unblock_parse_chat/3,
-  update_chat/5,
+%%  update_chat/5,
   kick_user/3,
   update_chat_avatar_id/3,
   get_chat_avatar_id/1,
@@ -71,29 +71,29 @@ depends(_Host, _Opts) -> [].
 
 mod_options(_Opts) -> [].
 
-update_chat(Server,To,Chat,User,Xa) ->
-  {selected,[{_Name,_Anonymous,_Search,_Model,_Desc,ChatMessage,_ContactList,_DomainList_,Status}]} =
-    mod_groups_chats:get_information_of_chat(Chat,Server),
-  case Status of
-    <<"inactive">> ->
-      {error, xmpp:err_not_allowed(<<"You need to active group">>,<<"en">>)};
-    _ ->
-      Pinned = case Xa#xabbergroupchat_update.pinned of
-                 #xabbergroupchat_pinned_message{cdata = Cdata} ->
-                   Cdata;
-                 _ ->
-                   undefined
-               end,
-      NewMessage = set_message(ChatMessage,Pinned),
-      mod_groups_chats:update_pinned(Server,Chat,NewMessage),
-      UpdatePresence = mod_groups_presence:form_presence(Chat),
-      IsPinnedChanged = {pinned_changed, mod_groups_chats:is_value_changed(ChatMessage,NewMessage)},
-      Properties = [IsPinnedChanged],
-      ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
-      AllUsers = mod_groups_users:user_list_to_send(Server,Chat),
-      FromChat = jid:replace_resource(To,<<"Group">>),
-      mod_groups_presence:send_presence(UpdatePresence,AllUsers,FromChat)
-  end.
+%%update_chat(Server,To,Chat,User,Xa) ->
+%%  {selected,[{_Name,_Anonymous,_Search,_Model,_Desc,ChatMessage,_ContactList,_DomainList_,Status}]} =
+%%    mod_groups_chats:get_information_of_chat(Chat,Server),
+%%  case Status of
+%%    <<"inactive">> ->
+%%      {error, xmpp:err_not_allowed(<<"You need to active group">>,<<"en">>)};
+%%    _ ->
+%%      Pinned = case Xa#xabbergroupchat_update.pinned of
+%%                 #xabbergroupchat_pinned_message{cdata = Cdata} ->
+%%                   Cdata;
+%%                 _ ->
+%%                   undefined
+%%               end,
+%%      NewMessage = set_message(ChatMessage,Pinned),
+%%      mod_groups_chats:update_pinned(Server,Chat,NewMessage),
+%%      UpdatePresence = mod_groups_presence:form_presence(Chat),
+%%      IsPinnedChanged = {pinned_changed, mod_groups_chats:is_value_changed(ChatMessage,NewMessage)},
+%%      Properties = [IsPinnedChanged],
+%%      ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
+%%      AllUsers = mod_groups_users:user_list_to_send(Server,Chat),
+%%      FromChat = jid:replace_resource(To,<<"Group">>),
+%%      mod_groups_presence:send_presence(UpdatePresence,AllUsers,FromChat)
+%%  end.
 
 %%%%
 %%  Search for group chats
@@ -322,15 +322,15 @@ set_value(Default,Value) ->
       Value
   end.
 
-set_message(Default,Value) ->
-  case Value of
-    undefined ->
-      Default;
-    <<>> ->
-      0;
-    _ ->
-      Value
-  end.
+%%set_message(Default,Value) ->
+%%  case Value of
+%%    undefined ->
+%%      Default;
+%%    <<>> ->
+%%      0;
+%%    _ ->
+%%      Value
+%%  end.
 
 %% internal functions
 remove_invite(Server,User,Chat) ->
@@ -352,8 +352,8 @@ remove_invite_result(Result, User, Chat) ->
       From = jid:from_string(Chat),
       Unsubscribe = mod_groups_presence:form_unsubscribe_presence(),
       Unavailable = mod_groups_presence:form_presence_unavailable(),
-      mod_groups_presence:send_presence(Unsubscribe,[{User}],From),
-      mod_groups_presence:send_presence(Unavailable,[{User}],From),
+      mod_groups_presence:send_presence(Unsubscribe,[User],From),
+      mod_groups_presence:send_presence(Unavailable,[User],From),
       ok;
     _ ->
       {error, not_found}
@@ -376,8 +376,8 @@ case ejabberd_sql:sql_query(
     Unavailable = mod_groups_presence:form_presence_unavailable(),
     ejabberd_router:route(Msg),
     mod_groups_presence:delete_all_user_sessions(User,Chat),
-    mod_groups_presence:send_presence(Unsubscribe,[{User}],FromChat),
-    mod_groups_presence:send_presence(Unavailable,[{User}],FromChat);
+    mod_groups_presence:send_presence(Unsubscribe,[User],FromChat),
+    mod_groups_presence:send_presence(Unavailable,[User],FromChat);
   _ ->
     nothing
 end.

@@ -35,16 +35,16 @@
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 -export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all/1, get_all_info/3,
-  get_count_chats/1, get_detailed_information_of_chat/2, get_type_and_parent/2]).
+  get_count_chats/1, get_type_and_parent/2]).
 
 -export([check_creator/4, check_user/4, check_chat/4,
   create_peer_to_peer/4, send_invite/4, check_if_users_invited/4,
   check_if_peer_to_peer_exist/4, groupchat_exist/2, create_groupchat/13]).
 
--export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5,
+-export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5, handle_update_query/4,
   change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5,
-  get_chat_active/2, get_information_of_chat/2, count_users/2, get_all_information_chat/2,
-  status_options/2, get_name_desc/2, get_status_label_name/3, is_value_changed/2, define_human_status/3]).
+  get_chat_active/2, get_info/2, count_users/2,
+  status_options/2, get_name_desc/2, get_status_label_name/3,define_human_status/3]).
 
 -export([parse_status_query/2, filter_fixed_fields/1, define_human_status_and_show/3, update_pinned/3]).
 % Status hooks
@@ -194,6 +194,43 @@ check_user_rights(_Acc,User,Chat,Server) ->
       {stop, {error,xmpp:err_not_allowed(<<"You are not allowed to change group properties">>, <<"en">>)}}
   end.
 
+handle_update_query(_, _, _, #xabbergroupchat_update{owner = NewOwner})
+  when NewOwner /= undefined ->
+  %% It was deprecated a long time ago.
+  {error, xmpp:err_feature_not_implemented()};
+handle_update_query(Server, Group, User, XElem) ->
+  Pinned = case XElem#xabbergroupchat_update.pinned of
+             #xabbergroupchat_pinned_message{cdata = Cdata} ->
+               Cdata;
+             _ ->
+               undefined
+           end,
+  case Pinned of
+    undefined ->
+      {error, xmpp:err_bad_request()};
+    _ ->
+      change_pinned_msg(Server, Group, User, Pinned)
+  end.
+
+change_pinned_msg(Server, Group, User, MsgID) ->
+  {_, _, _, _, _, Message, _, _, _, Status} = get_info(Group, Server),
+  NewMessage = case MsgID of
+                 <<>> -> 0;
+                 _ -> binary_to_integer(MsgID)
+               end,
+  case {Status, NewMessage} of
+    {<<"inactive">>, _} ->
+      {error, xmpp:err_not_allowed(<<"You need to active group">>,
+        <<"en">>)};
+    {_, Message} ->
+      ok;
+    _ ->
+      update_pinned(Server, Group, NewMessage),
+      Properties = [{pinned_changed, true}],
+      ejabberd_hooks:run(groupchat_properties_changed,
+        Server,[Server, Group, User, Properties, Status]),
+      ok
+  end.
 
 %% groupchat_info_change hook
 check_user_permission(_Acc,User,Chat,_Server,_FS) ->
@@ -216,12 +253,11 @@ validate_fs(_Acc,_User, Chat, LServer,FS) ->
   end.
 
 change_chat(Acc,_User,Chat,Server,_FS) ->
-  {selected,[{Name,_Anonymous,Search,Model,Desc,ChatMessage,ContactList,DomainList,Status}]} =
-    get_information_of_chat(Chat,Server),
+  {Name, _Anonymous, Search, Model, Desc, ChatMessage,
+    ContactList, DomainList, _ParentChat, Status} = get_info(Chat, Server),
   NewStatus = set_value(Status,get_value(status,Acc)),
-  StatusState = is_value_changed(Status,NewStatus),
   case Status of
-    <<"inactive">> when StatusState == false ->
+    <<"inactive">> when Status == NewStatus ->
       {stop, {error, xmpp:err_not_allowed(<<"You need to active group">>,<<"en">>)}};
     _ ->
       NewName = set_value(Name,get_value(name,Acc)),
@@ -232,17 +268,17 @@ change_chat(Acc,_User,Chat,Server,_FS) ->
       NewIndex = set_value(Search,get_value(index,Acc)),
       NewContacts = set_value(ContactList,get_value(contacts,Acc)),
       NewDomains = set_value(DomainList,get_value(domains,Acc)),
-      IsNameChanged = {name_changed, is_value_changed(Name,NewName)},
-      IsDescChanged = {desc_changed, is_value_changed(Desc,NewDesc)},
-      IsStatusChanged = {status_changed, StatusState},
-      IsPinnedChanged = {pinned_changed, is_value_changed(ChatMessage,NewMessage)},
+      IsNameChanged = {name_changed, Name /= NewName},
+      IsDescChanged = {desc_changed, Desc /= NewDesc},
+      IsStatusChanged = {status_changed, Status /= NewStatus},
+      IsPinnedChanged = {pinned_changed, ChatMessage /= NewMessage},
       IsIndexChanged = {global_indexing_changed, is_index_changed(Search,NewIndex)},
       IsOtherChanged = {properties_changed,
         lists:member(true,[
-          is_value_changed(Search,NewIndex),
-          is_value_changed(Model,NewMembership),
-          is_value_changed(DomainList,NewDomains),
-          is_value_changed(ContactList,NewContacts)])},
+          Search /= NewIndex,
+          Model /= NewMembership,
+          DomainList /= NewDomains,
+          ContactList /= NewContacts])},
       ChangeDiff = [IsNameChanged,IsDescChanged,IsStatusChanged,IsPinnedChanged, IsIndexChanged, IsOtherChanged],
       update_groupchat(Server,Chat,NewName,NewDesc,NewMessage,NewStatus,NewMembership,NewIndex,NewContacts,NewDomains),
       {stop, {ok,form_chat_information(Chat,Server,result),NewStatus,ChangeDiff}}
@@ -255,14 +291,6 @@ is_index_changed(<<"global">>,<<"local">>) ->
   true;
 is_index_changed(_OldValue,_NewValue) ->
   false.
-
-is_value_changed(OldValue,NewValue) ->
-  case OldValue of
-    NewValue ->
-      false;
-    _ ->
-      true
-  end.
 
 check_creator(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
   ?DEBUG("start fold ~p ~p ~p", [LServer,Creator, ChatJID]),
@@ -638,18 +666,16 @@ get_chat_name(Chat,Server) ->
       <<>>
   end.
 
-get_detailed_information_of_chat(Chat,Server) ->
-  ejabberd_sql:sql_query(
+get_info(Group, Server) ->
+  case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(name)s,@(anonymous)s,@(searchable)s,@(model)s,@(description)s,@(message)d,@(contacts)s,@(domains)s,@(parent_chat)s
-    from groupchats where jid=%(Chat)s and %(Server)H")).
-
-get_all_information_chat(Chat,Server) ->
-  ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(name)s,@(anonymous)s,@(searchable)s,@(model)s,@(description)s,@(message)d,@(contacts)s,@(domains)s,
-    @(parent_chat)s,@(status)s
-    from groupchats where jid=%(Chat)s and %(Server)H")).
+    ?SQL("select @(name)s, @(anonymous)s, @(searchable)s, "
+    " @(model)s, @(description)s, @(message)d, @(contacts)s, "
+    " @(domains)s, @(parent_chat)s,@(status)s "
+    " from groupchats where jid=%(Group)s and %(Server)H")) of
+    {selected,[Info]} -> Info;
+    _ -> error
+  end.
 
 created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList) ->
   #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_GROUPCHAT_CREATE}],
@@ -661,8 +687,8 @@ form_chat_information(Chat,LServer,Type) ->
   #xdata{type = Type, title = <<"Group change">>, instructions = [<<"Fill out this form to change the group properties">>], fields = Fields}.
 
 get_chat_fields(Chat,LServer) ->
-  {selected,[{Name,_Anonymous,Search,Model,Desc,_Message,ContactList,DomainList,_ParentChat,_Status}]} =
-    get_all_information_chat(Chat,LServer),
+  {Name, _Anonymous, Search, Model, Desc, _ChatMessage, ContactList,
+    DomainList, _Parent, _Status} = get_info(Chat, LServer),
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
     #xdata_field{var = <<"pinned-message">>, type = hidden, values = [<<"true">>], label = <<"Change pinned message">>},
@@ -804,12 +830,6 @@ set_message(Default,Value) ->
     _ ->
       binary_to_integer(Value)
   end.
-
-get_information_of_chat(Chat,Server) ->
-  ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(name)s,@(anonymous)s,@(searchable)s,@(model)s,@(description)s,@(message)d,@(contacts)s,@(domains)s,@(status)s
-    from groupchats where jid=%(Chat)s and %(Server)H")).
 
 update_pinned(Server,Chat,Message) ->
   case ?SQL_UPSERT(Server, "groupchats",

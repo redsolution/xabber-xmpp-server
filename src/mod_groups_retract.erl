@@ -312,9 +312,9 @@ send_query(_Acc,{Server,UserJID,Chat,Version,_Less}) ->
 notificate(Server,Chat,Stanza) ->
   From = jid:from_string(Chat),
   FromChat = jid:replace_resource(From,<<"Group">>),
-  UserList = mod_groups_users:user_list_to_send(Server,Chat),
+  UserList = mod_groups_users:users_to_send(Server,Chat),
   lists:foreach(fun(U) ->
-    {Member} = U,
+    Member = U,
     To = jid:from_string(Member),
     PServer = To#jid.lserver,
     PUser = To#jid.luser,

@@ -175,7 +175,7 @@ send_message(Message,[],From) ->
   mod_groups_presence:send_message_to_index(From, Message),
   ok;
 send_message(Message,Users,From) ->
-  [{User}|RestUsers] = Users,
+  [User|RestUsers] = Users,
   To = jid:from_string(User),
   ejabberd_router:route(From,To,Message),
   send_message(Message,RestUsers,From).
@@ -213,19 +213,19 @@ do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headlin
       case El of
         {nick,Nickname} when Node == <<"http://jabber.org/protocol/nick">> ->
           mod_groups_vcard:change_nick_in_vcard(From#jid.luser,From#jid.lserver,Nickname),
-          AllUsers = mod_groups_users:user_list_to_send(From#jid.lserver,Chat),
+          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
           AvatarI = hd(AvatarInfo),
           IdAvatar = AvatarI#avatar_info.id,
-          AllUsers = mod_groups_users:user_list_to_send(From#jid.lserver,Chat),
+          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat),
           mod_groups_inspector:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar);
         {avatar_meta,_AvatarInfo,_Smth} ->
-          AllUsers = mod_groups_users:user_list_to_send(From#jid.lserver,Chat),
+          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         {nick,_Nickname} ->
-          AllUsers = mod_groups_users:user_list_to_send(From#jid.lserver,Chat),
+          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);
         _ ->
           ok
@@ -328,15 +328,15 @@ send_displayed_to_all(ChatJID,StanzaID,MessageID) ->
   Displayed = #message_displayed{id = MessageID, sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  ListAll = mod_groups_users:user_list_to_send(Server,Chat),
-  {selected, NoReaders} = mod_groups_users:user_no_read(Server,Chat),
+  ListAll = mod_groups_users:users_to_send(Server,Chat),
+  NoReaders = mod_groups_users:users_no_read(Server,Chat),
   ListTo = ListAll -- NoReaders,
   case ListTo of
     [] ->
       ok;
     _ ->
       lists:foreach(fun(U) ->
-        {Member} = U,
+        Member = U,
         To = jid:from_string(Member),
         M = #message{type = chat, from = ChatJID, to = To, sub_els = [Displayed], id=randoms:get_string()},
         ejabberd_router:route(M) end, ListTo)
@@ -410,9 +410,9 @@ transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
   Length = binary_length(Username),
   Reference = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, 'begin' = 0, 'end' = Length, sub_els = [UserCard]}]},
   NewBody = [#text{lang = <<>>,data = <<Username/binary, Text/binary >>}],
-  AllUsers = mod_groups_users:user_list_to_send(Server,Chat),
-  {selected, NoReaders} = mod_groups_users:user_no_read(Server,Chat),
-  UsersWithoutSender = AllUsers -- [{Jid}],
+  AllUsers = mod_groups_users:users_to_send(Server,Chat),
+  NoReaders = mod_groups_users:users_no_read(Server,Chat),
+  UsersWithoutSender = AllUsers -- [Jid],
   Users = UsersWithoutSender -- NoReaders,
   PktSanitarized1 = strip_x_elements(Pkt),
   PktSanitarized = strip_reference_elements(PktSanitarized1),

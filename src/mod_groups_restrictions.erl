@@ -34,7 +34,6 @@
 
 -export([
   get_rules/4,
-  get_user_rules/3,
   show_policy/2,
   insert_rule/6,
   upsert_rule/6,
@@ -197,36 +196,6 @@ get_rights(Server,User,Chat) ->
     Server,
     ?SQL("select @(right_name)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
     and (valid_until = 0 or valid_until > %(TS)d)")).
-
-get_user_rules(Server,User,Chat) ->
-  ejabberd_sql:sql_query(
-    Server,
-    [
-      <<"select groupchat_users.username,groupchat_users.badge,groupchat_users.id,
-  groupchat_users.chatgroup,groupchat_policy.right_name, groupchat_rights.description,
-  groupchat_rights.type, groupchat_users.subscription,
-  groupchat_users_vcard.givenfamily,groupchat_users_vcard.fn,
-  groupchat_users_vcard.nickname,groupchat_users.nickname,
-  groupchat_policy.valid_until,
-  COALESCE(to_char(groupchat_policy.issued_at, 'YYYY-MM-DD HH24:MI:SS')),
-  groupchat_policy.issued_by,groupchat_users_vcard.image,groupchat_users.avatar_id,
-  COALESCE(to_char(groupchat_users.last_seen, 'YYYY-MM-DD HH24:MI:SS'))
-  from ((((groupchat_users LEFT JOIN  groupchat_policy on
-  groupchat_policy.username = groupchat_users.username and
-  groupchat_policy.chatgroup = groupchat_users.chatgroup)
-  LEFT JOIN groupchat_rights on
-  groupchat_rights.name = groupchat_policy.right_name and
-  (groupchat_policy.valid_until = 0 or groupchat_policy.valid_until > %(TS)d))
-  LEFT JOIN groupchat_users_vcard ON groupchat_users_vcard.jid = groupchat_users.username)
-  LEFT JOIN groupchat_users_info ON groupchat_users_info.username = groupchat_users.username and
-   groupchat_users_info.chatgroup = groupchat_users.chatgroup)
-  where groupchat_users.subscription = 'both' and groupchat_users.chatgroup = ">>,
-      <<"'">>,Chat,<<"' and groupchat_users.username =">>,
-      <<"'">>, User, <<"'">>,
-      <<"ORDER BY groupchat_users.username
-      ">>
-    ])
-.
 
 show_permissions(Server,Chat) ->
   ejabberd_sql:sql_query(

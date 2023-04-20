@@ -138,20 +138,7 @@ depends(_Host, _Opts) ->
 -spec get_user_roster([#roster{}], {binary(), binary()}) -> [#roster{}].
 get_user_roster(Items, US) ->
     {U, S} = US,
-    DisplayedGroups = get_user_displayed_groups(US),
-    SRUsers = lists:foldl(fun (Group, Acc1) ->
-				  GroupName = get_group_name(S, Group),
-				  lists:foldl(fun (User, Acc2) ->
-						      if User == US -> Acc2;
-							 true ->
-							     dict:append(User,
-									 GroupName,
-									 Acc2)
-						      end
-					      end,
-					      Acc1, get_group_users(S, Group))
-			  end,
-			  dict:new(), DisplayedGroups),
+    SRUsers = get_sr_users(US),
     {NewItems1, SRUsersRest} = lists:mapfoldl(fun (Item,
 						   SRUsers1) ->
 						      {_, _, {U1, S1, _}} =
@@ -212,7 +199,7 @@ process_item(RosterItem, Host) ->
     NameTo = RosterItem#roster.name,
     USTo = {UserTo, ServerTo},
     DisplayedGroups = get_user_displayed_groups(USFrom),
-    CommonGroups = lists:filter(fun (Group) ->
+    CommonGroups = lists:filter(fun ({Group,_}) ->
 					is_user_in_group(USTo, Group, Host)
 				end,
 				DisplayedGroups),
@@ -220,8 +207,8 @@ process_item(RosterItem, Host) ->
       [] -> RosterItem;
       %% Roster item cannot be removed: We simply reset the original groups:
       _ when RosterItem#roster.subscription == remove ->
-	  GroupNames = lists:map(fun (Group) ->
-					 get_group_name(Host, Group)
+	  GroupNames = lists:map(fun ({Group, Opts}) ->
+					 get_opt(Opts, name, Group)
 				 end,
 				 CommonGroups),
 	  RosterItem#roster{subscription = both, ask = none,
@@ -230,7 +217,7 @@ process_item(RosterItem, Host) ->
       %% So each user can see the other
       _ ->
 	  case lists:subtract(RosterItem#roster.groups,
-			      CommonGroups)
+			      [G || {G,_} <- CommonGroups])
 	      of
 	    %% If it doesn't, then remove this user from any
 	    %% existing roster groups.
@@ -295,6 +282,11 @@ set_item(User, Server, Resource, Item) ->
 
 -spec get_jid_info({subscription(), ask(), [binary()]}, binary(), binary(), jid())
       -> {subscription(), ask(), [binary()]}.
+get_jid_info({both, none, Groups}, _User, _Server, _JID) ->
+  %% The contact is already in personal roster.
+  %% This may affect access rules based on shared roster groups
+  %% if the contact is both in personal roster and shared group.
+  {both, none, Groups};
 get_jid_info({Subscription, Ask, Groups}, User, Server,
 	     JID) ->
     LUser = jid:nodeprep(User),
@@ -302,18 +294,7 @@ get_jid_info({Subscription, Ask, Groups}, User, Server,
     US = {LUser, LServer},
     {U1, S1, _} = jid:tolower(JID),
     US1 = {U1, S1},
-    DisplayedGroups = get_user_displayed_groups(US),
-    SRUsers = lists:foldl(fun (Group, Acc1) ->
-				  lists:foldl(fun (User1, Acc2) ->
-						      dict:append(User1,
-								  get_group_name(LServer,
-										 Group),
-								  Acc2)
-					      end,
-					      Acc1,
-					      get_group_users(LServer, Group))
-			  end,
-			  dict:new(), DisplayedGroups),
+    SRUsers = get_sr_users(US),
     case dict:find(US1, SRUsers) of
       {ok, GroupNames} ->
 	  NewGroups = if Groups == [] -> GroupNames;
@@ -352,8 +333,8 @@ process_subscription(Direction, User, Server, JID,
 	jid:tolower(jid:remove_resource(JID)),
     US1 = {U1, S1},
     DisplayedGroups = get_user_displayed_groups(US),
-    SRUsers = lists:usort(lists:flatmap(fun (Group) ->
-						get_group_users(LServer, Group)
+    SRUsers = lists:usort(lists:flatmap(fun ({Group, Opts}) ->
+						get_group_users(LServer, Group, Opts)
 					end,
 					DisplayedGroups)),
     case lists:member(US1, SRUsers) of
@@ -397,13 +378,6 @@ get_user_groups(US) ->
     Mod = gen_mod:db_mod(Host, ?MODULE),
     Mod:get_user_groups(US, Host) ++ get_special_users_groups(Host).
 
-is_group_enabled(Host1, Group1) ->
-    {Host, Group} = split_grouphost(Host1, Group1),
-    case get_group_opts(Host, Group) of
-      error -> false;
-      Opts -> not lists:member(disabled, Opts)
-    end.
-
 %% @spec (Host::string(), Group::string(), Opt::atom(), Default) -> OptValue | Default
 get_group_opt(Host, Group, Opt, Default) ->
     case get_group_opts(Host, Group) of
@@ -421,16 +395,7 @@ get_online_users(Host) ->
 
 get_group_users(Host1, Group1) ->
     {Host, Group} = split_grouphost(Host1, Group1),
-    case get_group_opt(Host, Group, all_users, false) of
-      true -> ejabberd_auth:get_users(Host);
-      false -> []
-    end
-      ++
-      case get_group_opt(Host, Group, online_users, false) of
-	true -> get_online_users(Host);
-	false -> []
-      end
-	++ get_group_explicit_users(Host, Group).
+  get_group_users(Host, Group, get_group_opts(Host, Group)).
 
 get_group_users(Host, Group, GroupOpts) ->
     case proplists:get_value(all_users, GroupOpts, false) of
@@ -449,24 +414,44 @@ get_group_explicit_users(Host, Group) ->
     Mod = gen_mod:db_mod(Host, ?MODULE),
     Mod:get_group_explicit_users(Host, Group).
 
-get_group_name(Host1, Group1) ->
-    {Host, Group} = split_grouphost(Host1, Group1),
-    get_group_opt(Host, Group, name, Group).
+get_sr_users(US) ->
+  {_U, S} = US,
+  DisplayedGroups = get_user_displayed_groups(US),
+  lists:foldl(
+    fun ({Group, Opts}, Acc1) ->
+      GroupName = get_opt(Opts, name, Group),
+      lists:foldl(
+        fun (User, Acc2) ->
+          if User == US -> Acc2;
+            true ->
+              dict:append(User,
+                GroupName,
+                Acc2)
+          end
+        end,
+        Acc1, get_group_users(S, Group, Opts))
+    end,
+    dict:new(), DisplayedGroups).
+
+filter_disabled(Group, Opts) ->
+  case lists:member(disabled, Opts) of
+    true -> false;
+    _ -> {true, {Group, Opts}}
+  end.
 
 %% Get list of names of groups that have @all@/@online@/etc in the memberlist
 get_special_users_groups(Host) ->
-    lists:filter(fun (Group) ->
-			 get_group_opt(Host, Group, all_users, false) orelse
-			   get_group_opt(Host, Group, online_users, false)
-		 end,
-		 list_groups(Host)).
+	L = lists:filter(fun ({_Group, Opts}) ->
+    proplists:get_value(all_users, Opts, false) orelse
+      proplists:get_value(online_users, Opts, false)
+                   end, groups_with_opts(Host)),
+  [G || {G, _} <- L].
 
 %% Get list of names of groups that have @online@ in the memberlist
 get_special_users_groups_online(Host) ->
-    lists:filter(fun (Group) ->
-			 get_group_opt(Host, Group, online_users, false)
-		 end,
-		 list_groups(Host)).
+  lists:filter(fun ({_Group, Opts}) ->
+    proplists:get_value(online_users, Opts, false)
+                   end, groups_with_opts(Host)).
 
 %% Given two lists of groupnames and their options,
 %% return the list of displayed groups to the second list
@@ -509,25 +494,33 @@ get_user_displayed_groups(LUser, LServer, GroupsOpts) ->
 
 %% @doc Get the list of groups that are displayed to this user
 get_user_displayed_groups(US) ->
-    Host = element(2, US),
-    DisplayedGroups1 = lists:usort(lists:flatmap(fun
-						   (Group) ->
-						       case
-							 is_group_enabled(Host,
-									  Group)
-							   of
-							 true ->
-							     get_group_opt(Host,
-									   Group,
-									   displayed_groups,
-									   []);
-							 false -> []
-						       end
-						 end,
-						 get_user_groups(US))),
-    [Group
-     || Group <- DisplayedGroups1,
-	is_group_enabled(Host, Group)].
+  Host = element(2, US),
+  UserGroups1 =  get_user_groups(US),
+  AllGroups = groups_with_opts(Host),
+  UserGroups2 = lists:filter(
+    fun({G, Opts})->
+      lists:member(G, UserGroups1) andalso
+      not lists:member(disabled, Opts)
+    end, AllGroups),
+  DisplayedGroups1 = lists:usort(
+    lists:flatmap(
+      fun({_, Opts}) ->
+        get_opt(Opts, displayed_groups, [])
+      end, UserGroups2)),
+  lists:filtermap(
+    fun(G) ->
+      case lists:keyfind(G, 1, AllGroups) of
+        false ->
+          {Host1, Group1} = split_grouphost(Host, G),
+          case get_group_opts(Host1, Group1) of
+            error -> false;
+            Opts ->
+              filter_disabled(Group1, Opts)
+          end;
+        {_, Opts} ->
+          filter_disabled(G, Opts)
+      end
+    end, DisplayedGroups1).
 
 is_user_in_group(US, Group, Host) ->
     Mod = gen_mod:db_mod(Host, ?MODULE),
@@ -541,29 +534,28 @@ is_user_in_group(US, Group, Host) ->
 %% @spec (Host::string(), {User::string(), Server::string()}, Group::string()) -> {atomic, ok}
 add_user_to_group(Host, US, Group) ->
     {LUser, LServer} = US,
+    GroupOpts = get_group_opts(Host, Group),
     case ejabberd_regexp:run(LUser, <<"^@.+@\$">>) of
       match ->
-	  GroupOpts = mod_shared_roster:get_group_opts(Host, Group),
 	  MoreGroupOpts = case LUser of
 			    <<"@all@">> -> [{all_users, true}];
 			    <<"@online@">> -> [{online_users, true}];
 			    _ -> []
 			  end,
-	  mod_shared_roster:set_group_opts(Host, Group,
+	  set_group_opts(Host, Group,
 				   GroupOpts ++ MoreGroupOpts);
       nomatch ->
-	  DisplayedToGroups = displayed_to_groups(Group, Host),
-	  DisplayedGroups = get_displayed_groups(Group, LServer),
-	  push_user_to_displayed(LUser, LServer, Group, Host, both, DisplayedToGroups),
+    DisplayedToGroupsOpts = displayed_to_groups(Group, Host),
+	  DisplayedGroups = get_opt(GroupOpts, displayed_groups,[]),
+	  push_user_to_displayed(LUser, LServer, get_opt(GroupOpts, name, Group),
+      Host, both, DisplayedToGroupsOpts),
 	  push_displayed_to_user(LUser, LServer, Host, both, DisplayedGroups),
 	  Mod = gen_mod:db_mod(Host, ?MODULE),
 	  Mod:add_user_to_group(Host, US, Group)
     end.
 
 get_displayed_groups(Group, LServer) ->
-    GroupsOpts = groups_with_opts(LServer),
-    GroupOpts = proplists:get_value(Group, GroupsOpts, []),
-    proplists:get_value(displayed_groups, GroupOpts, []).
+    get_group_opt(LServer, Group, displayed_groups, []).
 
 push_displayed_to_user(LUser, LServer, Host, Subscription, DisplayedGroups) ->
     [push_members_to_user(LUser, LServer, DGroup, Host,
@@ -572,9 +564,9 @@ push_displayed_to_user(LUser, LServer, Host, Subscription, DisplayedGroups) ->
 
 remove_user_from_group(Host, US, Group) ->
     {LUser, LServer} = US,
+    GroupOpts = get_group_opts(Host, Group),
     case ejabberd_regexp:run(LUser, <<"^@.+@\$">>) of
       match ->
-	  GroupOpts = mod_shared_roster:get_group_opts(Host, Group),
 	  NewGroupOpts = case LUser of
 			   <<"@all@">> ->
 			       lists:filter(fun (X) -> X /= {all_users, true}
@@ -585,23 +577,23 @@ remove_user_from_group(Host, US, Group) ->
 					    end,
 					    GroupOpts)
 			 end,
-	  mod_shared_roster:set_group_opts(Host, Group, NewGroupOpts);
+	  set_group_opts(Host, Group, NewGroupOpts);
       nomatch ->
 	  Mod = gen_mod:db_mod(Host, ?MODULE),
 	  Result = Mod:remove_user_from_group(Host, US, Group),
-	  DisplayedToGroups = displayed_to_groups(Group, Host),
-	  DisplayedGroups = get_displayed_groups(Group, LServer),
-	  push_user_to_displayed(LUser, LServer, Group, Host, remove, DisplayedToGroups),
+	  DisplayedToGroupsOpts = displayed_to_groups(Group, Host),
+	  DisplayedGroups = get_opt(GroupOpts, displayed_groups, []),
+	  push_user_to_displayed(LUser, LServer, get_opt(GroupOpts, name, Group),
+      Host, remove, DisplayedToGroupsOpts),
 	  push_displayed_to_user(LUser, LServer, Host, remove, DisplayedGroups),
 	  Result
     end.
 
 push_members_to_user(LUser, LServer, Group, Host,
 		     Subscription) ->
-    GroupsOpts = groups_with_opts(LServer),
-    GroupOpts = proplists:get_value(Group, GroupsOpts, []),
+    GroupOpts = get_group_opts(LServer, Group),
     GroupName = proplists:get_value(name, GroupOpts, Group),
-    Members = get_group_users(Host, Group),
+    Members = get_group_users(Host, Group, GroupOpts),
     lists:foreach(fun ({U, S}) ->
 			  push_roster_item(LUser, LServer, U, S, GroupName,
 					   Subscription)
@@ -610,11 +602,17 @@ push_members_to_user(LUser, LServer, Group, Host,
 
 -spec register_user(binary(), binary()) -> ok.
 register_user(User, Server) ->
-    Groups = get_user_groups({User, Server}),
-    [push_user_to_displayed(User, Server, Group, Server,
-			    both, displayed_to_groups(Group, Server))
-     || Group <- Groups],
-    ok.
+  UserGroups1 =  get_user_groups({User, Server}),
+  AllGroups = groups_with_opts(Server),
+  Groups = lists:filter(
+    fun({G, _})->
+      lists:member(G, UserGroups1)
+    end, AllGroups),
+  [push_user_to_displayed(User, Server,
+    get_opt(Opts, name, Group), Server,
+    both, displayed_to_groups(Group, Server))
+    || {Group, Opts} <- Groups],
+  ok.
 
 -spec remove_user(binary(), binary()) -> ok.
 remove_user(User, Server) ->
@@ -646,15 +644,12 @@ push_user_to_members(User, Server, Subscription) ->
 		  end,
 		  lists:usort(SpecialGroups ++ UserGroups)).
 
-push_user_to_displayed(LUser, LServer, Group, Host, Subscription, DisplayedToGroupsOpts) ->
-    GroupsOpts = groups_with_opts(Host),
-    GroupOpts = proplists:get_value(Group, GroupsOpts, []),
-    GroupName = proplists:get_value(name, GroupOpts, Group),
-    [push_user_to_group(LUser, LServer, GroupD, Host,
-			GroupName, Subscription)
-     || GroupD <- DisplayedToGroupsOpts].
+push_user_to_displayed(LUser, LServer, GroupName, Host, Subscription, DisplayedToGroupsOpts) ->
+  [push_user_to_group(LUser, LServer, GroupD, Host,
+    GroupName, Subscription)
+    || GroupD <- DisplayedToGroupsOpts].
 
-push_user_to_group(LUser, LServer, Group, Host,
+push_user_to_group(LUser, LServer, {Group, Opts}, Host,
 		   GroupName, Subscription) ->
     lists:foreach(fun ({U, S})
 			  when (U == LUser) and (S == LServer) ->
@@ -663,18 +658,17 @@ push_user_to_group(LUser, LServer, Group, Host,
 			  push_roster_item(U, S, LUser, LServer, GroupName,
 					   Subscription)
 		  end,
-		  get_group_users(Host, Group)).
+		  get_group_users(Host, Group, Opts)).
 
 %% Get list of groups to which this group is displayed
 displayed_to_groups(GroupName, LServer) ->
     GroupsOpts = groups_with_opts(LServer),
-    Gs = lists:filter(fun ({_Group, Opts}) ->
+    lists:filter(fun ({_Group, Opts}) ->
 			 lists:member(GroupName,
 				      proplists:get_value(displayed_groups,
 							  Opts, []))
 		 end,
-		 GroupsOpts),
-    [Name || {Name, _} <- Gs].
+		 GroupsOpts).
 
 push_item(User, Server, Item) ->
     mod_roster:push_item(jid:make(User, Server),
@@ -705,8 +699,8 @@ unset_presence(LUser, LServer, Resource, Status) ->
     case length(Resources) of
       0 ->
 	  OnlineGroups = get_special_users_groups_online(LServer),
-	  lists:foreach(fun (OG) ->
-				push_user_to_displayed(LUser, LServer, OG,
+	  lists:foreach(fun ({OG, Opts}) ->
+				push_user_to_displayed(LUser, LServer, get_opt(Opts, name, OG),
 						       LServer, remove, displayed_to_groups(OG, LServer)),
 				push_displayed_to_user(LUser, LServer,
 						       LServer, remove, displayed_to_groups(OG, LServer))
@@ -739,7 +733,7 @@ webadmin_page(Acc, _, _) -> Acc.
 
 list_shared_roster_groups(Host, Query, Lang) ->
     Res = list_sr_groups_parse_query(Host, Query),
-    SRGroups = mod_shared_roster:list_groups(Host),
+    SRGroups = list_groups(Host),
     FGroups = (?XAE(<<"table">>, [],
 		    [?XE(<<"tbody">>,
 			 (lists:map(fun (Group) ->
@@ -790,15 +784,15 @@ list_sr_groups_parse_query(Host, Query) ->
 list_sr_groups_parse_addnew(Host, Query) ->
     case lists:keysearch(<<"namenew">>, 1, Query) of
       {value, {_, Group}} when Group /= <<"">> ->
-	  mod_shared_roster:create_group(Host, Group), ok;
+	  create_group(Host, Group), ok;
       _ -> error
     end.
 
 list_sr_groups_parse_delete(Host, Query) ->
-    SRGroups = mod_shared_roster:list_groups(Host),
+    SRGroups = list_groups(Host),
     lists:foreach(fun (Group) ->
 			  case lists:member({<<"selected">>, Group}, Query) of
-			    true -> mod_shared_roster:delete_group(Host, Group);
+			    true -> delete_group(Host, Group);
 			    _ -> ok
 			  end
 		  end,
@@ -808,14 +802,14 @@ list_sr_groups_parse_delete(Host, Query) ->
 shared_roster_group(Host, Group, Query, Lang) ->
     Res = shared_roster_group_parse_query(Host, Group,
 					  Query),
-    GroupOpts = mod_shared_roster:get_group_opts(Host, Group),
+    GroupOpts = get_group_opts(Host, Group),
     Name = get_opt(GroupOpts, name, <<"">>),
     Description = get_opt(GroupOpts, description, <<"">>),
     AllUsers = get_opt(GroupOpts, all_users, false),
     OnlineUsers = get_opt(GroupOpts, online_users, false),
     DisplayedGroups = get_opt(GroupOpts, displayed_groups,
 			      []),
-    Members = mod_shared_roster:get_group_explicit_users(Host,
+    Members = get_group_explicit_users(Host,
 						 Group),
     FMembers = iolist_to_binary(
                  [if AllUsers -> <<"@all@\n">>;
@@ -892,7 +886,7 @@ shared_roster_group_parse_query(Host, Group, Query) ->
 	  DispGroupsOpt = if DispGroups == [] -> [];
 			     true -> [{displayed_groups, DispGroups}]
 			  end,
-	  OldMembers = mod_shared_roster:get_group_explicit_users(Host,
+	  OldMembers = get_group_explicit_users(Host,
 							  Group),
 	  SJIDs = str:tokens(SMembers, <<", \r\n">>),
 	  NewMembers = lists:foldl(fun (_SJID, error) -> error;
@@ -927,7 +921,7 @@ shared_roster_group_parse_query(Host, Group, Query) ->
 	  RemovedDisplayedGroups = CurrentDisplayedGroups -- DispGroups,
 	  displayed_groups_update(OldMembers, RemovedDisplayedGroups, remove),
 	  displayed_groups_update(OldMembers, AddedDisplayedGroups, both),
-	  mod_shared_roster:set_group_opts(Host, Group,
+	  set_group_opts(Host, Group,
 				   NameOpt ++
 				     DispGroupsOpt ++
 				       DescriptionOpt ++
@@ -937,13 +931,13 @@ shared_roster_group_parse_query(Host, Group, Query) ->
 		 AddedMembers = NewMembers -- OldMembers,
 		 RemovedMembers = OldMembers -- NewMembers,
 		 lists:foreach(fun (US) ->
-				       mod_shared_roster:remove_user_from_group(Host,
+				       remove_user_from_group(Host,
 									US,
 									Group)
 			       end,
 			       RemovedMembers),
 		 lists:foreach(fun (US) ->
-				       mod_shared_roster:add_user_to_group(Host, US,
+				       add_user_to_group(Host, US,
 								   Group)
 			       end,
 			       AddedMembers),

@@ -630,7 +630,10 @@ route_probe_reply(From, #{jid := To,
 			    {LUser, LServer, R} when R /= LResource -> true;
 			    _ -> false
 			end,
-    Subscription = get_subscription(To, From),
+    Subscription = case jid:tolower(From) of
+			    {LUser, LServer, _} -> none;
+			    _ -> get_subscription(To, From)
+			end,
     if IsAnotherResource orelse
        Subscription == both orelse Subscription == from ->
 			Packet = xmpp:set_from_to(LastPres, To, From),

@@ -233,8 +233,7 @@ check_if_user_owner(_Acc, LServer, User, Chat) ->
 unsubscribe_all_for_delete(LServer,Chat) ->
   Users = get_all_participants(LServer,Chat),
   From = jid:from_string(Chat),
-  lists:foreach(fun(Participant) ->
-    To = jid:from_string(Participant),
+  lists:foreach(fun(To) ->
     ejabberd_router:route(#presence{type = unsubscribe,
       id = randoms:get_string(), from = From, to = To}),
     ejabberd_router:route(#presence{type = unsubscribed,
@@ -487,18 +486,23 @@ form_kicked(Users,Chat) ->
   ),
   #xabbergroupchat_kicked{users = UserCards}.
 
-% SQL functions
+users_to_send(Server, Group) ->
+  Users =  sql_users_to_send(Server, Group),
+  [jid:from_string(U) || {U} <- Users].
+
 add_user(Server, Member, Role, Group, Subs, InvitedBy) ->
   {MUser, MServer, _} = jid:tolower(jid:from_string(Member)),
   case mod_xabber_entity:is_group(MUser, MServer) of
     false ->
-      add_user_to_db(Server, Member, Role, Group, Subs, InvitedBy),
+      sql_add_user(Server, Member, Role, Group, Subs, InvitedBy),
       ok;
     _ ->
       not_allowed
   end.
 
-add_user_to_db(Server, User, Role, Group, Subs, InvitedBy) ->
+% SQL functions
+
+sql_add_user(Server, User, Role, Group, Subs, InvitedBy) ->
   ID = str:to_lower(randoms:get_alphanum_string(16)),
   ejabberd_sql:sql_query(
     Server,
@@ -526,12 +530,12 @@ user_list_to_send(Server, Groupchat) ->
      []
  end.
 
-users_to_send(Server, Group) ->
+sql_users_to_send(Server, Group) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(username)s from groupchat_users "
     " where chatgroup=%(Group)s and subscription='both'")) of
-    {selected, Users} -> [U || {U} <- Users];
+    {selected, Users} -> Users;
     _ -> []
   end.
 
@@ -1111,7 +1115,7 @@ users_no_read(Server,Chat) ->
     Server,
     ?SQL("select @(username)s from groupchat_policy where chatgroup=%(Chat)s and right_name='read-messages'
     and (valid_until = 0 or valid_until > %(TS)d )")) of
-    {selected, Users} -> [U || {U} <- Users];
+    {selected, Users} -> [jid:from_string(U) || {U} <- Users];
     _ -> []
   end.
 
@@ -1785,7 +1789,7 @@ get_all_participants(LServer,Chat) ->
     LServer,
     ?SQL("select @(username)s from groupchat_users "
     " where chatgroup=%(Chat)s and subscription != 'none'")) of
-    {selected,Users} -> [User || {User} <- Users];
+    {selected,Users} -> [jid:from_string(User) || {User} <- Users];
     _ -> []
   end.
 

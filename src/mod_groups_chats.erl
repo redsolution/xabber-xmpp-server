@@ -521,15 +521,19 @@ get_all_info(LServer,Limit,Page) ->
   Query = case ejabberd_sql:use_new_schema() of
             true ->
               [<<"select localpart,owner,(select count(*)
-              from groupchat_users where chatgroup = t.jid) as count,
-              anonymous from groupchats t
+              from groupchat_users where chatgroup = t.jid
+              and subscription = 'both') as count, anonymous
+              from groupchats t
               where t.parent_chat = '0' and server_host = '">>,LServer,<<"'
               order by localpart limit ">>,
                 integer_to_binary(Limit),<<" offset ">>,integer_to_binary(Offset),<<";">>];
             _ ->
-              [<<"select localpart,owner,
-              (select count(*) from groupchat_users where chatgroup = t.jid) as count,
-               anonymous from groupchats t where t.parent_chat = '0' order by localpart limit ">>,
+              [<<"select localpart,owner,(select count(*)
+               from groupchat_users where chatgroup = t.jid
+               and subscription = 'both') as count, anonymous
+               from groupchats t
+               where t.parent_chat = '0'
+               order by localpart limit ">>,
                 integer_to_binary(Limit),<<" offset ">>,integer_to_binary(Offset),<<";">>]
           end,
   ChatInfo = case ejabberd_sql:sql_query(
@@ -888,7 +892,8 @@ get_chat_active(Server,Chat) ->
 count_users(LServer,Chat) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(count(*))s from groupchat_users where chatgroup = %(Chat)s and subscription = 'both'")) of
+    ?SQL("select @(count(*))s from groupchat_users "
+    " where chatgroup = %(Chat)s and subscription = 'both'")) of
     {selected,[{Num}]} -> Num;
     _ -> <<"0">>
   end.

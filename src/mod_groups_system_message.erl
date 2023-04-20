@@ -102,11 +102,11 @@ groupchat_avatar_changed(LServer, Chat, User) ->
 groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
   ChatJID = jid:from_string(Chat),
   Version = mod_groups_users:current_chat_version(LServer,Chat),
-  IsNameChanged = proplists:get_value(name_changed, ChatProperties),
-  IsDescChanged = proplists:get_value(desc_changed, ChatProperties),
-  IsStatusChanged =  proplists:get_value(status_changed, ChatProperties),
-  IsPinnedChanged = proplists:get_value(pinned_changed, ChatProperties),
-  IsOtherChanged = proplists:get_value(properties_changed, ChatProperties),
+  IsNameChanged = proplists:get_value(name_changed, ChatProperties, false),
+  IsDescChanged = proplists:get_value(desc_changed, ChatProperties, false),
+  IsStatusChanged =  proplists:get_value(status_changed, ChatProperties, false),
+  IsPinnedChanged = proplists:get_value(pinned_changed, ChatProperties, false),
+  IsOtherChanged = proplists:get_value(properties_changed, ChatProperties, false),
   case lists:keyfind(true, 2, ChatProperties) of
     false ->
       ok;
@@ -557,9 +557,7 @@ send_to_all(Chat,Stanza) ->
     [] ->
       ok;
     _ ->
-      lists:foreach(fun(U) ->
-        Member = U,
-        To = jid:from_string(Member),
+      lists:foreach(fun(To) ->
         ejabberd_router:route(FromChat,To,Pkt2) end, ListTo)
   end.
 

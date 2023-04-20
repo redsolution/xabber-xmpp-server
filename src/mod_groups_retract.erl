@@ -313,9 +313,7 @@ notificate(Server,Chat,Stanza) ->
   From = jid:from_string(Chat),
   FromChat = jid:replace_resource(From,<<"Group">>),
   UserList = mod_groups_users:users_to_send(Server,Chat),
-  lists:foreach(fun(U) ->
-    Member = U,
-    To = jid:from_string(Member),
+  lists:foreach(fun(To) ->
     PServer = To#jid.lserver,
     PUser = To#jid.luser,
     case PServer of

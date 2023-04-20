@@ -167,8 +167,7 @@ send_presence(_Message,[],_From) ->
   ok;
 send_presence(Message,Users,From) ->
   [User|RestUsers] = Users,
-  To = jid:from_string(User),
-  ejabberd_router:route(From,To,Message),
+  ejabberd_router:route(From, User ,Message),
   send_presence(Message,RestUsers,From).
 
 chat_created(LServer,User,Chat,_Lang) ->
@@ -446,7 +445,7 @@ send_notification(From, To, PresentNum, PresentType) ->
   case ActualPresentNum of
     PresentNum  when PresentType == present ->
       %% notify only the connecting device about the actual count
-      User = [jid:to_string(From)],
+      User = [From],
       send_presence(form_presence(Chat),User,FromChat);
     PresentNum ->
       %% someone left, but the counter didn't change
@@ -459,8 +458,7 @@ send_notification(From, To, PresentNum, PresentType) ->
 
 get_users_with_session(Chat) ->
   SS = select_all_sessions(Chat),
-  Users = [jid:make(U,S,R)||{participant_session, _, U, S, R, _} <- SS],
-  [jid:to_string(J) || J <- Users].
+  [jid:make(U,S,R)||{participant_session, _, U, S, R, _} <- SS].
 
 get_global_index(Server) ->
   gen_mod:get_module_opt(Server, mod_groups, global_indexs).

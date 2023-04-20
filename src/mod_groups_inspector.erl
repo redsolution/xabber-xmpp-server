@@ -350,10 +350,11 @@ remove_invite_result(Result, User, Chat) ->
   case Result of
     {updated,1} ->
       From = jid:from_string(Chat),
+      Users = [jid:from_string(User)],
       Unsubscribe = mod_groups_presence:form_unsubscribe_presence(),
       Unavailable = mod_groups_presence:form_presence_unavailable(),
-      mod_groups_presence:send_presence(Unsubscribe,[User],From),
-      mod_groups_presence:send_presence(Unavailable,[User],From),
+      mod_groups_presence:send_presence(Unsubscribe, Users, From),
+      mod_groups_presence:send_presence(Unavailable, Users, From),
       ok;
     _ ->
       {error, not_found}
@@ -376,8 +377,8 @@ case ejabberd_sql:sql_query(
     Unavailable = mod_groups_presence:form_presence_unavailable(),
     ejabberd_router:route(Msg),
     mod_groups_presence:delete_all_user_sessions(User,Chat),
-    mod_groups_presence:send_presence(Unsubscribe,[User],FromChat),
-    mod_groups_presence:send_presence(Unavailable,[User],FromChat);
+    mod_groups_presence:send_presence(Unsubscribe,[UserJID],FromChat),
+    mod_groups_presence:send_presence(Unavailable,[UserJID],FromChat);
   _ ->
     nothing
 end.

@@ -176,9 +176,8 @@ send_message(Message,[],From) ->
   ok;
 send_message(Message,Users,From) ->
   [User|RestUsers] = Users,
-  To = jid:from_string(User),
-  ejabberd_router:route(From,To,Message),
-  send_message(Message,RestUsers,From).
+  ejabberd_router:route(From, User, Message),
+  send_message(Message, RestUsers, From).
 
 %%--------------------------------------------------------------------
 %% Sub process.
@@ -335,9 +334,7 @@ send_displayed_to_all(ChatJID,StanzaID,MessageID) ->
     [] ->
       ok;
     _ ->
-      lists:foreach(fun(U) ->
-        Member = U,
-        To = jid:from_string(Member),
+      lists:foreach(fun(To) ->
         M = #message{type = chat, from = ChatJID, to = To, sub_els = [Displayed], id=randoms:get_string()},
         ejabberd_router:route(M) end, ListTo)
   end,
@@ -412,7 +409,7 @@ transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
   NewBody = [#text{lang = <<>>,data = <<Username/binary, Text/binary >>}],
   AllUsers = mod_groups_users:users_to_send(Server,Chat),
   NoReaders = mod_groups_users:users_no_read(Server,Chat),
-  UsersWithoutSender = AllUsers -- [Jid],
+  UsersWithoutSender = AllUsers -- [jid:remove_resource(From)],
   Users = UsersWithoutSender -- NoReaders,
   PktSanitarized1 = strip_x_elements(Pkt),
   PktSanitarized = strip_reference_elements(PktSanitarized1),

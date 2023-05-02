@@ -166,26 +166,43 @@ is_encrypted(LServer,StanzaID) ->
 
 is_encrypted(Pkt0) ->
   case get_encrypted_type(Pkt0) of
-    <<>> -> false;
+    false -> false;
     _ -> true
   end.
 
 get_encrypted_type({error, _}) ->
-  <<>>;
+  false;
 get_encrypted_type(Pkt) ->
-  Patterns = [<<"urn:xmpp:otr">>, <<"urn:xmpp:omemo">>],
-  lists:foldl(fun(El, Acc0) ->
-    NS0 = xmpp:get_ns(El),
-    NS1 = lists:foldl(fun(P, Acc1) ->
-      case binary:match(NS0,P) of
-        nomatch -> Acc1;
-        _ -> NS0
-      end  end, <<>>, Patterns),
-    if
-      NS1 == <<>> -> Acc0;
-      true -> NS1
+  find_encryption(xmpp:get_els(Pkt)).
+
+find_encryption(Els) ->
+  R = lists:foldl(fun(El, Acc0) ->
+    Name = xmpp:get_name(El),
+    NS = xmpp:get_ns(El),
+    case {Name, NS} of
+      {<<"encryption">>, <<"urn:xmpp:eme:0">>} ->
+        xmpp_codec:get_attr(<<"namespace">>,
+          El#xmlel.attrs, false);
+      _ ->
+        Acc0
     end
-              end, <<>>, xmpp:get_els(Pkt)).
+                  end, false, Els),
+  case R of
+    false -> find_encryption_fallback(Els);
+    _ -> R
+  end.
+
+find_encryption_fallback(Els) ->
+  XEPS = [<<"urn:xmpp:otr:0">>, <<"jabber:x:encrypted">>,
+    <<"urn:xmpp:openpgp:0">>, <<"eu.siacs.conversations.axolotl">>,
+    <<"urn:xmpp:omemo:1">>, <<"urn:xmpp:omemo:2">>],
+  lists:foldl(fun(El, Acc0) ->
+    NS = xmpp:get_ns(El),
+    case lists:member(NS, XEPS) of
+      true -> NS;
+      false -> Acc0
+    end
+              end, false, Els).
 
 filter_all_except_references(Pkt) ->
   Els = xmpp:get_els(Pkt),
@@ -281,6 +298,8 @@ get_prefs(LUser, LServer) ->
 		    default = Default,
 		    always = Always,
 		    never = Never}};
+	{selected, []} ->
+	    notexist;
 	_ ->
 	    error
     end.

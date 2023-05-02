@@ -159,7 +159,7 @@ get_prefs(LUser, LServer) ->
 	[Prefs] ->
 	    {ok, Prefs};
 	_ ->
-	    error
+	    notexist
     end.
 
 select(_LServer, JidRequestor,

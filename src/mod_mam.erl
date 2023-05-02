@@ -657,12 +657,15 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
 process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
 	       to = #jid{lserver = LServer},
 	       type = get, sub_els = [#mam_prefs{xmlns = NS}]} = IQ) ->
-    Prefs = get_prefs(LUser, LServer),
-    PrefsEl = prefs_el(Prefs#archive_prefs.default,
+    case get_prefs(LUser, LServer) of
+			error ->
+				xmpp:make_error(IQ,xmpp:err_internal_server_error());
+			Prefs ->
+				PrefsEl = prefs_el(Prefs#archive_prefs.default,
 		       Prefs#archive_prefs.always,
-		       Prefs#archive_prefs.never,
-		       NS),
-    xmpp:make_iq_result(IQ, PrefsEl);
+		       Prefs#archive_prefs.never, NS),
+				xmpp:make_iq_result(IQ, PrefsEl)
+			end;
 %%process_iq(IQ) ->
 %%	From = xmpp:get_from(IQ),
 %%	Chat = jid:to_string(jid:remove_resource(From)),
@@ -956,7 +959,10 @@ may_enter_room(From, MUCState) ->
 -spec store_msg(message(), message(), binary(), binary(),
         jid(), send | recv) -> {ok, message()} | pass | any().
 store_msg(OriginPkt, Pkt, LUser, LServer, Peer, Dir) ->
-    Prefs = get_prefs(LUser, LServer),
+    Prefs = case get_prefs(LUser, LServer) of
+							error -> get_default_prefs(LUser, LServer);
+							V -> V
+						end,
     case {should_archive_peer(LUser, LServer, Prefs, Peer), Pkt} of
 	{true, #message{meta = #{sm_copy := true}}} ->
             {ok, OriginPkt}; % Already stored.
@@ -1037,19 +1043,24 @@ get_prefs(LUser, LServer) ->
     case Res of
 	{ok, Prefs} ->
 	    Prefs;
+	notexist ->
+	    get_default_prefs(LUser, LServer);
 	error ->
-	    ActivateOpt = gen_mod:get_module_opt(
-			    LServer, ?MODULE,
-			    request_activates_archiving),
-	    case ActivateOpt of
-		true ->
-		    #archive_prefs{us = {LUser, LServer}, default = never};
-		false ->
-		    Default = gen_mod:get_module_opt(
-				LServer, ?MODULE, default),
-		    #archive_prefs{us = {LUser, LServer}, default = Default}
-	    end
+	    error
     end.
+
+get_default_prefs(LUser, LServer) ->
+	ActivateOpt = gen_mod:get_module_opt(
+		LServer, ?MODULE,
+		request_activates_archiving),
+	case ActivateOpt of
+		true ->
+			#archive_prefs{us = {LUser, LServer}, default = never};
+		false ->
+			Default = gen_mod:get_module_opt(
+				LServer, ?MODULE, default),
+			#archive_prefs{us = {LUser, LServer}, default = Default}
+	end.
 
 prefs_el(Default, Always, Never, NS) ->
     #mam_prefs{default = Default,

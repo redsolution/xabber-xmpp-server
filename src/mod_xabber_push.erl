@@ -473,6 +473,8 @@ remove_user(LUser, LServer) ->
 %% Generate push notifications.
 %%--------------------------------------------------------------------
 -spec notify(c2s_state(), xmpp_element() | xmlel() | none) -> ok.
+notify(_, none) ->
+	ok;
 notify(#{jid := #jid{luser = LUser, lserver = LServer}, sid := {TS, _}}, Pkt) ->
     case lookup_session(LUser, LServer, TS) of
 	{ok, Client} ->

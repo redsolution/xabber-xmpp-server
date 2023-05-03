@@ -346,7 +346,7 @@ user_left(_Acc,{Server,_User,Chat,X,Lang})->
   SubEls = [XEl,By],
   M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M),
-  send_presences(Server,Chat),
+%%  send_presences(Server,Chat),
   ok.
 
 user_join(_Acc,{Server,To,Chat,Lang}) ->
@@ -370,7 +370,7 @@ user_join(_Acc,{Server,To,Chat,Lang}) ->
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M),
-  send_presences(Server,Chat),
+%%  send_presences(Server,Chat),
   ok.
 
 user_updated({User,OldCard}, LServer,Chat, Admin,_ID,Nick,_Badge,Lang) ->

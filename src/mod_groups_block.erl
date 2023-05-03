@@ -260,7 +260,7 @@ block_elements(D, #iq{to = To, from = From} = Iq)->
       block_domain when Cdata =/= OwnerServer->
         block(Server,Cdata,<<"domain">>,Admin,Chat);
       block_jid when Cdata =/= Owner->
-        mod_groups_inspector:kick_user(Server,Cdata,Chat);
+        mod_groups_users:kick_user([Cdata], Server, Chat, <<>>, <<>>, <<>>);
       block_id when Cdata =/= OwnerId ->
         UserName = get_name_by_id(Server,Cdata),
         case UserName of
@@ -268,7 +268,7 @@ block_elements(D, #iq{to = To, from = From} = Iq)->
             ok;
           _ ->
             block_by_id(Server,Cdata,Admin,Chat),
-            mod_groups_inspector:kick_user(Server,UserName,Chat)
+            mod_groups_users:kick_user([UserName], Server, Chat, <<>>, <<>>, <<>>)
         end;
       _ ->
         {stop,not_ok}

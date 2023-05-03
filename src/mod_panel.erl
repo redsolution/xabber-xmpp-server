@@ -809,7 +809,11 @@ add_group(OwnerName, OwnerHost, LocalPart,
     GroupHost,GroupName,Privacy,LocalPart,Index,<<>>,Membership,
     undefined,undefined,undefined) of
     {ok, _Created} ->
-      groups_sm:activate(GroupHost,LocalPart),
+      Info = #{name => GroupName, description => <<>>, privacy => Privacy,
+        membership => Membership, index => Index, message => 0,
+        contacts => <<>>, domains => <<>>, parent => <<"0">>,
+        gstatus => <<"discussion">>},
+      groups_sm:activate(GroupHost, LocalPart, Info),
       {201, <<"Group created">>};
     exist ->
       {409, <<"JID already exists">> };

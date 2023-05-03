@@ -35,10 +35,9 @@
          form_presence/2, form_presence/1,
          form_presence_unavailable/0,
          form_unsubscribe_presence/0,
-         form_unsubscribed_presence/0,
          process_presence/1,
   send_info_to_index/2, get_global_index/1, send_message_to_index/2,
-  chat_created/4, groupchat_changed/5, send_presence/3,
+  groupchat_changed/5, send_presence/3,
   change_present_state/3, revoke_invite/2
         ]).
 -export([
@@ -86,12 +85,10 @@ terminate(_Reason, State) ->
   unregister_hooks(Host).
 
 register_hooks(Host) ->
-  ejabberd_hooks:add(groupchat_created, Host, ?MODULE, chat_created, 15),
   ejabberd_hooks:add(revoke_invite, Host, ?MODULE, revoke_invite, 10),
   ejabberd_hooks:add(groupchat_properties_changed, Host, ?MODULE, groupchat_changed, 10).
 
 unregister_hooks(Host) ->
-  ejabberd_hooks:delete(groupchat_created, Host, ?MODULE, chat_created, 15),
   ejabberd_hooks:delete(revoke_invite, Host, ?MODULE, revoke_invite, 10),
   ejabberd_hooks:delete(groupchat_properties_changed, Host, ?MODULE, groupchat_changed, 10).
 
@@ -169,12 +166,6 @@ send_presence(Message,Users,From) ->
   [User|RestUsers] = Users,
   ejabberd_router:route(From, User ,Message),
   send_presence(Message,RestUsers,From).
-
-chat_created(LServer,User,Chat,_Lang) ->
-  Presence = form_presence_with_type(LServer, User, Chat, subscribe),
-  Presence2 = form_presence_with_type(LServer, User, Chat, subscribed),
-  ejabberd_router:route(Presence2),
-  ejabberd_router:route(Presence).
 
 form_presence_with_type(LServer, User, Chat, Type) ->
   ChatJID = jid:from_string(Chat),
@@ -291,7 +282,7 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
   FromChat = jid:replace_resource(To,<<"Group">>),
   case Result of
     not_ok ->
-      ejabberd_router:route(FromChat,From,form_unsubscribed_presence());
+      ejabberd_router:route(FromChat, From, #presence{type = unsubscribed});
     _ ->
       ejabberd_router:route(form_presence_with_type(Server, User, ChatJid, subscribed)),
       ejabberd_router:route(form_presence_with_type(Server, User, ChatJid, subscribe)),
@@ -304,11 +295,13 @@ answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) -
   Result = ejabberd_hooks:run_fold(groupchat_presence_subscribed_hook, Server, [], [{Server,From,Chat,Lang}]),
   case Result of
     ok ->
+      Users = mod_groups_users:users_to_send(Server,Chat),
+      send_presence(form_presence(Chat), Users, FromChat),
       User = jid:to_string(jid:remove_resource(From)),
       ejabberd_router:route(form_presence_with_type(Server, User, Chat, subscribed)),
       ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta());
     not_ok ->
-      ejabberd_router:route(FromChat,From,form_unsubscribed_presence());
+      ejabberd_router:route(FromChat, From, #presence{type = unsubscribed});
     _ ->
       ok
   end;
@@ -321,7 +314,9 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
   Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
   case Result of
     ok ->
-      delete_all_user_sessions(User,Chat),
+      delete_all_user_sessions(User, Chat),
+      Users = mod_groups_users:users_to_send(Server, Chat),
+      send_presence(form_presence(Chat), Users, ChatJIDRes),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
     alone ->
@@ -340,7 +335,9 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook, Server, [], [{Server,User,Chat,UserCard,Lang}]),
       case Result of
         ok ->
-          delete_all_user_sessions(User,Chat),
+          delete_all_user_sessions(User, Chat),
+          Users = mod_groups_users:users_to_send(Server, Chat),
+          send_presence(form_presence(Chat), Users, ChatJID),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
         alone ->
@@ -650,14 +647,6 @@ form_unsubscribe_presence() ->
          name = <<"presence">>,
          attrs = [
                   {<<"type">>, <<"unsubscribe">>}
-                 ]
-        }.
-
-form_unsubscribed_presence() ->
-      #xmlel{
-         name = <<"presence">>,
-         attrs = [
-                  {<<"type">>, <<"unsubscribed">>}
                  ]
         }.
 

@@ -198,6 +198,7 @@ check_kick(_Acc,LServer,Chat,Admin,Kick,_Lang) ->
 
 kick_user(Acc, LServer, Chat, _Admin, _Kick, _Lang) ->
   lists:foreach(fun(User) -> kick_user_from_chat(LServer,Chat,User) end, Acc),
+  mod_groups_chats:update_user_counter(Chat),
   Acc.
 
 validate_kick_request(LServer,Chat, User1, User2) when User1 =/= User2 ->
@@ -209,7 +210,7 @@ kick_user_from_chat(LServer,Chat,User) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc') where
-         username=%(User)s and chatgroup=%(Chat)s and (subscription != 'none' or subscription !='wait')")) of
+         username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
     {updated,1} ->
       mod_groups_presence:delete_all_user_sessions(User,Chat),
       update_last_seen(LServer,User,Chat),
@@ -411,16 +412,18 @@ pre_approval(_Acc,{Server,To,Chat,_Lang}) ->
   Role = <<"member">>,
   Subscription = <<"both">>,
   Status = check_user_if_exist(Server,User,Chat),
-  case Status of
-    not_exist ->
-      add_user(Server,User,Role,Chat,Subscription,<<>>);
-    <<"none">> ->
-      change_subscription(Server,Chat,User,Subscription);
-    <<"wait">> ->
-      change_subscription(Server,Chat,User,Subscription);
-    <<"both">> ->
-      {stop,both}
-  end.
+  Result = case Status of
+             not_exist ->
+               add_user(Server,User,Role,Chat,Subscription,<<>>);
+             <<"none">> ->
+               change_subscription(Server,Chat,User,Subscription);
+             <<"wait">> ->
+               change_subscription(Server,Chat,User,Subscription);
+             <<"both">> ->
+               {stop,both}
+           end,
+  mod_groups_chats:update_user_counter(Chat),
+  Result.
 
 delete_user(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
   Subscription = check_user(Server,User,Chat),
@@ -429,6 +432,7 @@ delete_user(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
     ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc') where
          username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
     {updated,1} when Subscription == <<"both">> ->
+      mod_groups_chats:update_user_counter(Chat),
       ok;
     _ ->
       {stop,no_user}

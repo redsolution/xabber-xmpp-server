@@ -17,7 +17,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
   code_change/3]).
--export([activate/2, deactivate/2]).
+-export([activate/2, activate/3, deactivate/2,update_group_session_info/2]).
 -define(SERVER, ?MODULE).
 -define(MYHOSTS, ejabberd_config:get_myhosts()).
 -record(xabber_sm_state, {pid = <<>>}).
@@ -59,7 +59,14 @@ init([]) ->
   {noreply, NewState :: #xabber_sm_state{}, timeout() | hibernate} |
   {stop, Reason :: term(), Reply :: term(), NewState :: #xabber_sm_state{}} |
   {stop, Reason :: term(), NewState :: #xabber_sm_state{}}).
-handle_call(_Request, _From, State = #xabber_sm_state{}) ->
+handle_call({set_session_info, LUser, LServer, Info}, _, State) ->
+  Info1 = if is_list(Info) -> Info; true -> maps:to_list(Info) end,
+  lists:foreach(
+    fun({Key, Val}) ->
+      ejabberd_sm:set_user_info(LUser, LServer, <<"Group">>, Key, Val)
+    end, Info1),
+  {reply, ok, State};
+handle_call(_Request, _From, State) ->
   {reply, ok, State}.
 
 %% @private
@@ -68,9 +75,11 @@ handle_call(_Request, _From, State = #xabber_sm_state{}) ->
   {noreply, NewState :: #xabber_sm_state{}} |
   {noreply, NewState :: #xabber_sm_state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #xabber_sm_state{}}).
-handle_cast({group_created,Server, GroupLocalPart}, #xabber_sm_state{pid = PID} = State) ->
+handle_cast({group_created, Server, GroupLocalPart, Info}, #xabber_sm_state{pid = PID} = State) ->
   SID = {p1_time_compat:unique_timestamp(), PID},
-  ejabberd_sm:open_session(SID, GroupLocalPart, Server, <<"Group">>, 50, [{group, true}]),
+  Info1 = maps:to_list(Info) ++ [{group, true}],
+  ejabberd_sm:open_session(SID, GroupLocalPart, Server,
+    <<"Group">>, 50, Info1),
   {noreply, State};
 handle_cast({group_deleted,Server, GroupLocalPart},State) ->
   SID = ejabberd_sm:get_session_sid(GroupLocalPart, Server, <<"Group">>),
@@ -85,13 +94,15 @@ handle_cast(_Request, State = #xabber_sm_state{}) ->
   {noreply, NewState :: #xabber_sm_state{}} |
   {noreply, NewState :: #xabber_sm_state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #xabber_sm_state{}}).
-handle_info({route, #presence{} = Packet}, State = #xabber_sm_state{}) ->
-  mod_groups_presence:process_presence(Packet),
+handle_info({route, #presence{to = To} = Packet}, State) ->
+  Proc = gen_mod:get_module_proc(To#jid.lserver, mod_groups_presence),
+  gen_server:cast(Proc, Packet),
   {noreply, State};
-handle_info({route, #iq{} = Packet}, State = #xabber_sm_state{}) ->
-  mod_groups_iq_handler:make_action(Packet),
+handle_info({route, #iq{to = To} = Packet}, State) ->
+  Proc = gen_mod:get_module_proc(To#jid.lserver, mod_groups_iq_handler),
+  gen_server:cast(Proc, Packet),
   {noreply, State};
-handle_info({route, #message{} = Packet}, State = #xabber_sm_state{}) ->
+handle_info({route, #message{} = Packet}, State) ->
   {LUser, LServer, _} = jid:tolower(Packet#message.to),
   ProcName = binary_to_atom(<<LUser/binary,$_,LServer/binary,"_messages">>, utf8),
   Proc = case whereis(ProcName) of
@@ -132,22 +143,44 @@ code_change(_OldVsn, State = #xabber_sm_state{}, _Extra) ->
 start_entities(Pid) ->
   lists:foreach(fun(Host) ->
     try
-      Groups = mod_groups_chats:get_all(Host),
-      start_entities(Groups,Host,Pid,<<"Group">>)
+      Groups = mod_groups_chats:get_all_groups_info(Host),
+      start_entities(Groups, Pid)
     catch
         _:Why ->
           ?ERROR_MSG("Group sessions cannot be started: ~p",[Why])
     end
                 end, ?MYHOSTS).
 
-start_entities(Chats,Server,Pid,Resource) ->
-  lists:foreach(fun(Chat) ->
+start_entities(GroupsInfo, Pid) ->
+  lists:foreach(fun({{LUser, LServer, Resource}, Info}) ->
+    Info1 = maps:to_list(Info) ++ [{group, true}],
     SID = {p1_time_compat:unique_timestamp(), Pid},
-    ejabberd_sm:open_session(SID, Chat, Server, Resource,
-      50, [{group, true}]) end, Chats).
+    ejabberd_sm:open_session(SID, LUser, LServer, Resource,
+      50, Info1) end, GroupsInfo).
 
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+%% Deprecated
 activate(Server, GroupLocalPart) ->
-  gen_server:cast(?MODULE, {group_created,Server,GroupLocalPart}).
+  SJID = jid:to_string(jid:make(GroupLocalPart, Server)),
+  {Name, Privacy, Index, Membership, Desc, Message,
+    Contacts, Domains, Parent, Status
+  } = mod_groups_chats:db_get_info(SJID, Server),
+  Info = #{name => Name, description => Desc, privacy => Privacy,
+    membership => Membership, index => Index,
+    message => Message, contacts => Contacts,
+    domains => Domains, parent => Parent,
+    gstatus => Status},
+  gen_server:cast(?MODULE, {group_created,Server, GroupLocalPart, Info}).
+
+activate(Server, GroupLocalPart, Info) ->
+  gen_server:cast(?MODULE, {group_created,Server,GroupLocalPart, Info}).
 
 deactivate(Server, GroupLocalPart) ->
   gen_server:cast(?MODULE, {group_deleted,Server,GroupLocalPart}).
+
+update_group_session_info(Group, InfoMap) ->
+  {LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
+  gen_server:call(?MODULE, {set_session_info, LUser, LServer, InfoMap}).

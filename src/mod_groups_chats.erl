@@ -34,8 +34,8 @@
 %% API
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
--export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all/1, get_all_info/3,
-  get_count_chats/1, get_type_and_parent/2]).
+-export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all_groups_info/1, get_all_info/3,
+  get_count_chats/1, get_type_and_parent/2, update_user_counter/1]).
 
 -export([check_creator/4, check_user/4, check_chat/4,
   create_peer_to_peer/4, send_invite/4, check_if_users_invited/4,
@@ -43,14 +43,16 @@
 
 -export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5, handle_update_query/4,
   change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5,
-  get_chat_active/2, get_info/2, count_users/2,
-  status_options/2, get_name_desc/2, get_status_label_name/3,define_human_status/3]).
+  get_chat_active/2, get_info/2, db_get_info/2, count_users/2,
+  get_name_desc/2, define_human_status/3]).
 
--export([parse_status_query/2, filter_fixed_fields/1, define_human_status_and_show/3, update_pinned/3]).
+-export([parse_status_query/2, filter_fixed_fields/1, define_human_status_and_show/3]).
 % Status hooks
 -export([check_user_rights_to_change_status/4, check_user_rights_to_change_status/5, check_status/5]).
 % Delete chat hook
 -export([delete_chat_hook/4]).
+
+-define(DEFAULT_GROUP_STATUS, <<"discussion">>).
 
 start(Host, _Opts) ->
   ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, delete_chat_hook, 30),
@@ -155,6 +157,7 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
   Domains = make_string(DomainList),
   Chat = jid:to_string(jid:make(LocalPart,Server)),
   Creator = jid:to_string(jid:make(CreatorLUser,CreatorLServer)),
+  Status = ?DEFAULT_GROUP_STATUS,
   case ejabberd_sql:sql_query(
     Server,
     ?SQL_INSERT(
@@ -169,9 +172,14 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
         "description=%(Desc)s",
         "contacts=%(Contacts)s",
         "domains=%(Domains)s",
+        "status=%(Status)s",
         "owner=%(Creator)s"])) of
     {updated,_N} ->
-      groups_sm:activate(Server,LocalPart),
+      Info = #{name => Name, description => Desc, privacy => Privacy,
+        membership => Membership, index => Index, message => 0,
+        contacts => Contacts, domains => Domains, parent => <<"0">>,
+        gstatus => Status},
+      groups_sm:activate(Server, LocalPart, Info),
       mod_groups_users:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
       Expires = <<"0">>,
       IssuedBy = <<"server">>,
@@ -213,7 +221,7 @@ handle_update_query(Server, Group, User, XElem) ->
   end.
 
 change_pinned_msg(Server, Group, User, MsgID) ->
-  {_, _, _, _, _, Message, _, _, _, Status} = get_info(Group, Server),
+  {_, _, _, _, _, Message, _, _, _, Status} = db_get_info(Group, Server),
   NewMessage = case MsgID of
                  <<>> -> 0;
                  _ -> binary_to_integer(MsgID)
@@ -225,7 +233,8 @@ change_pinned_msg(Server, Group, User, MsgID) ->
     {_, Message} ->
       ok;
     _ ->
-      update_pinned(Server, Group, NewMessage),
+      sql_update_pinned(Server, Group, NewMessage),
+      groups_sm:update_group_session_info(Group,#{message => NewMessage}),
       Properties = [{pinned_changed, true}],
       ejabberd_hooks:run(groupchat_properties_changed,
         Server,[Server, Group, User, Properties, Status]),
@@ -253,25 +262,20 @@ validate_fs(_Acc,_User, Chat, LServer,FS) ->
   end.
 
 change_chat(Acc,_User,Chat,Server,_FS) ->
-  {Name, _Anonymous, Search, Model, Desc, ChatMessage,
-    ContactList, DomainList, _ParentChat, Status} = get_info(Chat, Server),
-  NewStatus = set_value(Status,get_value(status,Acc)),
-  case Status of
-    <<"inactive">> when Status == NewStatus ->
+  case get_chat_active(Server, Chat) of
+    <<"inactive">> ->
       {stop, {error, xmpp:err_not_allowed(<<"You need to active group">>,<<"en">>)}};
     _ ->
+      {Name, _Privacy, Search, Model, Desc, _Message,
+        ContactList, DomainList, _Parent, Status} = db_get_info(Chat, Server),
       NewName = set_value(Name,get_value(name,Acc)),
       NewDesc = set_value(Desc,get_value(description,Acc)),
-      NewMessage = set_message(ChatMessage,get_value(message,Acc)),
-      NewStatus = set_value(Status,get_value(status,Acc)),
       NewMembership = set_value(Model,get_value(membership,Acc)),
       NewIndex = set_value(Search,get_value(index,Acc)),
       NewContacts = set_value(ContactList,get_value(contacts,Acc)),
       NewDomains = set_value(DomainList,get_value(domains,Acc)),
       IsNameChanged = {name_changed, Name /= NewName},
       IsDescChanged = {desc_changed, Desc /= NewDesc},
-      IsStatusChanged = {status_changed, Status /= NewStatus},
-      IsPinnedChanged = {pinned_changed, ChatMessage /= NewMessage},
       IsIndexChanged = {global_indexing_changed, is_index_changed(Search,NewIndex)},
       IsOtherChanged = {properties_changed,
         lists:member(true,[
@@ -279,9 +283,13 @@ change_chat(Acc,_User,Chat,Server,_FS) ->
           Model /= NewMembership,
           DomainList /= NewDomains,
           ContactList /= NewContacts])},
-      ChangeDiff = [IsNameChanged,IsDescChanged,IsStatusChanged,IsPinnedChanged, IsIndexChanged, IsOtherChanged],
-      update_groupchat(Server,Chat,NewName,NewDesc,NewMessage,NewStatus,NewMembership,NewIndex,NewContacts,NewDomains),
-      {stop, {ok,form_chat_information(Chat,Server,result),NewStatus,ChangeDiff}}
+      ChangeDiff = [IsNameChanged,IsDescChanged, IsIndexChanged, IsOtherChanged],
+      NewInfo = #{name => NewName, description => NewDesc,
+        membership => NewMembership, index => NewIndex,
+        contacts => NewContacts, domains => NewDomains},
+      sql_update_groupchat(Server, Chat, NewInfo),
+      groups_sm:update_group_session_info(Chat, NewInfo),
+      {stop, {ok,form_chat_information(Chat,Server,result),Status,ChangeDiff}}
   end.
 
 %%
@@ -374,9 +382,16 @@ create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
   User2Nick = mod_groups_users:get_nick_in_chat(LServer,User,OldChat),
   ChatName = <<User1Nick/binary," and ",User2Nick/binary, " chat">>,
   Desc = <<"Private chat">>,
-  create_groupchat(LServer,Localpart,Creator,ChatName,Chat,
-    <<"incognito">>,<<"none">>,<<"member-only">>,Desc,<<"0">>,<<"">>,<<"">>,OldChat),
-  groups_sm:activate(LServer,Localpart),
+  Privacy = <<"incognito">>,
+  Membership = <<"member-only">>,
+  Index = <<"none">>,
+  create_groupchat(LServer, Localpart, Creator, ChatName, Chat,
+    Privacy, Index, Membership, Desc, 0, <<"">>, <<"">>, OldChat),
+  Info = #{name => ChatName, description => Desc, privacy => Privacy,
+    membership => Membership, index => Index, message => 0,
+    contacts => <<>>, domains => <<>>, parent => OldChat,
+    gstatus => ?DEFAULT_GROUP_STATUS},
+  groups_sm:activate(LServer, Localpart, Info),
   Info1 = add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
   Info2 = add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
   %%  Info = {AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge}
@@ -456,7 +471,7 @@ delete_chat(_Acc,{LServer, _User, Chat, _UserCard, _Lang})->
   DeleteIfEmpty = gen_mod:get_module_opt(LServer, mod_groups, remove_empty),
   if
     DeleteIfEmpty ->
-      case count_users(LServer,Chat) of
+      case sql_get_user_count(LServer,Chat) of
         <<"0">> -> delete_group(Chat, false, true);
         _ -> pass
       end;
@@ -476,18 +491,13 @@ is_anonim(LServer,Chat) ->
   end.
 
 get_type_and_parent(LServer,Chat) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(anonymous)s,@(parent_chat)s from groupchats "
-    " where jid = %(Chat)s and %(LServer)H")) of
-    {selected,[]} ->
-      {error, notexist};
-    {selected, [{A, <<"0">>}]} ->
-      {ok, A, <<>>};
-    {selected, [{A, PC}]} ->
-      {ok, A, PC};
+  case get_info(Chat, LServer) of
+    {_, Privacy, _, _, _, _, _, _, <<"0">>, _} ->
+      {ok, Privacy, <<>>};
+    {_, Privacy, _, _, _, _, _, _, Parent, _} ->
+      {ok, Privacy, Parent};
     _ ->
-      {error, dberror}
+      {error, notexist}
   end.
 
 is_global_indexed(LServer,Chat) ->
@@ -504,13 +514,27 @@ is_global_indexed(LServer,Chat) ->
       false
   end.
 
-get_all(LServer) ->
+get_all_groups_info(LServer) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(localpart)s from groupchats where %(LServer)H")) of
-    {selected, Chats} ->
-      [C || {C} <- Chats];
-    _ -> []
+    ?SQL("select @(localpart)s, @(name)s, @(anonymous)s, @(searchable)s, "
+    " @(model)s, @(description)s, @(message)d, @(contacts)s, "
+    " @(domains)s, @(parent_chat)s,@(status)s, "
+    " @((select count(*) from groupchat_users where chatgroup = t.jid and subscription = 'both'))s"
+    " from groupchats t where %(LServer)H")) of
+    {selected, List} ->
+      lists:map(fun(Item)->
+        {LocalPart, Name, Privacy, Index, Membership, Desc, Message,
+          Contacts, Domains, Parent, Status, Count} = Item,
+        {{LocalPart, LServer, <<"Group">>},
+          #{name => Name, description => Desc, privacy => Privacy,
+            membership => Membership, index => Index,
+            message => Message, contacts => Contacts,
+            domains => Domains, parent => Parent,
+            gstatus => Status, user_count => Count}
+        }
+                end, List);
+    _ -> error
   end.
 %%
 get_all_info(LServer,Limit,Page) ->
@@ -670,7 +694,7 @@ get_chat_name(Chat,Server) ->
       <<>>
   end.
 
-get_info(Group, Server) ->
+db_get_info(Group, Server) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(name)s, @(anonymous)s, @(searchable)s, "
@@ -679,6 +703,20 @@ get_info(Group, Server) ->
     " from groupchats where jid=%(Group)s and %(Server)H")) of
     {selected,[Info]} -> Info;
     _ -> error
+  end.
+
+get_info(Group, _Server) ->
+  {LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
+  case ejabberd_sm:get_user_info(LUser, LServer, <<"Group">>) of
+    offline -> error;
+    Info ->
+      #{name := Name, description := Desc, privacy := Privacy,
+        membership := Membership, index := Index,
+        message := Message, contacts := Contacts,
+        domains := Domains, parent := Parent,
+        gstatus := Status} = maps:from_list(Info),
+      {Name, Privacy, Index, Membership, Desc, Message, Contacts,
+        Domains, Parent, Status}
   end.
 
 created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList) ->
@@ -695,8 +733,6 @@ get_chat_fields(Chat,LServer) ->
     DomainList, _Parent, _Status} = get_info(Chat, LServer),
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
-    #xdata_field{var = <<"pinned-message">>, type = hidden, values = [<<"true">>], label = <<"Change pinned message">>},
-    #xdata_field{var = <<"change-avatar">>, type = hidden, values = [<<"true">>], label = <<"Change avatar">>},
     #xdata_field{var = <<"name">>, type = 'text-single', values = [Name], label = <<"Name">>},
     #xdata_field{var = <<"description">>, type = 'text-multi', values = [Desc], label = <<"Description">>},
     #xdata_field{var = <<"index">>, type = 'list-single', values = [Search], label = <<"Index">>, options = index_options()},
@@ -732,8 +768,6 @@ get_and_validate(_LServer,_Chat,<<"description">>,Desc) ->
   {description,list_to_binary(Desc)};
 get_and_validate(_LServer,_Chat,<<"name">>,Name) ->
   {name,list_to_binary(Name)};
-get_and_validate(_LServer,_Chat,<<"pinned-message">>,PinnedMessage) ->
-  {message,list_to_binary(PinnedMessage)};
 get_and_validate(_LServer,_Chat,<<"index">>,Index) ->
   validate_index(list_to_binary(Index));
 get_and_validate(_LServer,_Chat,<<"membership">>,Membership) ->
@@ -825,17 +859,7 @@ set_value(Default,Value) ->
       Value
   end.
 
-set_message(Default,Value) ->
-  case Value of
-    undefined ->
-      Default;
-    <<>> ->
-      0;
-    _ ->
-      binary_to_integer(Value)
-  end.
-
-update_pinned(Server,Chat,Message) ->
+sql_update_pinned(Server,Chat,Message) ->
   case ?SQL_UPSERT(Server, "groupchats",
     [ "message=%(Message)d",
       "!jid=%(Chat)s"]) of
@@ -845,17 +869,18 @@ update_pinned(Server,Chat,Message) ->
       {error, db_failure}
   end.
 
-update_groupchat(Server,Jid,Name,Desc,Message,Status,Membership,Index,Contacts,Domains) ->
+sql_update_groupchat(Server, SJID, NewInfo) ->
+  #{name := Name, description := Desc, membership := Membership,
+    index := Index, contacts := Contacts,
+    domains := Domains} = NewInfo,
   case ?SQL_UPSERT(Server, "groupchats",
     ["name=%(Name)s",
       "description=%(Desc)s",
-      "message=%(Message)d",
-      "status=%(Status)s",
       "model=%(Membership)s",
       "searchable=%(Index)s",
       "contacts=%(Contacts)s",
       "domains=%(Domains)s",
-      "!jid=%(Jid)s"]) of
+      "!jid=%(SJID)s"]) of
     ok ->
       ok;
     _Err ->
@@ -878,18 +903,34 @@ get_permissions(Server) ->
       Permissions
   end.
 
-get_chat_active(Server,Chat) ->
-  case   ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(status)s
-    from groupchats where jid=%(Chat)s and %(Server)H")) of
-    {selected,[{Status}]} ->
-      Status;
-    _ ->
-      false
+get_chat_active(_Server, Group) ->
+  {LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
+  case ejabberd_sm:get_user_info(LUser, LServer, <<"Group">>) of
+    offline -> false;
+    Info ->
+      proplists:get_value(gstatus, Info, false)
   end.
 
-count_users(LServer,Chat) ->
+update_user_counter(Group) ->
+  {_LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
+  Count = sql_get_user_count(LServer, Group),
+  groups_sm:update_group_session_info(Group, #{user_count => Count}).
+
+count_users(Server, Group) ->
+  {LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
+  case ejabberd_sm:get_user_info(LUser, LServer, <<"Group">>) of
+    offline -> <<"0">>;
+    Info ->
+      case proplists:get_value(user_count, Info, false) of
+        false ->
+          ?ERROR_MSG("User counter in memory is not available: ~p",
+            [Group]),
+          sql_get_user_count(Server, Group);
+        V -> V
+      end
+  end.
+
+sql_get_user_count(LServer,Chat) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(count(*))s from groupchat_users "
@@ -910,17 +951,6 @@ create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,Contacts,Domain
     #xabbergroup_contacts{contact = lists:usort(Contacts)}
   ],
   #xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE,sub_els = SubEls}.
-
-status_options(LServer, Chat) ->
-  Predefined = [
-    #xdata_option{label = <<"Fiesta">>, value = [<<"chat">>]},
-    #xdata_option{label = <<"Discussion">>, value = [<<"active">>]},
-    #xdata_option{label = <<"Regulated">>, value = [<<"away">>]},
-    #xdata_option{label = <<"Limited">>, value = [<<"xa">>]},
-    #xdata_option{label = <<"Restricted">>, value = [<<"dnd">>]},
-    #xdata_option{label = <<"Inactive">>, value = [<<"inactive">>]}],
-  Result = ejabberd_hooks:run_fold(chat_status_options, LServer, Predefined, [Chat]),
-  Result.
 
 membership_options() ->
   [#xdata_option{label = <<"Member-only">>, value = <<"member-only">>}, #xdata_option{label = <<"Open">>, value = <<"open">>}].
@@ -949,20 +979,6 @@ get_name_desc(Server,Chat) ->
       {Name,Desc,Privacy,Index,Membership,ParentChat};
     _ ->
       {<<>>,<<>>,<<>>,<<>>,<<>>,undefined}
-  end.
-
-get_status_label_name(LServer,Chat,Status) ->
-  StatusList = lists:map(
-    fun(El) ->
-      #xdata_option{label = Label, value = [Value]} = El,
-        {Value, list_to_binary(string:to_lower(binary_to_list(Label)))}
-      end,
-    status_options(LServer, Chat)),
-  case lists:keyfind(Status,1,StatusList) of
-    {Status,LowerLabel} ->
-      LowerLabel;
-    _ ->
-      <<"unknown">>
   end.
 
 check_user_rights_to_change_status(_Acc,User,Chat,Server) ->
@@ -1065,6 +1081,7 @@ update_status(Server, Chat, Status) ->
     ?SQL("update groupchats set status = %(Status)s where jid=%(Chat)s and status != %(Status)s and %(Server)H")) of
     {updated,1} ->
       Form = make_form(Server, Chat, Status, 'text-single'),
+      groups_sm:update_group_session_info(Chat, #{gstatus => Status}),
       {stop, {ok, Form, Status}};
     {updated,0} ->
       {stop, {error,xmpp:err_bad_request(<<"Value ", Status/binary, " is unchanged">>, <<"en">>)}};

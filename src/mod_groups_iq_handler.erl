@@ -86,6 +86,9 @@ handle_cast({groupchat_created,Server,User,Chat,Lang}, State) ->
   end,
   ejabberd_hooks:run(groupchat_created, Server, [Server,User,Chat,Lang]),
   {noreply, State};
+handle_cast(#iq{} = Iq, State) ->
+  make_action(Iq),
+  {noreply, State};
 handle_cast(_Request, State) ->
   {noreply, State}.
 
@@ -710,7 +713,6 @@ process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergro
   case Result of
     {ok, Form, Status, Properties} ->
       ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, Properties, Status]),
-      ejabberd_hooks:run(groupchat_changed,Server,[Server,Chat,Status,User]),
       ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT, sub_els = [Form]}));
     {error, Err} ->
       ejabberd_router:route(xmpp:make_error(IQ, Err));

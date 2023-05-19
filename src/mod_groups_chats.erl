@@ -178,7 +178,7 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
       Info = #{name => Name, description => Desc, privacy => Privacy,
         membership => Membership, index => Index, message => 0,
         contacts => Contacts, domains => Domains, parent => <<"0">>,
-        gstatus => Status},
+        user_count => <<"1">>, gstatus => Status},
       groups_sm:activate(Server, LocalPart, Info),
       mod_groups_users:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
       Expires = <<"0">>,

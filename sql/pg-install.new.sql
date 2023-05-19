@@ -396,6 +396,7 @@ CREATE TABLE groupchat_users (
     avatar_url text,
     avatar_size integer not null default 0,
     nickname text default '',
+    auto_nickname text NOT NULL default ''
     parse_vcard timestamp NOT NULL default timezone('utc'::text, now()),
     parse_avatar text NOT NULL default 'yes',
     badge text NOT NULL default '',
@@ -408,6 +409,7 @@ CREATE TABLE groupchat_users (
     CONSTRAINT UC_groupchat_users UNIQUE (username,chatgroup),
     CONSTRAINT UC_groupchat_users_id UNIQUE (id)
 );
+CREATE INDEX i_groupchat_users_group_subs ON groupchat_users USING btree (chatgroup,subscription);
 
 CREATE TABLE groupchat_present (
     username text NOT NULL,

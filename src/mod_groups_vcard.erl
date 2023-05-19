@@ -493,19 +493,11 @@ handle_avatar_data(_C,_U,_I,false) ->
   ok.
 
 update_vcard(Server,User,D,_Chat) ->
-  Status = get_update_status(Server,User),
-%%  Photo = set_value(D#vcard_temp.photo),
   FN = set_value(D#vcard_temp.fn),
-  LF = get_lf(D#vcard_temp.n),
+  Name = get_lf(D#vcard_temp.n),
   NickName = set_value(D#vcard_temp.nickname),
-  case Status of
-    null ->
-      set_update_status(Server,User,<<"true">>);
-    <<"null">> ->
-      set_update_status(Server,User,<<"true">>);
-    _ ->
-      update_vcard_info(Server,User,LF,FN,NickName,D#vcard_temp.photo)
-  end.
+  Photo = D#vcard_temp.photo,
+  update_vcard_info(Server, User, Name, FN, NickName, Photo).
 
 download_user_avatar(Server, User, ID, Type, Size, Url) ->
   ?DEBUG("Download user avatar: ~p ~p ~n",[User, Url]),
@@ -573,12 +565,11 @@ store_user_avatar_file(Server, Data, UserID) ->
       Err
   end.
 
-send_notifications_about_nick_change(Server,User) ->
+send_notifications_about_nick_change(Server,User, OldNickname) ->
   ChatAndIds = select_chat_for_update_nick(Server,User),
-  change_user_updated_at(Server,User),
   lists:foreach(fun(El) ->
     {Chat} = El,
-    M = notification_message_about_nick(User, Server, Chat),
+    M = notification_message_about_nick(User, Server, Chat, OldNickname),
     mod_groups_system_message:send_to_all(Chat,M) end, ChatAndIds).
 
 send_notifications(ChatAndIds,User,Server) ->
@@ -599,17 +590,19 @@ notification_message(User, Server, Chat) ->
   NewEls = [OriginID | SubEls],
   #message{from = ChatJID, to = ChatJID, type = headline, id = ID, body = [], sub_els = NewEls, meta = #{}}.
 
-notification_message_about_nick(User, Server, Chat) ->
+notification_message_about_nick(User, Server, Chat, OldNick) ->
+  UserCard = mod_groups_users:form_user_card(User, Chat),
+  NewNick = UserCard#xabbergroupchat_user_card.nickname,
+%%  Txt = <<" is now known as ">>,
+  MsgTxt = <<OldNick/binary," is now known as ",NewNick/binary>>,
   ChatJID = jid:replace_resource(jid:from_string(Chat),?RESOURCE),
-  ByUserCard = mod_groups_users:form_user_card(User,Chat),
-  Version = mod_groups_users:current_chat_version(Server,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
-  By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
+  Body = [#text{lang = <<>>,data = MsgTxt}],
+  Version = mod_groups_users:current_chat_version(Server, Chat),
+  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version,
+    sub_els = [UserCard], type = <<"update">>},
+  By = #xmppreference{type = <<"mutable">>, sub_els = [UserCard]},
   SubEls = [X,By],
-  ID = randoms:get_string(),
-  OriginID = #origin_id{id = ID},
-  NewEls = [OriginID | SubEls],
-  #message{from = ChatJID, to = ChatJID, type = headline, id = ID, body = [], sub_els = NewEls, meta = #{}}.
+  mod_groups_system_message:form_message(ChatJID,Body,SubEls).
 
 get_chat_meta_nodeid(Server,Chat)->
   Node = <<"urn:xmpp:avatar:metadata">>,
@@ -924,16 +917,16 @@ set_update_status(Server,Jid,Status) ->
       {error, db_failure}
   end.
 
-get_update_status(Server,Jid) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(fullupdate)s
-       from groupchat_users_vcard where jid=%(Jid)s")) of
-    {selected,[]} ->
-      <<>>;
-    {selected,[{Status}]} ->
-      Status
-  end.
+%%get_update_status(Server,Jid) ->
+%%  case ejabberd_sql:sql_query(
+%%    Server,
+%%    ?SQL("select @(fullupdate)s
+%%       from groupchat_users_vcard where jid=%(Jid)s")) of
+%%    {selected,[]} ->
+%%      <<>>;
+%%    {selected,[{Status}]} ->
+%%      Status
+%%  end.
 
 update_id_in_chats(Server,User,Hash,AvatarType,AvatarSize,AvatarUrl) ->
   case ejabberd_sql:sql_query(
@@ -990,58 +983,79 @@ select_chat_for_update_nick(Server,User) ->
       []
   end.
 
-change_user_updated_at(Server,User) ->
-  ejabberd_sql:sql_query(
-    Server,
-    ?SQL("update groupchat_users set user_updated_at = (now() at time zone 'utc')
-    where username = %(User)s and nickname='' and
-    chatgroup not in (select jid from groupchats where anonymous = 'incognito')
-    ")).
-
-update_vcard_info(Server,User,GIVENFAMILYRaw,FNRaw,NICKNAMERaw,Photo) ->
-  NICKNAME = trim(NICKNAMERaw),
+update_vcard_info(Server, User, NameRaw, FNRaw, NicknameRaw, Photo) ->
+  Nickname = trim(NicknameRaw),
   FN = trim(FNRaw),
-  GIVENFAMILY = trim(GIVENFAMILYRaw),
-  NickLength = string:length(NICKNAME),
-  FNLength = string:length(FN),
-  GivenLength = string:length(GIVENFAMILY),
+  Name = trim(NameRaw),
+  Length = string:length(Nickname) + string:length(FN)
+    + string:length(Name),
   {Hash,Type} = get_hash_and_type(Photo),
   Filename = get_name_from_hash_and_type(Photo),
-  case NickLength of
-    _ when NickLength > 0 orelse FNLength > 0 orelse GivenLength > 0 ->
-      case  ejabberd_sql:sql_query(
-        Server,
-        ?SQL("update groupchat_users_vcard set givenfamily=%(GIVENFAMILY)s, fn=%(FN)s, nickname=%(NICKNAME)s, image=%(Filename)s, hash=%(Hash)s, image_type=%(Type)s
-    where jid = %(User)s and (givenfamily !=%(GIVENFAMILY)s or fn!=%(FN)s or nickname!=%(NICKNAME)s or image!=%(Filename)s)")) of
-        {updated,0} ->
-          ?SQL_UPSERT(Server, "groupchat_users_vcard",
-            ["!jid=%(User)s",
-              "givenfamily=%(GIVENFAMILY)s",
-              "fn=%(FN)s",
-              "hash=%(Hash)s",
-              "nickname=%(NICKNAME)s",
-              "image=%(Filename)s",
-              "image_type=%(Type)s"
-            ]),
-          handle_vcard_photo(Server,Photo);
-        {updated,Num} when Num > 0 ->
+  UPSERT = fun() ->
+      ?SQL_UPSERT_T("groupchat_users_vcard",
+        ["!jid=%(User)s",
+          "givenfamily=%(Name)s",
+          "fn=%(FN)s",
+          "hash=%(Hash)s",
+          "nickname=%(Nickname)s",
+          "image=%(Filename)s",
+          "image_type=%(Type)s"
+        ]) end,
+  Fun = fun() ->
+    case ejabberd_sql:sql_query_t(?SQL(
+      "select COALESCE(givenfamily,'') as @(givenfamily)s,
+      COALESCE(fn,'') as @(fn)s, COALESCE(nickname,'') as @(nickname)s,
+      COALESCE(image,'') as @(filename)s
+      from groupchat_users_vcard where jid = %(User)s")) of
+      {selected, [{Name, FN, Nickname, Filename}]} ->
+        ok;
+      {selected, Data} ->
+        OldNickname = nick(User, Data),
+        UPSERT(),
+        sql_update_auto_nickname_t(User, Nickname, Name, FN),
+        {updated, OldNickname};
+      _ -> ok
+    end end,
+  if
+    Length > 0 ->
+      case ejabberd_sql:sql_transaction(Server, Fun) of
+        {atomic, {updated, OldNickname}} ->
           handle_vcard_photo(Server,Photo),
-          send_notifications_about_nick_change(Server,User),
-          ok;
-        _ ->
-          ok
+          send_notifications_about_nick_change(Server,User, OldNickname);
+        _ -> ok
       end;
-    _  ->
-      ok
+    true -> ok
   end.
+
+sql_update_auto_nickname_t(User, Nickname, Name, FN) ->
+  FinishNickname = nick(User, Nickname, Name, FN),
+  ejabberd_sql:sql_query_t(
+    ?SQL("update groupchat_users set auto_nickname = %(FinishNickname)s, "
+    " user_updated_at = (now() at time zone 'utc') "
+    " where username = %(User)s and nickname='' "
+    " and auto_nickname != %(FinishNickname)s"
+    " and chatgroup not in (select jid from groupchats "
+    " where anonymous = 'incognito')")).
 
 trim(String) ->
   case String of
-    _ when String =/= undefined ->
-      string:trim(String);
+    undefined -> <<>>;
     _ ->
-      <<"">>
+      string:trim(String)
   end.
+
+nick(User, []) -> User;
+nick(User, [{Name, FN, Nickname, _}]) ->
+  nick(User, Nickname, Name, FN).
+
+nick(User, Nickname, Name, FN) ->
+  if
+    Nickname /= <<>> -> Nickname;
+    Name /= <<>> -> Name;
+    FN /= <<>> -> FN;
+    true -> User
+  end.
+
 
 delete_group_avatar_file(Group) when is_binary(Group) ->
   delete_group_avatar_file(jid:from_string(Group));

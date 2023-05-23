@@ -420,9 +420,11 @@ delete_user(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
   Subscription = check_user(Server,User,Chat),
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc') where
-         username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
+    ?SQL("update groupchat_users set role = 'member', subscription = 'none',
+    user_updated_at = (now() at time zone 'utc') where
+    username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
     {updated,1} when Subscription == <<"both">> ->
+      mod_groups_restrictions:delete_permissions(Server, Chat, User),
       mod_groups_chats:update_user_counter(Chat),
       ok;
     _ ->
@@ -876,7 +878,7 @@ get_user_info(User,Chat) ->
   ChatJID = jid:from_string(Chat),
   Server = ChatJID#jid.lserver,
   case get_user_info(Server, User, Chat) of
-    [Username, UserId, _Subn, Badge, Nick, _Last, Role] ->
+    [Username, UserId, _Subs, Badge, Nick, _Last, Role] ->
       IsAnon = mod_groups_chats:is_anonim(Server,Chat),
       UserJID = jid:from_string(User),
       AvatarEl = mod_groups_vcard:get_photo_meta(Server,Username,Chat),
@@ -1499,7 +1501,7 @@ get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
 make_sql_query(SChat,RSM,Version) ->
   {Max, Direction, Item} = get_max_direction_item(RSM),
   Chat = ejabberd_sql:escape(SChat),
-  SubnClause =
+  SubsClause =
     case Version of
       0 ->
         <<" and subscription = 'both'">>;
@@ -1530,7 +1532,7 @@ make_sql_query(SChat,RSM,Version) ->
    THEN groupchat_users.nickname
   ELSE groupchat_users.auto_nickname
   END AS r_nickname
-  FROM groupchat_users  WHERE chatgroup = '">>,Chat, <<"'">>, VersionClause, SubnClause,<<")
+  FROM groupchat_users  WHERE chatgroup = '">>,Chat, <<"'">>, VersionClause, SubsClause,<<")
   SELECT username, id, badge, last, subscription, r_nickname
   from group_members where 0=0 ">>],
   PageClause =

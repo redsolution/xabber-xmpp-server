@@ -33,22 +33,18 @@
 %% API
 
 -export([
-  get_rules/4,
-  show_policy/2,
   insert_rule/6,
   upsert_rule/6,
   is_permitted/3,
   is_restricted/3,
-  show_permissions/2,
   is_owner/3,
   validate_users/4,
-  delete_rule/4,
-  translated/1,
   get_all_restrictions/1,
   get_all_rights/1,
   set_rule/6,
   get_rights/3,
-  get_owners/2]).
+  get_owners/2,
+  delete_permissions/3]).
 
 is_restricted(Action,User,Chat)->
   ChatJid = jid:from_string(Chat),
@@ -197,28 +193,6 @@ get_rights(Server,User,Chat) ->
     ?SQL("select @(right_name)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
     and (valid_until = 0 or valid_until > %(TS)d)")).
 
-show_permissions(Server,Chat) ->
-  ejabberd_sql:sql_query(
-    Server,
-    [<<"select groupchat_rights.name,
-    groupchat_rights.description,
-    groupchat_rights.type,
-    groupchat_default_restrictions.action_time
-    from groupchat_rights
-    LEFT JOIN groupchat_default_restrictions on
-    groupchat_default_restrictions.right_name = groupchat_rights.name
-    and groupchat_default_restrictions.chatgroup = '">>,
-     Chat
-    ,<<"' and groupchat_default_restrictions.action_time != '0 years' and groupchat_default_restrictions.action_time != 'now'
-     order by groupchat_rights.name = 'owner' asc, groupchat_rights.name desc">>]
-  ).
-   % ?SQL("select @(name)s,@(type)s from groupchat_rights order by name = 'owner' asc, name desc")).
-
-show_policy(Server,Chat) ->
-  ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(username)s,@(right_name)s,@(type)s from groupchat_policy where chatgroup=%(Chat)s")).
-
 upsert_rule(Server,Chat,Username,Rule,Expires,_IssuedBy) when Expires == <<"">> ->
   delete_rule(Server,Chat,Username,Rule);
 upsert_rule(Server,Chat,Username,Rule,Expires,IssuedBy) ->
@@ -257,27 +231,20 @@ delete_rule(Server,Chat,User,Rule) ->
     ?SQL("delete from groupchat_policy where
          username=%(User)s and chatgroup=%(Chat)s and right_name=%(Rule)s")).
 
-translated(Lang) ->
-  % Restrictions
-  RT = translate:translate(Lang,<<"Read messages">>),
-  WT = translate:translate(Lang,<<"Send messages">>),
-  SIT = translate:translate(Lang,<<"Send images">>),
-  SAT = translate:translate(Lang,<<"Send audio">>),
-  SIN = translate:translate(Lang,<<"Send invitations">>),
-  % Permissions
-  OT = translate:translate(Lang,<<"Owner">>),
-  AT = translate:translate(Lang,<<"Administrator">>),
-  CRT = translate:translate(Lang,<<"Restrict participants">>),
-  BPT = translate:translate(Lang,<<"Block participants">>),
-  CBT = translate:translate(Lang,<<"Change badges">>),
-  CNT = translate:translate(Lang,<<"Change nicknames">>),
-  DMT = translate:translate(Lang,<<"Delete messages">>),
-  [WT,RT,OT,AT,CRT,SIT,SAT,SIN,BPT,CBT,CNT,DMT].
+delete_permissions(Server, Group, User) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("delete from groupchat_policy where
+    username=%(User)s and chatgroup=%(Group)s and right_name in
+     (select name from groupchat_rights where type='permission')")).
+
+
 
 get_all_rights(LServer) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(name)s,@(type)s,@(description)s from groupchat_rights")) of
+    ?SQL("select @(name)s,@(type)s,@(description)s
+     from groupchat_rights")) of
     {selected,[]} ->
       [];
     {selected, Query} ->
@@ -289,9 +256,8 @@ get_all_rights(LServer) ->
 get_all_restrictions(LServer) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(name)s,@(type)s,@(description)s from groupchat_rights where type='restriction'")) of
-    {selected,[]} ->
-      [];
+    ?SQL("select @(name)s,@(type)s,@(description)s
+     from groupchat_rights where type='restriction'")) of
     {selected, Query} ->
       Query;
     _ ->

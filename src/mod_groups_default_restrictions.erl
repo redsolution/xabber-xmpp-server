@@ -36,82 +36,73 @@
 %% API
 -export([
   set_default_rights/4,
-  restrictions/2,
   set_restrictions/3
 ]).
 
 %% Hook groupchat_default_rights_form set_groupchat_default_rights
--export([check_if_exist/5, check_if_has_rights/5]).
+-export([check_permission/5]).
 
 %% Hook set_groupchat_default_rights set_groupchat_default_rights
--export([check_values/5, set_values/5]).
+-export([check_permission_and_values/5, set_values/5]).
 
 start(Host, _Opts) ->
-  ejabberd_hooks:add(set_groupchat_default_rights, Host, ?MODULE, check_if_exist, 10),
-  ejabberd_hooks:add(set_groupchat_default_rights, Host, ?MODULE, check_values, 20),
+  ejabberd_hooks:add(set_groupchat_default_rights, Host, ?MODULE, check_permission_and_values, 20),
   ejabberd_hooks:add(set_groupchat_default_rights, Host, ?MODULE, set_values, 30),
-  ejabberd_hooks:add(groupchat_default_rights_form, Host, ?MODULE, check_if_exist, 10),
-  ejabberd_hooks:add(groupchat_default_rights_form, Host, ?MODULE, check_if_has_rights, 20).
+  ejabberd_hooks:add(groupchat_default_rights_form, Host, ?MODULE, check_permission, 20).
 
 stop(Host) ->
-  ejabberd_hooks:delete(set_groupchat_default_rights, Host, ?MODULE, check_if_exist, 10),
-  ejabberd_hooks:delete(set_groupchat_default_rights, Host, ?MODULE, check_values, 20),
+  ejabberd_hooks:delete(set_groupchat_default_rights, Host, ?MODULE, check_permission_and_values, 20),
   ejabberd_hooks:delete(set_groupchat_default_rights, Host, ?MODULE, set_values, 30),
-  ejabberd_hooks:delete(groupchat_default_rights_form, Host, ?MODULE, check_if_exist, 10),
-  ejabberd_hooks:delete(groupchat_default_rights_form, Host, ?MODULE, check_if_has_rights, 20).
+  ejabberd_hooks:delete(groupchat_default_rights_form, Host, ?MODULE, check_permission, 20).
 
 depends(_Host, _Opts) ->  [].
 
 mod_options(_Opts) -> [].
 
-check_if_exist(Acc, User, Chat, LServer, _Lang) ->
-  case mod_groups_users:check_user_if_exist(LServer,User,Chat) of
-    not_exist ->
-      {stop,not_ok};
-    _ ->
-      Acc
-  end.
-
-check_if_has_rights(_Acc, User, Chat, LServer, Lang) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+check_permission(_Acc, User, Chat, LServer, Lang) ->
+  case mod_groups_restrictions:
+  is_permitted(<<"change-group">>,User,Chat) of
     true ->
-      {stop, {ok,create_default_right_form(Chat, LServer, Lang)}};
+      {stop, {ok, create_right_form(Chat, LServer, Lang, form)}};
     _ ->
       {stop, not_ok}
   end.
 
-check_values(Acc, User, Chat, LServer, _Lang) ->
-  FS = decode(LServer,Acc),
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
-    true when FS =/= not_ok ->
-      {ok,Values} = FS,
-      NewValues = Values -- get_default_current_rights(LServer,Chat),
-      validate(NewValues);
+check_permission_and_values(Acc, User, Chat, LServer, _Lang) ->
+  case mod_groups_restrictions:
+  is_permitted(<<"change-group">>, User, Chat) of
+    true ->
+      case decode(LServer, Acc) of
+        {ok, Values} ->
+          NewValues = Values -- get_default_current_rights(LServer, Chat),
+          validate(NewValues);
+        _ ->
+          bad_request
+      end;
     _ ->
-      {stop, not_ok}
+      {stop, not_allowed}
   end.
 
 set_values(Acc, _User, Chat, LServer, Lang) ->
   lists:foreach(fun(El) ->
     {Right,Value} = El,
     set_default_restrictions(LServer,Chat,Right,Value) end, Acc),
-  {stop, {ok, create_result_right_form(Chat,LServer,Lang)}}.
+  {stop, {ok, create_right_form(Chat, LServer, Lang, result)}}.
 
 -spec decode(binary(),list()) -> list().
 decode(LServer, FS) ->
-  Decoded = decode(LServer, [],filter_fixed_fields(FS)),
-  case lists:member(false,Decoded) of
-    true ->
-      not_ok;
-    _ ->
-      {ok,Decoded}
+  Restrictions1 = mod_groups_restrictions:get_all_restrictions(LServer),
+  Restrictions = [ R || {R,_, _} <- Restrictions1],
+  Decoded = lists:map(
+    fun(#xdata_field{var = Var, values = Values}) ->
+      case lists:member(Var, Restrictions) of
+        true -> {Var, Values};
+        _ -> false
+      end end, filter_fixed_fields(FS)),
+  case lists:member(false, Decoded) of
+    true -> error;
+    _ -> {ok, Decoded}
   end.
-
--spec decode(binary(),list(),list()) -> list().
-decode(LServer, Acc,[#xdata_field{var = Var, values = Values} | RestFS]) ->
-  decode(LServer,[get_and_validate(LServer,Var,Values)| Acc], RestFS);
-decode(_LServer, Acc, []) ->
-  Acc.
 
 -spec filter_fixed_fields(list()) -> list().
 filter_fixed_fields(FS) ->
@@ -127,26 +118,12 @@ filter_fixed_fields(FS) ->
     end
                end, FS).
 
--spec get_and_validate(binary(),binary(),list()) -> binary().
-get_and_validate(LServer,RightName,Value) ->
-  AllRights = mod_groups_restrictions:get_all_rights(LServer),
-  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
-  case lists:keyfind(RightName,1,Restrictions) of
-    {RightName,_Desc} ->
-      {RightName,Value};
-    _ ->
-      false
-  end.
-
 is_valid_value([],_ValidValues) ->
   true;
 is_valid_value([Value],ValidValues) ->
   lists:member(Value,ValidValues);
 is_valid_value(_Other,_ValidValues) ->
   false.
-
-valid_values() ->
-  [<<>>,<<"0">>,<<"300">>,<<"600">>,<<"900">>,<<"1800">>,<<"3600">>,<<"604800">>,<<"2592000">>].
 
 validate([]) ->
   {stop,bad_request};
@@ -164,104 +141,77 @@ validate(FS) ->
       {stop, bad_request}
   end.
 
-restrictions(Query,Iq) ->
-  #iq{to = To} = Iq,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Server = To#jid.lserver,
-  Restrictions = Query#xabbergroupchat_query_rights.restriction,
-  case length(Restrictions) of
-    0 ->
-      xmpp:err_bad_request();
-    _ ->
-      lists:foreach(fun(N) ->
-        Name = N#xabbergroupchat_restriction.name,
-        Time = N#xabbergroupchat_restriction.expires,
-        set_default_rights(Server,Chat,Name,Time)
-                    end, Restrictions),
-      xmpp:make_iq_result(Iq)
-  end.
-
-create_default_right_form(Chat, LServer, Lang) ->
-  Rights = default_rights(LServer,Chat,Lang),
-      Fields = [
-        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]}| Rights
-      ],
-      #xabbergroupchat{
-        xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS,
-        sub_els = [
-          #xdata{type = form,
-            title = <<"Groupchat default rights change">>,
-            instructions = [<<"Fill out this form to change the default rights of group chat">>],
-            fields = Fields}
-        ]}.
-
-create_result_right_form(Chat,LServer,Lang) ->
-  Rights = default_rights_no_options(LServer,Chat,Lang),
-  Fields = [
-    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]}| Rights
-  ],
+create_right_form(Chat, LServer, Lang, FormType) ->
+  {WithOpts, Instr} =
+    case FormType of
+      result ->
+        {false, []};
+      _ ->
+        {true, [<<"Fill out this form to change the default rights of group chat">>]}
+    end,
+  Rights = default_rights(LServer, Chat, Lang, WithOpts),
+  Fields = [#xdata_field{var = <<"FORM_TYPE">>, type = hidden,
+    values = [?NS_GROUPCHAT]} | Rights ],
   #xabbergroupchat{
     xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS,
     sub_els = [
-      #xdata{type = result,
+      #xdata{type = FormType,
         title = <<"Groupchat default rights">>,
+        instructions = Instr,
         fields = Fields}
     ]}.
 
-default_rights_no_options(LServer, Chat, Lang) ->
-  DefaultRights = get_default_rights(LServer,Chat),
-  AllRights = mod_groups_restrictions:get_all_rights(LServer),
-  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
-  RestrictionsFields = lists:map(fun(Right) ->
-    {Name,Desc} = Right,
-    Values = get_time(Name,DefaultRights),
-    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
-      values = Values
-    }
-                                 end, Restrictions
-  ),
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
+default_rights(LServer, Group, Lang, WithOpts) ->
+  Restrictions = sql_get_all_restrictions(LServer, Group),
+  Opts = case WithOpts of
+           true -> form_options();
+           _ -> []
+         end,
+  RestrictionsFields = lists:map(
+    fun({Name, Desc, Time}) ->
+      Values = case Time of
+                 null -> [];
+                 _ -> [Time]
+               end,
+      #xdata_field{var = Name, label = translate:translate(Lang,Desc),
+        type = 'list-single', values = Values, options = Opts}
+    end, Restrictions),
+  RestrictionSection = [#xdata_field{var= <<"restriction">>,
+    type = 'fixed', values = [<<"Restrictions">>]}],
   RestrictionSection ++ RestrictionsFields.
 
-default_rights(LServer, Chat, Lang) ->
-  DefaultRights = get_default_rights(LServer,Chat),
-  AllRights = mod_groups_restrictions:get_all_rights(LServer),
-  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
-  RestrictionsFields = lists:map(fun(Right) ->
-    {Name,Desc} = Right,
-    Values = get_time(Name,DefaultRights),
-    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
-      values = Values,
-      options = form_options()
-    }
-                                 end, Restrictions
-  ),
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
-  RestrictionSection ++ RestrictionsFields.
+sql_get_all_restrictions(Server, Group)->
+  case ejabberd_sql:sql_query(
+  Server,
+  ?SQL("select @(groupchat_rights.name)s,
+  @(groupchat_rights.description)s,
+  @(groupchat_default_restrictions.action_time)s
+  from groupchat_rights
+  LEFT JOIN groupchat_default_restrictions on
+    groupchat_default_restrictions.right_name = groupchat_rights.name
+    and groupchat_default_restrictions.chatgroup =%(Group)s
+  where groupchat_rights.type='restriction'")) of
+    {selected, L} -> L;
+    _ -> []
+  end.
 
-get_default_rights(LServer,Chat) ->
+sql_get_default_restrictions(LServer, Group) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(right_name)s,@(action_time)s from groupchat_default_restrictions where chatgroup=%(Chat)s")) of
-    {selected,[]} ->
-      [];
-    {selected,[{}]} ->
-      [];
-    {selected,Rights} ->
-      Rights
+    ?SQL("select @(right_name)s,@(action_time)s
+     from groupchat_default_restrictions
+      where chatgroup=%(Group)s")) of
+    {selected, Rights} -> Rights;
+    _ -> []
   end.
 
 get_default_current_rights(LServer,Chat) ->
-  DefaultRights = get_default_rights(LServer,Chat),
-  lists:map(fun(El) -> {Name,Value} = El, {Name,[Value]} end, DefaultRights).
+  Defaults = sql_get_default_restrictions(LServer,Chat),
+  [{Name,[Value]} || {Name,Value} <- Defaults].
 
-get_time(Right,RightsList) ->
-  case lists:keyfind(Right,1,RightsList) of
-    {Right,Time} ->
-      [Time];
-    _ ->
-      []
-  end.
+
+valid_values() ->
+  [<<>>,<<"0">>,<<"300">>,<<"600">>,<<"900">>,<<"1800">>,<<"3600">>,<<"604800">>,<<"2592000">>].
 
 form_options() ->
   [
@@ -276,47 +226,35 @@ form_options() ->
   ].
 
 
-
 set_default_rights(Server,Chat,Right,Time) ->
-  case ?SQL_UPSERT(Server, "groupchat_default_restrictions",
-    [
-      "action_time=%(Time)s",
+  ?SQL_UPSERT(Server,
+    "groupchat_default_restrictions",
+    ["!chatgroup=%(Chat)s",
       "!right_name=%(Right)s",
-      "!chatgroup=%(Chat)s"
-    ]) of
-    ok ->
-      ok;
-    _ ->
-      {error, db_failure}
-  end.
+      "action_time=%(Time)s"]).
 
-set_restrictions(Server,User,Chat) ->
+set_restrictions(Server, User, Chat) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(right_name)s,@(action_time)s from groupchat_default_restrictions where chatgroup=%(Chat)s")) of
-    {selected,[]} ->
-      ok;
-    {selected,[{}]} ->
-      ok;
+    ?SQL("select @(right_name)s,@(action_time)s
+     from groupchat_default_restrictions where chatgroup=%(Chat)s")) of
+    {selected, []} -> ok;
     {selected,Restrictions} ->
-      lists:map(fun(N) ->
-        {Rule,Time} = N,
+      lists:foreach(fun({Rule,Time} ) ->
         ActionTime = set_time(Time),
-      mod_groups_restrictions:upsert_rule(Server,Chat,User,Rule,ActionTime,<<"server">>) end, Restrictions),
-        ok;
-    _ ->
-      ok
+         mod_groups_restrictions:upsert_rule(Server,
+           Chat, User, Rule, ActionTime, <<"server">>)
+                    end, Restrictions);
+    _ -> ok
   end.
-set_default_restrictions(LServer, Chat, Right, [<<>>]) ->
+
+set_default_restrictions(LServer, Chat, Right, [Time]) when Time /= <<>> ->
+  set_default_rights(LServer,Chat,Right,Time);
+set_default_restrictions(LServer, Chat, Right, _) ->
   ejabberd_sql:sql_query(
     LServer,
-    ?SQL("delete from groupchat_default_restrictions where chatgroup=%(Chat)s and right_name=%(Right)s"));
-set_default_restrictions(LServer, Chat, Right, []) ->
-  ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("delete from groupchat_default_restrictions where chatgroup=%(Chat)s and right_name=%(Right)s"));
-set_default_restrictions(LServer, Chat, Right, [Time]) ->
-  set_default_rights(LServer,Chat,Right,Time).
+    ?SQL("delete from groupchat_default_restrictions
+     where chatgroup=%(Chat)s and right_name=%(Right)s")).
 
 %% Internal functions
 set_time(<<"never">>) ->

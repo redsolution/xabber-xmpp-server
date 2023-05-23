@@ -477,25 +477,6 @@ process_groupchat_iq(#iq{to = To, type = get, sub_els = [#vcard_temp{}]} = IQ) -
   Server = To#jid.lserver,
   Vcard = mod_groups_vcard:get_vcard(LUser,Server),
   ejabberd_router:route(xmpp:make_iq_result(IQ,Vcard));
-process_groupchat_iq(#iq{lang = Lang, type = get, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = []}]} = IQ) ->
-    Chat = jid:to_string(jid:remove_resource(To)),
-  {selected,_Tables,Permissions} = mod_groups_restrictions:show_permissions(To#jid.lserver,Chat),
-  TranslatedPermissions = lists:map(fun(N) ->
-    [Name,Desc,Type,Action] = N,
-    [Name,translate:translate(Lang,Desc),Type,Action] end, Permissions
-  ),
-  ejabberd_router:route(xmpp:make_iq_result(IQ,query_chat(TranslatedPermissions)));
-process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [], restriction = Restrictions } = Query]} = IQ) ->
-  User = jid:to_string(jid:remove_resource(From)),
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Permission = mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat),
-  Result = case Permission of
-             true when Restrictions =/= [] ->
-               mod_groups_default_restrictions:restrictions(Query,IQ);
-             _ ->
-               xmpp:err_not_allowed()
-           end,
-  ejabberd_router:route(Result);
 process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [#xabbergroupchat_user_card{id = ID}]}]} = IQ) when ID == <<>> orelse ID == <<"">> ->
   User = jid:to_string(jid:remove_resource(From)),
   LServer = To#jid.lserver,
@@ -799,29 +780,9 @@ xdata_field(Var,Label,Value) ->
   #xmlel{name = <<"field">>, attrs = [{<<"var">>,Var},{<<"label">>,Label}],
     children = [#xmlel{name = <<"value">>, children = [{xmlcdata,Value}]}]}.
 
-query_chat(Items) ->
-  {xmlel,<<"query">>,[{<<"xmlns">>,<<"https://xabber.com/protocol/groups#rights">>}],
-    items(Items,[])}.
-
 query_disco_info(Items) ->
   {xmlel,<<"query">>,[{<<"xmlns">>,?NS_DISCO_INFO}],
     Items}.
-
-items([],Acc)->
-  Acc;
-items(Users,Acc) ->
-  [User|Rest] = Users,
-  items(Rest,[item(User)|Acc]).
-
-
-item(User) ->
-  [Name,TranslatedName,Type,Action] = User,
-  case Action of
-    null ->
-      {xmlel,Type,[{<<"name">>,Name},{<<"translation">>,TranslatedName}],[]};
-    _ ->
-      {xmlel,Type,[{<<"name">>,Name},{<<"translation">>,TranslatedName},{<<"expires">>,Action}],[]}
-  end.
 
 process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type = Type,
   sub_els = [SubEl]} = Iq) ->

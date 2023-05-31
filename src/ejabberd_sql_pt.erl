@@ -306,6 +306,20 @@ parse1([$%, $( | S], Acc, State) ->
                     false ->
                         append_string("0=0", State3)
                 end;
+            {array, InternalType} ->
+                Convert = erl_syntax:application(
+                    erl_syntax:atom(ejabberd_sql),
+                    erl_syntax:atom(to_array),
+                    [erl_syntax:record_access(
+                        erl_syntax:variable(?ESCAPE_VAR),
+                        erl_syntax:atom(?ESCAPE_RECORD),
+                        erl_syntax:atom(InternalType)),
+                        erl_syntax:variable(Name)]),
+                State2#state{'query' = [{var, Var} | State2#state.'query'],
+                            args = [Convert | State2#state.args],
+                            params = [Var | State2#state.params],
+                            param_pos = State2#state.param_pos + 1,
+                            used_vars = [Name | State2#state.used_vars]};
             _ ->
                 Convert =
                     erl_syntax:application(
@@ -335,6 +349,19 @@ parse_name(S, IsArg, State) ->
 parse_name([], _Acc, _Depth, _IsArg, State) ->
     throw({error, State#state.loc,
            "expected ')', found end of string"});
+parse_name([$), $a, T | S], Acc, 0, true, State) ->
+  Type = case T of
+           $d -> {array, integer};
+           $s -> {array, string};
+           $b -> {array, boolean};
+           _ ->
+             throw({error, State#state.loc,
+               ["unknown type specifier 'l", T, "'"]})
+         end,
+  {lists:reverse(Acc), Type, S, State};
+parse_name([$), $a, T | _], _Acc, 0, false, State) ->
+  throw({error, State#state.loc,
+    ["array type 'a", T, "' is not allowed for outputs"]});
 parse_name([$), T | S], Acc, 0, IsArg, State) ->
     Type =
         case T of

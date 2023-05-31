@@ -55,7 +55,8 @@
 	 freetds_config/0,
 	 odbcinst_config/0,
 	 init_mssql/1,
-	 keep_alive/2]).
+	 keep_alive/2,
+   to_array/2]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3, handle_sync_event/4,
@@ -137,7 +138,7 @@ start_link(Host, StartInterval) ->
 -spec sql_query(binary(), sql_query()) -> sql_query_result().
 
 sql_query(Host, Query) ->
-    check_error(sql_call(Host, {sql_query, Query}), Query).
+  sql_call(Host, {sql_query, Query}).
 
 %% SQL transaction based on a list of queries
 %% This function automatically
@@ -166,17 +167,23 @@ sql_call(Host, Msg) ->
           none -> {error, <<"Unknown Host">>};
           Pid ->
 		sync_send_event(Pid,{sql_cmd, Msg,
-				     p1_time_compat:monotonic_time(milli_seconds)},
+				     erlang:monotonic_time(millisecond)},
 				query_timeout(Host))
           end;
       _State -> nested_op(Msg)
     end.
 
 keep_alive(Host, PID) ->
-    sync_send_event(PID,
-		    {sql_cmd, {sql_query, ?KEEPALIVE_QUERY},
-		     p1_time_compat:monotonic_time(milli_seconds)},
-		    query_timeout(Host)).
+  case sync_send_event(PID,
+    {sql_cmd, {sql_query, ?KEEPALIVE_QUERY},
+      erlang:monotonic_time(millisecond)},
+    query_timeout(Host)) of
+    {selected, _,[[<<"1">>]]} ->
+      ok;
+    _Err ->
+      ?ERROR_MSG("keep alive query failed, closing connection: ~p", [_Err]),
+      sync_send_event(PID, force_timeout, query_timeout(Host))
+  end.
 
 sync_send_event(Pid, Msg, Timeout) ->
     try p1_fsm:sync_send_event(Pid, Msg, Timeout)
@@ -252,6 +259,10 @@ to_bool(<<"1">>) -> true;
 to_bool(true) -> true;
 to_bool(1) -> true;
 to_bool(_) -> false.
+
+to_array(EscapeFun, Val) ->
+  Escaped = lists:join(<<",">>, lists:map(EscapeFun, Val)),
+  [<<"{">>, Escaped, <<"}">>].
 
 encode_term(Term) ->
     escape(list_to_binary(
@@ -336,7 +347,7 @@ connecting(connect, #state{host = Host} = State) ->
             State2 = get_db_version(State1),
             {next_state, session_established, State2};
       {error, Reason} ->
-	  ?INFO_MSG("~p connection failed:~n** Reason: ~p~n** "
+	  ?WARNING_MSG("~p connection failed:~n** Reason: ~p~n** "
 		    "Retry after: ~p seconds",
 		    [State#state.db_type, Reason,
 		     State#state.start_interval div 1000]),
@@ -390,6 +401,8 @@ session_established(Request, {Who, _Ref}, State) ->
 session_established({sql_cmd, Command, From, Timestamp},
 		    State) ->
     run_sql_cmd(Command, From, State, Timestamp);
+session_established(force_timeout, State) ->
+    {stop, timeout, State};
 session_established(Event, State) ->
     ?WARNING_MSG("unexpected event in 'session_established': ~p",
 		 [Event]),
@@ -437,7 +450,7 @@ print_state(State) -> State.
 
 run_sql_cmd(Command, From, State, Timestamp) ->
     QueryTimeout = query_timeout(State#state.host),
-    case p1_time_compat:monotonic_time(milli_seconds) - Timestamp of
+    case erlang:monotonic_time(millisecond) - Timestamp of
       Age when Age < QueryTimeout ->
 	  put(?NESTING_KEY, ?TOP_LEVEL_TXN),
 	  put(?STATE_KEY, State),
@@ -509,6 +522,7 @@ outer_transaction(F, NRestarts, _Reason) ->
     case Result of
       {aborted, Reason} when NRestarts > 0 ->
 	  sql_query_internal([<<"rollback;">>]),
+	  put(?NESTING_KEY, ?TOP_LEVEL_TXN),
 	  outer_transaction(F, NRestarts - 1, Reason);
       {aborted, Reason} when NRestarts =:= 0 ->
 	  ?ERROR_MSG("SQL transaction restarts exceeded~n** "
@@ -581,20 +595,22 @@ sql_query_internal(#sql_query{} = Query) ->
                 sqlite ->
                     sqlite_sql_query(Query)
             end
-        catch
-            Class:Reason ->
+        catch exit:{timeout, _} ->
+                {error, <<"timed out">>};
+              exit:{killed, _} ->
+                {error, <<"killed">>};
+              exit:{normal, _} ->
+                {error, <<"terminated unexpectedly">>};
+              Class:Reason ->
                 ST = erlang:get_stacktrace(),
                 ?ERROR_MSG("Internal error while processing SQL query: ~p",
                            [{Class, Reason, ST}]),
                 {error, <<"internal error">>}
         end,
-    case Res of
-        {error, <<"No SQL-driver information available.">>} ->
-            {updated, 0};
-        _Else -> Res
-    end;
+    check_error(Res, Query);
 sql_query_internal(F) when is_function(F) ->
     case catch execute_fun(F) of
+        {aborted, Reason} -> {error, Reason};
         {'EXIT', Reason} -> {error, Reason};
         Res -> Res
     end;
@@ -617,17 +633,12 @@ sql_query_internal(Query) ->
 						   [Query], self(),
 						   [{timeout, QueryTimeout - 1000},
 						    {result_type, binary}])),
-		%% ?INFO_MSG("MySQL, Received result~n~p~n", [R]),
 		  R;
 	      sqlite ->
 		  Host = State#state.host,
 		  sqlite_to_odbc(Host, sqlite3:sql_exec(sqlite_db(Host), Query))
 	  end,
-    case Res of
-      {error, <<"No SQL-driver information available.">>} ->
-	  {updated, 0};
-      _Else -> Res
-    end.
+    check_error(Res, Query).
 
 select_sql_query(Queries, State) ->
     select_sql_query(
@@ -746,15 +757,24 @@ sql_query_to_iolist(SQLQuery) ->
     generic_sql_query_format(SQLQuery).
 
 %% Generate the OTP callback return tuple depending on the driver result.
-abort_on_driver_error({error, <<"query timed out">>} =
-			  Reply,
+abort_on_driver_error({error,
+		      <<"query timed out">>} = Reply,
 		      From) ->
     p1_fsm:reply(From, Reply),
     {stop, timeout, get(?STATE_KEY)};
 abort_on_driver_error({error,
-		       <<"Failed sending data on socket", _/binary>>} =
-			  Reply,
-		      From) ->
+    <<"Failed sending data on socket", _/binary>>} = Reply,
+    From) ->
+    p1_fsm:reply(From, Reply),
+    {stop, closed, get(?STATE_KEY)};
+abort_on_driver_error({error,
+    <<"SQL connection failed">>} = Reply,
+    From) ->
+    p1_fsm:reply(From, Reply),
+    {stop, timeout, get(?STATE_KEY)};
+abort_on_driver_error({error,
+    <<"Communication link failure">>} = Reply,
+    From) ->
     p1_fsm:reply(From, Reply),
     {stop, closed, get(?STATE_KEY)};
 abort_on_driver_error(Reply, From) ->
@@ -769,6 +789,7 @@ odbc_connect(SQLServer, Timeout) ->
     ejabberd:start_app(odbc),
     odbc:connect(binary_to_list(SQLServer),
 		 [{scrollable_cursors, off},
+		  {extended_errors, on},
 		  {tuple_row, off},
 		  {timeout, Timeout},
 		  {binary_strings, on}]).
@@ -946,6 +967,7 @@ get_db_version(State) ->
 log(Level, Format, Args) ->
     case Level of
       debug -> ?DEBUG(Format, Args);
+      info -> ?INFO_MSG(Format, Args);
       normal -> ?INFO_MSG(Format, Args);
       error -> ?ERROR_MSG(Format, Args)
     end.
@@ -1051,9 +1073,9 @@ init_mssql(Host) ->
     case filelib:ensure_dir(freetds_config()) of
 	ok ->
 	    try
-		ok = file:write_file(freetds_config(), FreeTDS, [append]),
-		ok = file:write_file(odbcinst_config(), ODBCINST),
-		ok = file:write_file(odbc_config(), ODBCINI, [append]),
+		ok = write_file_if_new(freetds_config(), FreeTDS),
+		ok = write_file_if_new(odbcinst_config(), ODBCINST),
+		ok = write_file_if_new(odbc_config(), ODBCINI),
 		os:putenv("ODBCSYSINI", tmp_dir()),
 		os:putenv("FREETDS", freetds_config()),
 		os:putenv("FREETDSCONF", freetds_config()),
@@ -1068,6 +1090,12 @@ init_mssql(Host) ->
 		       [tmp_dir(), file:format_error(Reason)]),
 	    Err
     end.
+
+write_file_if_new(File, Payload) ->
+  case filelib:is_file(File) of
+    true -> ok;
+    false -> file:write_file(File, Payload)
+  end.
 
 tmp_dir() ->
     case os:type() of
@@ -1094,20 +1122,45 @@ query_timeout(LServer) ->
     timer:seconds(
       ejabberd_config:get_option({sql_query_timeout, LServer}, 60)).
 
+%% ***IMPORTANT*** This error format requires extended_errors turned on.
+extended_error({"08S01", _, Reason}) ->
+  % TCP Provider: The specified network name is no longer available
+  ?DEBUG("ODBC Link Failure: ~s", [Reason]),
+  <<"Communication link failure">>;
+extended_error({"08001", _, Reason}) ->
+  % Login timeout expired
+  ?DEBUG("ODBC Connect Timeout: ~s", [Reason]),
+  <<"SQL connection failed">>;
+extended_error({"IMC01", _, Reason}) ->
+  % The connection is broken and recovery is not possible
+  ?DEBUG("ODBC Link Failure: ~s", [Reason]),
+  <<"Communication link failure">>;
+extended_error({"IMC06", _, Reason}) ->
+  % The connection is broken and recovery is not possible
+  ?DEBUG("ODBC Link Failure: ~s", [Reason]),
+  <<"Communication link failure">>;
+extended_error({Code, _, Reason}) ->
+  ?DEBUG("ODBC Error ~s: ~s", [Code, Reason]),
+  iolist_to_binary(Reason);
+extended_error(Error) ->
+  Error.
+
 check_error({error, Why} = Err, _Query) when Why == killed ->
     Err;
-check_error({error, Why} = Err, #sql_query{} = Query) ->
+check_error({error, Why}, #sql_query{} = Query) ->
+    Err = extended_error(Why),
     ?ERROR_MSG("SQL query '~s' at ~p failed: ~p",
-               [Query#sql_query.hash, Query#sql_query.loc, Why]),
-    Err;
-check_error({error, Why} = Err, Query) ->
+      [Query#sql_query.hash, Query#sql_query.loc, Err]),
+    {error, Err};
+check_error({error, Why}, Query) ->
+    Err = extended_error(Why),
     case catch iolist_to_binary(Query) of
         SQuery when is_binary(SQuery) ->
-            ?ERROR_MSG("SQL query '~s' failed: ~p", [SQuery, Why]);
+            ?ERROR_MSG("SQL query '~s' failed: ~p", [SQuery, Err]);
         _ ->
-            ?ERROR_MSG("SQL query ~p failed: ~p", [Query, Why])
+            ?ERROR_MSG("SQL query ~p failed: ~p", [Query, Err])
     end,
-    Err;
+    {error, Err};
 check_error(Result, _Query) ->
     Result.
 

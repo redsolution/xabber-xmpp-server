@@ -56,6 +56,9 @@
 -export([create_synchronization_metadata/13]).
 -type c2s_state() :: ejabberd_c2s:state().
 
+% API
+-export([is_muted/3, is_muted/4]).
+
 %% records
 -record(state, {
   host = <<"">> :: binary(),
@@ -867,8 +870,8 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
         #xabber_metadata{node = ?NS_GROUPCHAT, sub_els = UserCard ++ GroupInfo},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
     _ when Encrypted == true ->
-      Count = get_count_messages(LServer,LUser,Conversation,Read,true),
-      LastMessage = get_last_encrypted_message(LServer,LUser,Conversation),
+      Count = get_count_messages(LServer,LUser,Conversation,Read,Type),
+      LastMessage = get_last_encrypted_message(LServer,LUser,Conversation,Type),
       Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
       XabberDelivered = #xabber_conversation_delivered{id = Delivered},
       XabberDisplayed = #xabber_conversation_displayed{id = Display},
@@ -878,7 +881,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
         sub_els = [#xabber_conversation_retract{version = RetractVersion}]},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]};
     _ ->
-      Count = get_count_messages(LServer,LUser,Conversation,Read,false),
+      Count = get_count_messages(LServer,LUser,Conversation,Read,<<"cleartext">>),
       LastMessage = get_last_message(LServer,LUser,Conversation),
       LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
@@ -919,7 +922,7 @@ get_last_informative_message(LServer, LUser, Conversation, TS) ->
     LServer,
     ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
     " from archive where username=%(LUser)s and bare_peer=%(Conversation)s "
-    " and %(LServer)H and timestamp < %(TS)d and encrypted = false "
+    " and %(LServer)H and timestamp < %(TS)d and payload_type='cleartext' "
     " order by timestamp desc limit 10")) of
     {selected,[]} ->
       [];
@@ -962,12 +965,12 @@ find_informative_message(LUser, LServer, List)->
   end.
 
 %% Get the last encrypted informative chat message
-get_last_encrypted_message(LServer,LUser,Conversation) ->
+get_last_encrypted_message(LServer,LUser,Conversation, EType) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
     " from archive where username=%(LUser)s and bare_peer=%(Conversation)s "
-    " and %(LServer)H and txt notnull and txt !='' and encrypted = true "
+    " and %(LServer)H and txt notnull and txt !='' and payload_type = %(EType)s "
     " order by timestamp desc limit 1")) of
     {selected,[<<>>]} ->
       [];
@@ -1593,13 +1596,12 @@ get_last_stamp(LServer, LUser) ->
       Version
   end.
 
-get_count_messages(LServer,LUser,Peer,TS, Encrypted) ->
+get_count_messages(LServer,LUser,Peer,TS, PayloadType) ->
   case ejabberd_sql:sql_query(LServer,
     ?SQL("select @(count(*))d from archive "
     " where username=%(LUser)s and bare_peer=%(Peer)s and txt notnull and txt !='' "
-    " and timestamp > %(TS)d and tags not like '%<invite>%' "
-    " and tags not like '%<voip>%' "
-    " and encrypted = %(Encrypted)b and %(LServer)H")) of
+    " and timestamp > %(TS)d and not ARRAY['invite','voip'] && tags "
+    " and payload_type = %(PayloadType)s and %(LServer)H")) of
     {selected,[{Count}]} ->
       Count;
     _ ->
@@ -2100,6 +2102,17 @@ delete_conversations(LUser, LServer) ->
     ?SQL("delete from conversation_metadata "
     " where username = %(LUser)s and %(LServer)H")),
   ok.
+
+is_muted(LUser, LServer, Conversation) ->
+  Now = time_now() div 1000000,
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @('true')b from conversation_metadata "
+    " where username = %(LUser)s and conversation = %(Conversation)s "
+    " and status != 'deleted' and mute > %(Now)d and %(LServer)H")) of
+    {selected,[_|_]} -> true;
+    _ -> false
+  end.
 
 is_muted(LUser,LServer, Conversation, Type) ->
   Now = time_now() div 1000000,

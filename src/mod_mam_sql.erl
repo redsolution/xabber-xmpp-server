@@ -116,12 +116,16 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
     Is_image = search_in_references(References,<<"image">>),
   Is_audio = search_in_references(References,<<"audio">>),
   Is_video = search_in_references(References,<<"video">>),
-  Is_document = search_in_references(References,<<"application">>),
+  Is_document = search_in_references(References, othe),
   Is_voice = search_element_in_references(References,#voice_message{}),
   Is_geo = search_element_in_references(References,#geoloc{}),
   Is_sticker = search_element_in_references(References,#sticker{}),
   Is_encrypted = is_encrypted(Pkt),
-  Tags = get_message_tags(Pkt),
+    PayloadType = case get_encrypted_type(Pkt) of
+                    false -> <<"cleartext">>;
+                    V -> V
+                  end,
+    Tags = get_message_tags(Pkt),
     XML = fxml:element_to_binary(Pkt),
     Body = fxml:get_subtag_cdata(Pkt, <<"body">>),
     SType = misc:atom_to_binary(Type),
@@ -141,25 +145,26 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
                "video=%(Is_video)b",
                "audio=%(Is_audio)b",
                "document=%(Is_document)b",
-                "geo=%(Is_geo)b",
-                "sticker=%(Is_sticker)b",
-                "voice=%(Is_voice)b",
-                "encrypted=%(Is_encrypted)b",
-                "tags=%(Tags)s",
+               "geo=%(Is_geo)b",
+               "sticker=%(Is_sticker)b",
+               "voice=%(Is_voice)b",
+               "encrypted=%(Is_encrypted)b",
+               "payload_type=%(PayloadType)s",
+               "tags=%(Tags)as",
                "nick=%(Nick)s"])) of
-	{updated, _} ->
-	    ok;
-	Err ->
-	    Err
+      {updated, _} ->
+        ok;
+      Err ->
+        Err
     end.
 
-is_encrypted(LServer,StanzaID) ->
+is_encrypted(LServer, StanzaID) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(encrypted)b,@(xml)s
+    ?SQL("select @(payload_type)s
        from archive where timestamp=%(StanzaID)d")) of
-    {selected,[{true, XML}]} ->
-      {true, get_encrypted_type(fxml_stream:parse_element(XML))};
+    {selected,[{PType}]} when PType /= <<"cleartext">> ->
+      {true, PType};
     _ ->
       false
   end.
@@ -193,12 +198,12 @@ find_encryption(Els) ->
   end.
 
 find_encryption_fallback(Els) ->
-  XEPS = [<<"urn:xmpp:otr:0">>, <<"jabber:x:encrypted">>,
+  SPACES = [<<"urn:xmpp:otr:0">>, <<"jabber:x:encrypted">>,
     <<"urn:xmpp:openpgp:0">>, <<"eu.siacs.conversations.axolotl">>,
     <<"urn:xmpp:omemo:1">>, <<"urn:xmpp:omemo:2">>],
   lists:foldl(fun(El, Acc0) ->
     NS = xmpp:get_ns(El),
-    case lists:member(NS, XEPS) of
+    case lists:member(NS, SPACES) of
       true -> NS;
       false -> Acc0
     end
@@ -224,23 +229,40 @@ filter_all_except_references(Pkt) ->
   DecodedEls = lists:map(fun(El) -> xmpp:decode(El) end, NewEls),
   DecodedEls.
 
-search_in_references(References,SearchType) ->
-  Array = lists:map(fun(Reference) ->
+get_all_references(Pkt) ->
+  Els = xmpp:get_els(Pkt),
+  Els1 = lists:filter(
+    fun(#xmppreference{}) -> true;
+       (_) -> false
+    end, Els),
+  lists:map(fun(El) -> xmpp:decode(El) end, Els1).
+
+search_in_references(References, othe) ->
+  L = lists:filtermap(fun(Reference) ->
     File = xmpp:get_subtag(Reference, #xabber_file_sharing{}),
     case File of
-      #xabber_file_sharing{file = #xabber_file{type = MediaType}} when MediaType =/= undefined ->
-        Type = hd(binary:split(MediaType,<<"/">>,[global])),
-        case Type of
-          SearchType ->
-            true;
-          _ ->
-            false
-        end;
+      #xabber_file_sharing{file = #xabber_file{type = MediaType}}
+        when MediaType =/= undefined ->
+        {true, hd(binary:split(MediaType,<<"/">>,[global]))};
       _ ->
         false
+    end end, References),
+  RL = lists:usort(L) -- [<<"audio">>, <<"image">>, <<"video">>],
+  RL /= [];
+search_in_references(References, SearchType) ->
+  lists:foldl(fun(Reference, Acc) ->
+    case xmpp:get_subtag(Reference, #xabber_file_sharing{}) of
+      #xabber_file_sharing{file = #xabber_file{type = MediaType}}
+        when MediaType =/= undefined ->
+        T = hd(binary:split(MediaType,<<"/">>,[global])),
+        case T of
+          SearchType -> true;
+          _ -> Acc
+        end;
+      _ ->
+        Acc
     end
-            end, References),
-  lists:member(true,Array).
+            end, false, References).
 
 search_element_in_references(References,Element) ->
   lists:foldl(fun(Reference, Acc) ->
@@ -251,18 +273,26 @@ search_element_in_references(References,Element) ->
 
 get_message_tags(Pkt) ->
   Message = xmpp:decode(Pkt),
-  Invite = case xmpp:has_subtag(Message, #xabbergroupchat_invite{}) of
-             true -> [<<"<invite>">>];
-             _ -> []
-           end,
+  References = get_all_references(Message),
+  Image = {<<"image">>, search_in_references(References, <<"image">>)},
+  Audio = {<<"audio">>, search_in_references(References, <<"audio">>)},
+  Video = {<<"video">>, search_in_references(References, <<"video">>)},
+  Document = {<<"document">>, search_in_references(References, othe)},
+  Voice = {<<"voice">>, search_element_in_references(References, #voice_message{})},
+  Geo = {<<"geo">>, search_element_in_references(References, #geoloc{})},
+  Sticker = {<<"sticker">>, search_element_in_references(References, #sticker{})},
+  Invite = {<<"invite">>, xmpp:has_subtag(Message, #xabbergroupchat_invite{})},
   VoIP = lists:filtermap(fun(SubTag) ->
     case xmpp:has_subtag(Message,SubTag) of
-      true -> {true, <<"<voip>">>};
+      true -> {true, {<<"<voip>">>, true}};
       _ -> false
     end end,
     [#jingle_reject{}, #jingle_accept{}, #jingle_propose{}]),
-  Tags = [],
-  lists:join(<<$,>>, lists:usort(Tags ++ Invite ++ VoIP)).
+  Tags = [Image, Audio, Video, Document, Voice, Geo, Sticker, Invite] ++ VoIP,
+  lists:filtermap(
+    fun({Tag, true}) -> {true, Tag};
+      (_) -> false
+    end,lists:usort(Tags)).
 
 write_prefs(LUser, _LServer, #archive_prefs{default = Default,
 					   never = Never,
@@ -428,6 +458,8 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
     FilterSticker = proplists:get_value(filter_sticker, MAMQuery),
     FilterGeo = proplists:get_value(filter_geo, MAMQuery),
     FilterImage = proplists:get_value(filter_image, MAMQuery),
+    WithTags= proplists:get_value('with-tags', MAMQuery),
+    PayloadType = proplists:get_value('payload-type', MAMQuery),
     FilterIDs = proplists:get_value(ids, MAMQuery),
     FilterAfterID = proplists:get_value('after-id', MAMQuery),
     FilterBeforeID = proplists:get_value('before-id', MAMQuery),
@@ -504,15 +536,29 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
                        <<>> -> [];
                        _ -> [<<" and timestamp > ">>,FilterAfterID]
                      end,
-		StanzaIdClause = case StanzaId of
-											 <<>> ->
-												 [];
-											 undefined ->
-												 [];
-											 _ ->
-												 [<<" and timestamp = ">>,
-													 StanzaId]
-										 end,
+    StanzaIdClause = case StanzaId of
+                       <<>> ->
+                         [];
+                       undefined ->
+                         [];
+                       _ ->
+                         [<<" and timestamp = ">>,
+                           StanzaId]
+                     end,
+    TagsClause = case WithTags of
+                   [] -> [];
+                   undefined -> [];
+                   _ ->
+                     TL = [<<$',(Escape(T))/binary,$'>> || T <- WithTags],
+                     TLB = str:join(TL, <<$,>>),
+                     [<<" and ARRAY[",TLB/binary,"] && tags ">>]
+                 end,
+    PayloadClause =  if
+                       is_binary(PayloadType), PayloadType /= <<>> ->
+                         [<<" and payload_type='">>,
+                          Escape(PayloadType), <<"' ">>];
+                      true -> []
+                    end,
     ImageClause = case FilterImage of
                     false ->
                       [<<"and image = false ">>];
@@ -588,7 +634,7 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
                  SUser, <<"' and server_host='">>,
                  SServer, <<"'">>, WithClause, WithTextClause,
                   StartClause, EndClause, PageClause, StanzaIdClause,
-                  IDsClause, AfterIDClause, BeforeIDClause,
+                  IDsClause, AfterIDClause, BeforeIDClause, TagsClause, PayloadClause,
                   ImageClause, AudioClause, VideoClause, VoiceClause,
                   DocumentClause, StickerClause, GeoClause, EncryptedClause];
             false ->
@@ -597,7 +643,7 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
                   " FROM archive WHERE username='">>,
                  SUser, <<"'">>, WithClause, WithTextClause,
                   StartClause, EndClause, PageClause, StanzaIdClause,
-                  IDsClause, AfterIDClause, BeforeIDClause,
+                  IDsClause, AfterIDClause, BeforeIDClause, TagsClause, PayloadClause,
                   ImageClause, AudioClause, VideoClause, VoiceClause,
                   DocumentClause, StickerClause, GeoClause, EncryptedClause]
         end,
@@ -622,7 +668,7 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
               SUser, <<"' and server_host='">>,
               SServer, <<"'">>, WithClause, WithTextClause,
                StartClause, EndClause, StanzaIdClause,
-               IDsClause, AfterIDClause, BeforeIDClause,
+               IDsClause, AfterIDClause, BeforeIDClause, TagsClause,PayloadClause,
                ImageClause,AudioClause, VideoClause, VoiceClause,
                DocumentClause, StickerClause, GeoClause, EncryptedClause, <<";">>]};
         false ->
@@ -630,7 +676,7 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
              [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
               SUser, <<"'">>, WithClause, WithTextClause,
               StartClause, EndClause, StanzaIdClause,
-               IDsClause, AfterIDClause, BeforeIDClause,
+               IDsClause, AfterIDClause, BeforeIDClause, TagsClause,PayloadClause,
                ImageClause, AudioClause, VideoClause, VoiceClause,
                DocumentClause,StickerClause, GeoClause, EncryptedClause, <<";">>]}
     end.

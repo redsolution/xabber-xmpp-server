@@ -168,7 +168,7 @@ check_sqlite_db(Host) ->
                     ok
             end;
         {error, Reason} ->
-            ?INFO_MSG("Failed open sqlite database, reason ~p", [Reason])
+            ?WARNING_MSG("Failed open sqlite database, reason ~p", [Reason])
     end.
 
 create_sqlite_tables(DB) ->

@@ -276,7 +276,7 @@ change_chat(Acc,_User,Chat,Server,_FS) ->
       NewDomains = set_value(DomainList,get_value(domains,Acc)),
       IsNameChanged = {name_changed, Name /= NewName},
       IsDescChanged = {desc_changed, Desc /= NewDesc},
-      IsIndexChanged = {global_indexing_changed, is_index_changed(Search,NewIndex)},
+      IsIndexChanged = {index, NewIndex},
       IsOtherChanged = {properties_changed,
         lists:member(true,[
           Search /= NewIndex,
@@ -291,14 +291,6 @@ change_chat(Acc,_User,Chat,Server,_FS) ->
       groups_sm:update_group_session_info(Chat, NewInfo),
       {stop, {ok,form_chat_information(Chat,Server,result),Status,ChangeDiff}}
   end.
-
-%%
-is_index_changed(<<"global">>,<<"none">>) ->
-  true;
-is_index_changed(<<"global">>,<<"local">>) ->
-  true;
-is_index_changed(_OldValue,_NewValue) ->
-  false.
 
 check_creator(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
   ?DEBUG("start fold ~p ~p ~p", [LServer,Creator, ChatJID]),
@@ -642,6 +634,7 @@ delete_group(Chat, IsP2P, IsEmpty) ->
       mod_groups_users:unsubscribe_all_for_delete(LServer, Chat);
     _ -> ok
   end,
+  mod_groups_presence:delete_all_sessions(Chat),
   sql_delete_group(LServer, Chat),
 %%  delete archive
   mod_mam:remove_user(LocalPart, LServer),

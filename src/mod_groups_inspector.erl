@@ -50,7 +50,7 @@
   kick_user/3,
   update_chat_avatar_id/3,
   get_chat_avatar_id/1,
-  get_collect_state/2,
+%%  get_collect_state/2,
   search/7,
   add_user_in_chat/2
 ]).
@@ -351,8 +351,8 @@ remove_invite_result(Result, User, Chat) ->
     {updated,1} ->
       From = jid:from_string(Chat),
       Users = [jid:from_string(User)],
-      Unsubscribe = mod_groups_presence:form_unsubscribe_presence(),
-      Unavailable = mod_groups_presence:form_presence_unavailable(),
+      Unsubscribe = #presence{type = unsubscribe},
+      Unavailable = #presence{type = unavailable},
       mod_groups_presence:send_presence(Unsubscribe, Users, From),
       mod_groups_presence:send_presence(Unavailable, Users, From),
       ok;
@@ -373,8 +373,8 @@ case ejabberd_sql:sql_query(
     UserCard = #xabbergroupchat_user_card{jid = UserJID},
     X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,sub_els = [UserCard], type = <<"block">>},
     Msg = #message{type = chat, from = FromChat, to = UserJID, id = randoms:get_string(), body = [#text{lang = <<>>,data = Txt}], sub_els = [X], meta = #{}},
-    Unsubscribe = mod_groups_presence:form_unsubscribe_presence(),
-    Unavailable = mod_groups_presence:form_presence_unavailable(),
+    Unsubscribe = #presence{type = unsubscribe},
+    Unavailable = #presence{type = unavailable},
     ejabberd_router:route(Msg),
     mod_groups_presence:delete_all_user_sessions(User,Chat),
     mod_groups_presence:send_presence(Unsubscribe,[UserJID],FromChat),
@@ -515,10 +515,10 @@ get_chat_avatar_id(Chat) ->
       <<>>
   end.
 
-get_collect_state(Chat,User) ->
-  Jid = jid:from_string(Chat),
-  Server = Jid#jid.lserver,
-  {selected,[State]} = ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(parse_avatar)s,@(p2p_state)s from groupchat_users where chatgroup=%(Chat)s and username=%(User)s")),
-  State.
+%%get_collect_state(Chat,User) ->
+%%  Jid = jid:from_string(Chat),
+%%  Server = Jid#jid.lserver,
+%%  {selected,[State]} = ejabberd_sql:sql_query(
+%%    Server,
+%%    ?SQL("select @(parse_avatar)s,@(p2p_state)s from groupchat_users where chatgroup=%(Chat)s and username=%(User)s")),
+%%  State.

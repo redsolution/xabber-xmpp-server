@@ -34,7 +34,7 @@
 
 %% ejabberd_hooks callbacks.
 -export([disco_sm_features/5, c2s_session_pending/1, c2s_copy_session/2,
-	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1, encrypt/3,
+	 c2s_handle_cast/2, mam_message/6, offline_message/1, encrypt/3,
 	 decrypt/2, xabber_push_notification/4, make_encryption/3, remove_user/2, revoke_devices/3]).
 
 %% gen_iq_handler callback.
@@ -210,8 +210,8 @@ register_hooks(Host) ->
 		       c2s_copy_session, 50),
     ejabberd_hooks:add(c2s_handle_cast, Host, ?MODULE,
 		       c2s_handle_cast, 50),
-    ejabberd_hooks:add(c2s_handle_send, Host, ?MODULE,
-		       c2s_stanza, 50),
+%%    ejabberd_hooks:add(c2s_handle_send, Host, ?MODULE,
+%%		       c2s_stanza, 50),
     ejabberd_hooks:add(store_mam_message, Host, ?MODULE,
 		       mam_message, 50),
     ejabberd_hooks:add(store_offline_message, Host, ?MODULE,
@@ -232,8 +232,8 @@ unregister_hooks(Host) ->
 			  c2s_copy_session, 50),
     ejabberd_hooks:delete(c2s_handle_cast, Host, ?MODULE,
 			  c2s_handle_cast, 50),
-    ejabberd_hooks:delete(c2s_handle_send, Host, ?MODULE,
-			  c2s_stanza, 50),
+%%    ejabberd_hooks:delete(c2s_handle_send, Host, ?MODULE,
+%%			  c2s_stanza, 50),
     ejabberd_hooks:delete(store_mam_message, Host, ?MODULE,
 			  mam_message, 50),
     ejabberd_hooks:delete(store_offline_message, Host, ?MODULE,
@@ -405,16 +405,17 @@ revoke_devices(LUser, LServer, DevIDList) ->
 	LookupFun = fun() -> Mod:lookup_device_sessions(LUser, LServer, DevIDList) end,
 	delete_sessions(LUser, LServer, LookupFun, Mod).
 
--spec c2s_stanza(c2s_state(), xmpp_element() | xmlel(), term()) -> c2s_state().
-c2s_stanza(State, #stream_error{}, _SendResult) ->
-    State;
-c2s_stanza(#{push_enabled := true, mgmt_state := pending} = State,
-	   Pkt, _SendResult) ->
-    ?DEBUG("Notifying client of stanza", []),
-    notify(State, Pkt),
-    State;
-c2s_stanza(State, _Pkt, _SendResult) ->
-    State.
+%% duplicates notifications from  sync
+%%-spec c2s_stanza(c2s_state(), xmpp_element() | xmlel(), term()) -> c2s_state().
+%%c2s_stanza(State, #stream_error{}, _SendResult) ->
+%%    State;
+%%c2s_stanza(#{push_enabled := true, mgmt_state := pending} = State,
+%%	   Pkt, _SendResult) ->
+%%    ?DEBUG("Notifying client of stanza", []),
+%%    notify(State, Pkt),
+%%    State;
+%%c2s_stanza(State, _Pkt, _SendResult) ->
+%%    State.
 
 -spec mam_message(message() | drop, binary(), binary(), jid(),
 		  chat | groupchat, recv | send) -> message().
@@ -473,16 +474,19 @@ remove_user(LUser, LServer) ->
 %% Generate push notifications.
 %%--------------------------------------------------------------------
 -spec notify(c2s_state(), xmpp_element() | xmlel() | none) -> ok.
-notify(_, none) ->
-	ok;
+notify(_, none) -> ok;
 notify(#{jid := #jid{luser = LUser, lserver = LServer}, sid := {TS, _}}, Pkt) ->
-    case lookup_session(LUser, LServer, TS) of
-	{ok, Client} ->
-	    notify(LUser, LServer, [Client], Pkt);
-	_Err ->
-		?INFO_MSG("Error to notify ~p~n",[LUser]),
-	    ok
-    end.
+  case is_muted(LUser, LServer, Pkt) of
+    false ->
+      case lookup_session(LUser, LServer, TS) of
+        {ok, Client} ->
+          notify(LUser, LServer, [Client], Pkt);
+        _Err ->
+          ?ERROR_MSG("Error to notify ~p~n",[LUser])
+      end;
+    _ ->
+      ok
+  end.
 
 -spec notify(binary(), binary(), [xabber_push_session()],
 	     xmpp_element() | xmlel() | none) -> ok.
@@ -503,7 +507,7 @@ notify(LUser, LServer, Clients, Pkt) ->
 -spec notify(binary(), ljid(), binary(), xdata(),
 	     xmpp_element(), binary(), binary() | xmlel() | none,
 	     fun((iq() | timeout) -> any())) -> ok.
-notify(LServer, PushLJID, Node, XData, _Pkt, HandleResponse, <<>>, <<>>) ->
+notify(LServer, PushLJID, Node, XData, #message{}, HandleResponse, <<>>, <<>>) ->
 	From = jid:make(LServer),
 	Item = #ps_item{sub_els = [#xabber_push_notification{sub_els = []}]},
 	PubSub = #pubsub{publish = #ps_publish{node = Node, items = [Item]},
@@ -514,7 +518,7 @@ notify(LServer, PushLJID, Node, XData, _Pkt, HandleResponse, <<>>, <<>>) ->
 		id = randoms:get_string(),
 		sub_els = [PubSub]},
 	ejabberd_router:route_iq(IQ, HandleResponse);
-notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, Cipher, Key) ->
+notify(LServer, PushLJID, Node, XData, #message{} = Pkt, HandleResponse, Cipher, Key) ->
     From = jid:make(LServer),
 		SpecialEls = make_special_els(Pkt),
 		Encrypted = make_encryption(SpecialEls, Cipher, Key),
@@ -527,7 +531,9 @@ notify(LServer, PushLJID, Node, XData, Pkt, HandleResponse, Cipher, Key) ->
 	     to = jid:make(PushLJID),
 	     id = randoms:get_string(),
 	     sub_els = [PubSub]},
-    ejabberd_router:route_iq(IQ, HandleResponse).
+    ejabberd_router:route_iq(IQ, HandleResponse);
+notify(_, _, _, _, _, _, _, _) ->
+	ok.
 
 %%--------------------------------------------------------------------
 %% Miscellaneous.
@@ -876,3 +882,7 @@ make_new_form(Type_) ->
 	] ++ Out,
 	#xdata{type = result,
 		fields = Fields}.
+
+is_muted(LUser, LServer, #message{from = From}) ->
+  Conversation = jid:to_string(jid:remove_resource(From)),
+  mod_sync:is_muted(LUser, LServer, Conversation).

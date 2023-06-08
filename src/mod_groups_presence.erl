@@ -35,8 +35,6 @@
   form_presence/1,
   form_presence/3,
   process_presence/1,
-  get_global_index/1,
-  send_message_to_index/2,
   groupchat_changed/5,
   send_presence/3,
   change_present_state/3,
@@ -398,26 +396,8 @@ get_users_with_session(Chat) ->
   SS = select_all_sessions(Chat),
   [jid:make(U,S,R)||{participant_session, _, U, S, R, _} <- SS].
 
-get_global_index(Server) ->
-  gen_mod:get_module_opt(Server, mod_groups, global_indexs).
-
-send_message_to_index(ChatJID, Message) ->
-  Server = ChatJID#jid.lserver,
-  Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  case mod_groups_chats:is_global_indexed(Server,Chat) of
-    true ->
-      GlobalIndexes = get_global_index(Server),
-      lists:foreach(fun(Index) ->
-        To = jid:from_string(Index),
-        MessageDecoded = xmpp:decode(Message),
-        M = xmpp:set_from_to(MessageDecoded,ChatJID,To),
-        ejabberd_router:route(M) end, GlobalIndexes);
-    _ ->
-      ok
-  end.
-
 send_presence_to_index(Server, Chat) ->
-  GlobalIndexes = get_global_index(Server),
+  GlobalIndexes = mod_groups:get_option(Server, global_indexs),
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   Presence = form_presence(Chat, available, [full]),
   lists:foreach(fun(Index) ->

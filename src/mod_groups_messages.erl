@@ -172,12 +172,27 @@ send_received_and_message(Pkt, From, To, OriginID, Users) ->
   send_message(Pkt2,Users,To).
 
 send_message(Message,[],From) ->
-  mod_groups_presence:send_message_to_index(From, Message),
+  send_message_to_index(From, Message),
   ok;
 send_message(Message,Users,From) ->
   [User|RestUsers] = Users,
   ejabberd_router:route(From, User, Message),
   send_message(Message, RestUsers, From).
+
+send_message_to_index(ChatJID, Message) ->
+  Server = ChatJID#jid.lserver,
+  Chat = jid:to_string(jid:remove_resource(ChatJID)),
+  case mod_groups_chats:is_global_indexed(Server,Chat) of
+    true ->
+      GlobalIndexes = mod_groups:get_option(Server, global_indexs),
+      lists:foreach(fun(Index) ->
+        To = jid:from_string(Index),
+        MessageDecoded = xmpp:decode(Message),
+        M = xmpp:set_from_to(MessageDecoded,ChatJID,To),
+        ejabberd_router:route(M) end, GlobalIndexes);
+    _ ->
+      ok
+  end.
 
 %%--------------------------------------------------------------------
 %% Sub process.

@@ -27,8 +27,11 @@
 -behavior(gen_mod).
 -include("logger.hrl").
 
-%% API
+%% gen_mod
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1]).
+
+%% API
+-export([get_option/2]).
 
 -define(SUBMODULES, [
   mod_groups_access_model,
@@ -61,13 +64,13 @@ depends(_Host, _Opts) ->
 
 mod_options(_Host) ->
   [
-    {session_lifetime, 45},
+%%    {session_lifetime, 45},
     {remove_empty, true},
     {global_indexs, []}
   ].
 
-mod_opt_type(session_lifetime) ->
-  fun(I) when is_integer(I), I > 0 -> I end;
+%%mod_opt_type(session_lifetime) ->
+%%  fun(I) when is_integer(I), I > 0 -> I end;
 
 mod_opt_type(remove_empty) ->
   fun (B) when is_boolean(B) -> B end;
@@ -104,3 +107,7 @@ start_module(Host, Module) ->
     ?CRITICAL_MSG(ErrorText, []),
     erlang:raise(Class, Reason, erlang:get_stacktrace())
   end.
+
+%% API
+get_option(Server, Option) ->
+  gen_mod:get_module_opt(Server, ?MODULE, Option).

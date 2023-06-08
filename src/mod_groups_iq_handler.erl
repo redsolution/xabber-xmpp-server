@@ -803,7 +803,7 @@ process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type
     true when IsRestrictedToRead == false andalso With == false ->
       mod_mam:process_iq_v0_3(IQDecoded);
     _ ->
-      GlobalIndexes = mod_groups_presence:get_global_index(Server),
+      GlobalIndexes = mod_groups:get_option(Server, global_indexs),
       IsIndexed =  case lists:member(User,GlobalIndexes) of
                    true ->
                      mod_groups_chats:is_global_indexed(Server,Chat);

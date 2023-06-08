@@ -34,7 +34,7 @@
 %% API
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
--export([delete_chat/2, is_anonim/2, is_global_indexed/2, get_all_groups_info/1, get_all_info/3,
+-export([maybe_delete_group/2, is_anonim/2, is_global_indexed/2, get_all_groups_info/1, get_all_info/3,
   get_count_chats/1, get_type_and_parent/2, update_user_counter/1]).
 
 -export([check_creator/4, check_user/4, check_chat/4,
@@ -42,7 +42,7 @@
   check_if_peer_to_peer_exist/4, groupchat_exist/2, create_groupchat/13]).
 
 -export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5, handle_update_query/4,
-  change_chat/5,check_params/5, check_localpart/5, check_unsupported_stanzas/5,create_chat/5,
+  change_chat/5, check_create_query/5, create_chat/5,
   get_chat_active/2, get_info/2, db_get_info/2, count_users/2,
   get_name_desc/2, define_human_status/3]).
 
@@ -56,10 +56,8 @@
 
 start(Host, _Opts) ->
   ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, delete_chat_hook, 30),
-  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_localpart, 10),
-  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_unsupported_stanzas, 15),
-  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_params, 25),
-  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, create_chat, 35),
+  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_create_query, 10),
+  ejabberd_hooks:add(create_groupchat, Host, ?MODULE, create_chat, 50),
   ejabberd_hooks:add(groupchat_info, Host, ?MODULE, check_user_rights, 10),
   ejabberd_hooks:add(group_status_info, Host, ?MODULE, check_user_rights_to_change_status, 10),
   ejabberd_hooks:add(group_status_change, Host, ?MODULE, check_user_rights_to_change_status, 10),
@@ -74,17 +72,15 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_if_users_invited, 27),
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, create_peer_to_peer, 30),
   ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, send_invite, 40),
-  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_chat, 35).
+  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, maybe_delete_group, 35).
 
 stop(Host) ->
   ejabberd_hooks:delete(group_status_info, Host, ?MODULE, check_user_rights_to_change_status, 10),
   ejabberd_hooks:delete(group_status_change, Host, ?MODULE, check_user_rights_to_change_status, 10),
   ejabberd_hooks:delete(group_status_change, Host, ?MODULE, check_status, 20),
   ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, delete_chat_hook, 30),
-  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_localpart, 10),
-  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_unsupported_stanzas, 15),
-  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_params, 25),
-  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, create_chat, 35),
+  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_create_query, 10),
+  ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, create_chat, 50),
   ejabberd_hooks:delete(groupchat_info, Host, ?MODULE, check_user_rights, 10),
   ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, check_user_permission, 10),
   ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, validate_fs, 15),
@@ -96,7 +92,7 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_if_users_invited, 27),
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, create_peer_to_peer, 30),
   ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, send_invite, 40),
-  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_chat, 35).
+  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, maybe_delete_group, 35).
 
 depends(_Host, _Opts) ->  [].
 
@@ -104,48 +100,53 @@ mod_options(_Host) -> [].
 
 % delete chat hook
 delete_chat_hook(_Acc, _LServer, _User, Chat) ->
-  delete_group(Chat, false, false),
+  delete_group(Chat, false),
   {stop, ok}.
 
-check_localpart(_Acc,Server,_CreatorLUser,_CreatorLServer,SubEls) ->
-  LocalPart = get_value(xabbergroupchat_localpart,SubEls),
+check_create_query(_Acc,Server,_CreatorLUser,_CreatorLServer,SubEls) ->
+  LocalPart = case get_value(xabbergroupchat_localpart,SubEls) of
+                B when is_binary(B) ->
+                  case jid:nodeprep(str:strip(B)) of
+                    error -> <<>>;
+                    LP -> LP
+                  end;
+                A -> A
+              end,
   case LocalPart of
     undefined ->
       ok;
+    <<>> ->
+      {stop, bad_request};
     _ ->
       case mod_xabber_entity:is_exist_anywhere(LocalPart,Server) of
         false ->
-          ok;
+          check_params(SubEls);
         true ->
           {stop,exist}
       end
   end.
 
-check_unsupported_stanzas(_Acc,_Server,_CreatorLUser,_CreatorLServer,SubEls) ->
-  case lists:keyfind(xmlel,1,SubEls) of
-    false ->
-      ok;
-    _ ->
-      {stop,bad_request}
-  end.
-
-check_params(_Acc,_Server,_CreatorLUser,_CreatorLServer,SubEls) ->
+check_params(SubEls) ->
   Privacy = set_value(<<"public">>,get_value(xabbergroupchat_privacy,SubEls)),
   Membership = set_value(<<"open">>,get_value(xabbergroupchat_membership,SubEls)),
   Index = set_value(<<"local">>,get_value(xabbergroupchat_index,SubEls)),
   IsPrivacyValid = validate_privacy(Privacy),
   IsMembershipValid = validate_membership(Membership),
   IsIndexValid = validate_index(Index),
-  Length = str:len(list_to_binary(string:to_lower(binary_to_list(set_value(create_jid(),get_value(xabbergroupchat_localpart,SubEls)))))),
-  case IsPrivacyValid of
-    true when IsMembershipValid =/= false andalso IsIndexValid =/= false andalso Length > 0 ->
-      ok;
-    _ ->
-      {stop, bad_request}
-  end.
+   if
+     IsPrivacyValid
+       andalso IsMembershipValid /= false
+       andalso IsIndexValid /= false ->
+       ok;
+     true ->
+       {stop, bad_request}
+   end.
 
 create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
-  LocalPart = list_to_binary(string:to_lower(binary_to_list(set_value(create_jid(),get_value(xabbergroupchat_localpart,SubEls))))),
+  LocalPart = case get_value(xabbergroupchat_localpart,SubEls) of
+                undefined -> create_localpart();
+                V -> jid:nodeprep(str:strip(V))
+              end,
   Name = set_value(LocalPart,get_value(xabbergroupchat_name,SubEls)),
   Desc = set_value(<<>>,get_value(xabbergroupchat_description,SubEls)),
   Privacy = set_value(<<"public">>,get_value(xabbergroupchat_privacy,SubEls)),
@@ -367,7 +368,7 @@ check_if_users_invited(Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID})
   end.
 
 create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
-  Localpart = list_to_binary(string:to_lower(binary_to_list(create_localpart()))),
+  Localpart = create_localpart(),
   OldChat = jid:to_string(jid:remove_resource(ChatJID)),
   Chat = jid:to_string(jid:make(Localpart,LServer)),
   User1Nick = mod_groups_users:get_nick_in_chat(LServer,Creator,OldChat),
@@ -459,20 +460,30 @@ send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
     sub_els = [Invite,ChatInfo]},
   ejabberd_router:route(Message).
 
-delete_chat(_Acc,{LServer, _User, Chat, _UserCard, _Lang})->
-  DeleteIfEmpty = gen_mod:get_module_opt(LServer, mod_groups, remove_empty),
-  if
-    DeleteIfEmpty ->
-      case sql_get_user_count(LServer,Chat) of
-        <<"0">> -> delete_group(Chat, false, true);
-        _ -> pass
+maybe_delete_group(_Acc,{LServer, _User, Group, _UserCard, _Lang})->
+  Result =
+    case get_type_and_parent(LServer, Group) of
+      {ok, _, Parent} when Parent /= <<>> ->
+        delete_group(Group, true);
+      _ ->
+        case mod_groups:get_option(LServer, remove_empty) of
+          true ->
+            case sql_get_user_count(LServer, Group) of
+              <<"0">> ->
+                delete_group(Group, false);
+              _ -> pass
+            end;
+          _ ->
+            pass
+        end
+    end,
+  case Result of
+    pass ->
+      case mod_groups_restrictions:get_owners(LServer, Group) of
+        [] -> delete_group(Group, false);
+        _ -> ok
       end;
-    true ->
-      pass
-  end,
-  case mod_groups_restrictions:get_owners(LServer,Chat) of
-    [] -> delete_group(Chat, false, false);
-    _ -> pass
+    _ -> ok
   end,
   ok.
 
@@ -493,17 +504,11 @@ get_type_and_parent(LServer,Chat) ->
   end.
 
 is_global_indexed(LServer,Chat) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(jid)s from groupchats
-    where jid = %(Chat)s
-    and searchable = 'global' and %(LServer)H")) of
-    {selected,[]} ->
-      false;
-    {selected, _} ->
-      true;
-    _ ->
-      false
+  try element(3,get_info(Chat, LServer)) of
+    <<"global">> -> true;
+    _ -> false
+  catch
+    _:_ -> false
   end.
 
 get_all_groups_info(LServer) ->
@@ -617,23 +622,19 @@ add_user_to_peer_to_peer_chat(LServer, User, NewChat,OldChat) ->
   Info.
 
 
-delete_group(Chat, IsP2P, IsEmpty) ->
+delete_group(Chat, IsP2P) ->
   {LocalPart, LServer,_} = jid:tolower(jid:from_string(Chat)),
   case IsP2P of
     false ->
       lists:foreach(fun(G)->
-        delete_group(G, true, false)
+        delete_group(G, true)
                     end,
         get_dependent_groups(LServer, Chat));
     _ -> ok
   end,
   groups_sm:deactivate(LServer,LocalPart),
   AllUserMeta = mod_groups_vcard:get_all_image_metadata(LServer,Chat),
-  case IsEmpty of
-    false ->
-      mod_groups_users:unsubscribe_all_for_delete(LServer, Chat);
-    _ -> ok
-  end,
+  mod_groups_users:unsubscribe_all_for_delete(LServer, Chat),
   mod_groups_presence:delete_all_sessions(Chat),
   sql_delete_group(LServer, Chat),
 %%  delete archive
@@ -644,8 +645,13 @@ delete_group(Chat, IsP2P, IsEmpty) ->
   mod_groups_vcard:delete_group_avatar_file(Chat).
 
 create_localpart() ->
-  list_to_binary(
-    [randoms:get_alphanum_string(2),randoms:get_string(),randoms:get_alphanum_string(3)]).
+  S = list_to_binary(
+    [randoms:get_alphanum_string(2),randoms:get_string(),randoms:get_alphanum_string(3)]),
+  case jid:nodeprep(S) of
+    error -> create_localpart();
+    LP -> LP
+  end.
+
 
 get_dependent_groups(LServer, Chat) ->
   case ejabberd_sql:sql_query(
@@ -879,10 +885,6 @@ sql_update_groupchat(Server, SJID, NewInfo) ->
     _Err ->
       {error, db_failure}
   end.
-
-create_jid() ->
-  list_to_binary(
-    [randoms:get_alphanum_string(2),randoms:get_string(),randoms:get_alphanum_string(3)]).
 
 get_permissions(Server) ->
   case ejabberd_sql:sql_query(

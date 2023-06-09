@@ -789,18 +789,17 @@ process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
-  IsRestrictedToRead = mod_groups_restrictions:is_restricted(<<"read-messages">>,User,Chat),
   SubElD = xmpp:decode(SubEl),
   IQDecoded = #iq{from = To, lang = Lang, to = From, meta = Meta, sub_els = [SubElD], type = Type, id = Id},
   Query = get_query(SubElD,Lang),
   With = proplists:is_defined(with, Query),
   case mod_groups_users:check_if_exist(Server,Chat,User) of
-    true when IsRestrictedToRead == false andalso With =/= false ->
+    true when With =/= false ->
       WithValue = jid:to_string(proplists:get_value(with, Query)),
       M1 = change_id_to_jid(SubElD,Server,Chat,WithValue),
       IQDecoded2 = #iq{from = To, lang = Lang, to = From, meta = Meta, sub_els = [M1], type = Type, id = Id},
       mod_mam:process_iq_v0_3(IQDecoded2);
-    true when IsRestrictedToRead == false andalso With == false ->
+    true when With == false ->
       mod_mam:process_iq_v0_3(IQDecoded);
     _ ->
       GlobalIndexes = mod_groups:get_option(Server, global_indexs),

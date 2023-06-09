@@ -550,16 +550,9 @@ send_to_all(Chat,Stanza) ->
   #message{meta = #{stanza_id := TS}} = Pkt2,
   #origin_id{id = OriginID} = xmpp:get_subtag(Pkt2,#origin_id{}),
   mod_groups_messages:set_displayed(ChatJID,ChatJID,TS,OriginID),
-  ListAll = mod_groups_users:users_to_send(Server,Chat),
-  NoReaders = mod_groups_users:users_no_read(Server,Chat),
-  ListTo = ListAll -- NoReaders,
-  case ListTo of
-    [] ->
-      ok;
-    _ ->
-      lists:foreach(fun(To) ->
-        ejabberd_router:route(FromChat,To,Pkt2) end, ListTo)
-  end.
+  Users = mod_groups_users:users_to_send(Server,Chat),
+  lists:foreach(fun(To) ->
+    ejabberd_router:route(FromChat,To,Pkt2) end, Users).
 
 anon(ByUser) ->
   case ByUser#xabbergroupchat_user_card.jid of

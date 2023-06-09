@@ -55,7 +55,6 @@
   subscribe_user/2,
   update_last_seen/3,
   get_user_id/3,
-  users_no_read/2,
   get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/4,
   update_user_status/3, user_no_read/2, get_nick_in_chat/3, get_user_by_id_and_allow_to_invite/3,
   pre_approval/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2,
@@ -1010,22 +1009,8 @@ update_user(User, LServer,Chat, _Admin,_ID,Nickname,Badge,_Lang) ->
   {User,UserCard}.
 
 %% for backward compatibility
-user_no_read(Server,Chat) ->
-  TS = now_to_timestamp(now()),
-  ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(username)s from groupchat_policy where chatgroup=%(Chat)s and right_name='read-messages'
-    and (valid_until = 0 or valid_until > %(TS)d )")).
-
-users_no_read(Server,Chat) ->
-  TS = now_to_timestamp(now()),
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(username)s from groupchat_policy where chatgroup=%(Chat)s and right_name='read-messages'
-    and (valid_until = 0 or valid_until > %(TS)d )")) of
-    {selected, Users} -> [jid:from_string(U) || {U} <- Users];
-    _ -> []
-  end.
+user_no_read(_Server,_Chat) ->
+  {selected, []}.
 
 get_nick_in_chat(Server,User,Chat) ->
   case ejabberd_sql:sql_query(

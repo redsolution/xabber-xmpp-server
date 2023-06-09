@@ -439,7 +439,7 @@ CREATE TABLE groupchat_rights (
 CREATE TABLE groupchat_policy (
     username text NOT NULL,
     chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
-    right_name text NOT NULL REFERENCES groupchat_rights(name),
+    right_name text NOT NULL REFERENCES groupchat_rights(name) ON DELETE CASCADE,
     valid_until bigint NOT NULL default 0,
     issued_by text NOT NULL,
     issued_at timestamp NOT NULL,
@@ -451,7 +451,6 @@ INSERT INTO groupchat_rights (name,description,type) values
 ('send-stickers','Send stickers','restriction'),
 ('send-voice','Send voice messages','restriction'),
 ('send-invitations','Send invitations', 'restriction'),
-('read-messages','Read messages','restriction'),
 ('owner','Owner','permission'),
 ('change-group','Change group','permission'),
 ('change-users','Change users','permission'),
@@ -488,7 +487,7 @@ CREATE TABLE groupchat_users_info(
 
 CREATE TABLE groupchat_default_restrictions(
     chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
-    right_name text NOT NULL REFERENCES groupchat_rights(name),
+    right_name text NOT NULL REFERENCES groupchat_rights(name) ON DELETE CASCADE,
     action_time text NOT NULL,
     CONSTRAINT UC_groupchat_default_restrictions UNIQUE (chatgroup,right_name)
 );

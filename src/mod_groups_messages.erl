@@ -339,21 +339,15 @@ send_displayed(ChatJID,StanzaID,MessageID) ->
   delete_old_messages(LName,LServer,StanzaID).
 
 send_displayed_to_all(ChatJID,StanzaID,MessageID) ->
-  Displayed = #message_displayed{id = MessageID, sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
+  Displayed = #message_displayed{id = MessageID,
+    sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  ListAll = mod_groups_users:users_to_send(Server,Chat),
-  NoReaders = mod_groups_users:users_no_read(Server,Chat),
-  ListTo = ListAll -- NoReaders,
-  case ListTo of
-    [] ->
-      ok;
-    _ ->
-      lists:foreach(fun(To) ->
-        M = #message{type = chat, from = ChatJID, to = To, sub_els = [Displayed], id=randoms:get_string()},
-        ejabberd_router:route(M) end, ListTo)
-  end,
-  ok.
+  Users = mod_groups_users:users_to_send(Server,Chat),
+  lists:foreach(fun(To) ->
+    M = #message{type = chat, from = ChatJID, to = To,
+      sub_els = [Displayed], id=randoms:get_string()},
+    ejabberd_router:route(M) end, Users).
 
 get_displayed_msg(LName,LServer,StanzaID, MessageID) ->
   FN = fun()->
@@ -423,9 +417,7 @@ transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
   Reference = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, 'begin' = 0, 'end' = Length, sub_els = [UserCard]}]},
   NewBody = [#text{lang = <<>>,data = <<Username/binary, Text/binary >>}],
   AllUsers = mod_groups_users:users_to_send(Server,Chat),
-  NoReaders = mod_groups_users:users_no_read(Server,Chat),
-  UsersWithoutSender = AllUsers -- [jid:remove_resource(From)],
-  Users = UsersWithoutSender -- NoReaders,
+  Users = AllUsers -- [jid:remove_resource(From)],
   PktSanitarized1 = strip_x_elements(Pkt),
   PktSanitarized = strip_reference_elements(PktSanitarized1),
   Els2 = shift_references(PktSanitarized, Length),

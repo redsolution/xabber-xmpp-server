@@ -663,7 +663,7 @@ chang_omemo_device(UserJID, OMEMOId, Action) ->
       update_device(LServer, UserJID, DevID, [{omemo_id, <<>>}]);
     OMEMOId ->
       ok;
-    <<>> when Action /= delete ->
+    undefined when Action /= delete ->
       update_device(LServer, UserJID, DevID, [{omemo_id, OMEMOId}]);
     _ ->
       not_allowd

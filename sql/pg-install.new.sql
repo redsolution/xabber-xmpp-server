@@ -397,7 +397,7 @@ CREATE TABLE groupchat_users (
     avatar_url text,
     avatar_size integer not null default 0,
     nickname text default '',
-    auto_nickname text NOT NULL default ''
+    auto_nickname text NOT NULL default '',
     parse_vcard timestamp NOT NULL default timezone('utc'::text, now()),
     parse_avatar text NOT NULL default 'yes',
     badge text NOT NULL default '',
@@ -473,15 +473,6 @@ CREATE TABLE groupchat_log (
     log_event text NOT NULL,
     happend_at timestamp NOT NULL,
     CONSTRAINT UC_groupchat_log UNIQUE (username,chatgroup,log_event),
-    FOREIGN KEY (username,chatgroup) REFERENCES groupchat_users (username,chatgroup) ON DELETE CASCADE
-);
-
-CREATE TABLE groupchat_users_info(
-    chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
-    username text NOT NULL,
-    nickname text NOT NULL,
-    avatar text,
-    CONSTRAINT UC_groupchat_users_info UNIQUE (username,chatgroup,nickname),
     FOREIGN KEY (username,chatgroup) REFERENCES groupchat_users (username,chatgroup) ON DELETE CASCADE
 );
 
@@ -570,7 +561,8 @@ CREATE TABLE devices (
     count bigint NOT NULL DEFAULT 0,
     info text  DEFAULT ''::text,
     client text DEFAULT ''::text,
-    description text DEFAULT ''::text,
+    omemo_id text DEFAULT ''::text,
+    public_label text DEFAULT ''::text,
     expire bigint NOT NULL,
     ip text DEFAULT ''::text,
     last_usage bigint NOT NULL DEFAULT 0,
@@ -612,7 +604,7 @@ CREATE TABLE channel_users (
   avatar_url text,
   avatar_size integer not null default 0,
   nickname text default '',
-  parse_vcard timestamp NOT NULL default now(),
+  parse_vcard timestamp NOT NULL default timezone('utc'::text, now()),
   parse_avatar text NOT NULL default 'yes',
   badge text NOT NULL default '',
   channel text NOT NULL REFERENCES channels (jid) ON DELETE CASCADE,

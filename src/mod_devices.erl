@@ -26,8 +26,8 @@
 -module(mod_devices).
 -author('ilya.kalashnikov@redsolution.com').
 -behavior(gen_mod).
-%% API
 -compile([{parse_transform, ejabberd_sql_pt}]).
+%% API
 -export([check_token/3, set_count/4]).
 
 %% gen_mod
@@ -52,7 +52,10 @@
   sasl_success/2,
   remove_user/2,
   check_session/1,
-  process_iq/1
+  process_iq/1,
+  pubsub_publish_item/6,
+  user_send_packet/1,
+  get_device_info/1
 ]).
 
 -include("ejabberd.hrl").
@@ -62,6 +65,8 @@
 -include("ejabberd_sm.hrl").
 -include("ejabberd_commands.hrl").
 
+-define(NODE_DEVICES, <<"urn:xmpp:omemo:2:devices">>).
+-define(NODE_BUNDLES, <<"urn:xmpp:omemo:2:bundles">>).
 
 start(Host, _Opts) ->
   ejabberd_commands:register_commands(get_commands_spec()),
@@ -72,6 +77,8 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(sasl_success, Host, ?MODULE, sasl_success, 50),
   ejabberd_hooks:add(remove_user, Host, ?MODULE, remove_user, 60),
   ejabberd_hooks:add(c2s_session_opened, Host, ?MODULE, check_session, 50),
+  ejabberd_hooks:add(pubsub_publish_item, Host, ?MODULE, pubsub_publish_item, 80),
+  ejabberd_hooks:add(user_send_packet, Host, ?MODULE, user_send_packet, 10),
   gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_DEVICES, ?MODULE, process_iq),
   gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_DEVICES_QUERY, ?MODULE, process_iq),
   ok.
@@ -90,6 +97,8 @@ stop(Host) ->
   ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE, disco_sm_features, 50),
   ejabberd_hooks:delete(remove_user, Host, ?MODULE, remove_user, 60),
   ejabberd_hooks:delete(c2s_session_opened, Host, ?MODULE, check_session, 50),
+  ejabberd_hooks:delete(pubsub_publish_item, Host, ?MODULE, pubsub_publish_item, 80),
+  ejabberd_hooks:delete(user_send_packet, Host, ?MODULE, user_send_packet, 10),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_DEVICES),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_DEVICES_QUERY),
   ok.
@@ -199,6 +208,28 @@ check_session(State) ->
   end,
   State.
 
+pubsub_publish_item(_LServer, ?NODE_BUNDLES,
+    #jid{luser = LUser, lserver = LServer} = From,
+    #jid{luser = LUser, lserver = LServer}, _ItemId, _Payload) ->
+  publish_omemo_devices(From);
+pubsub_publish_item(_, _, _, _, _, _)->
+  ok.
+
+user_send_packet({#iq{type = set,
+  from = #jid{luser = LUser, lserver = LServer} = From,
+  to = #jid{luser = LUser, lserver = LServer, lresource = <<>>},
+  sub_els = [SubEl]} = Iq, C2SState} = Acc) ->
+  case process_packet_payload(From, SubEl) of
+    ok ->
+      Acc;
+    _ ->
+      Err = xmpp:err_policy_violation(),
+      ejabberd_router:route_error(Iq, Err),
+      {stop, {drop, C2SState}}
+  end;
+user_send_packet(Acc) ->
+  Acc.
+
 -spec update_presence({presence(), ejabberd_c2s:state()})
       -> {presence(), ejabberd_c2s:state()}.
 update_presence({#presence{type = available} = Pres,
@@ -213,21 +244,21 @@ process_iq(#iq{type = set, from = #jid{lserver = S1}, to = #jid{lserver = S2}} =
   xmpp:make_error(Iq,xmpp:err_not_allowed());
 process_iq(#iq{type = set, from = From, to = To,
   sub_els = [#device_register{device = #devices_device{id = undefined,
-    expire = TTLRaw, info = InfoRaw, client = ClientRaw, description = DescRaw}}]} = Iq) ->
+    expire = TTLRaw, info = InfoRaw, client = ClientRaw, public_label = LabelRaw}}]} = Iq) ->
   UserBareJID = jid:remove_resource(From),
   SJID = jid:to_string(UserBareJID),
   {LUser, LServer, LResource} = jid:tolower(From),
   TTL = set_default_ttl(LServer, TTLRaw),
   Info = set_default(InfoRaw),
   Client = set_default(ClientRaw),
-  Desc = set_default(DescRaw),
+  Label = set_default(LabelRaw),
   ID = make_device_id(SJID),
   IP = ejabberd_sm:get_user_ip(LUser, LServer, LResource),
   IPs = case IP of
           {PAddr, _PPort} -> ip_to_binary(PAddr);
           _ -> <<"">>
         end,
-  case sql_register_device(LServer, SJID, TTL, Info, Client, ID, IPs, Desc) of
+  case sql_register_device(LServer, SJID, TTL, Info, Client, ID, IPs, Label) of
     {ok,Secret,ExpireTime} ->
       ejabberd_router:route(xmpp:make_iq_result(Iq,
         #devices_device{secret = Secret, id = ID, expire = integer_to_binary(ExpireTime)})),
@@ -250,10 +281,13 @@ process_iq(#iq{type = set, from = From,
   if
     IsAllowed ->
       case update_device_secret(User, Server, Device) of
-        notfound ->
+        not_found ->
           xmpp:make_error(Iq,xmpp:err_item_not_found());
         error->
           xmpp:make_error(Iq,xmpp:err_bad_request());
+        NewDevice when Device#devices_device.public_label /= undefined ->
+          publish_omemo_devices(From),
+          xmpp:make_iq_result(Iq, NewDevice);
         NewDevice ->
           xmpp:make_iq_result(Iq, NewDevice)
       end;
@@ -264,10 +298,9 @@ process_iq(#iq{type = get, from = From, to = To, sub_els = [#devices_query_items
   SJID = jid:to_string(jid:remove_resource(From)),
   LServer = To#jid.lserver,
   case sql_select_user_devices(LServer, SJID) of
-    {ok,Devices} ->
-      DeviceList = device_list_stanza(Devices),
-      xmpp:make_iq_result(Iq, #devices_query_items{devices = DeviceList});
-    empty ->
+    {ok, Devices} ->
+      xmpp:make_iq_result(Iq, #devices_query_items{devices = Devices});
+    not_found ->
       xmpp:make_error(Iq,xmpp:err_item_not_found());
     _ ->
       xmpp:make_error(Iq,xmpp:err_bad_request())
@@ -275,16 +308,20 @@ process_iq(#iq{type = get, from = From, to = To, sub_els = [#devices_query_items
 process_iq(#iq{type = set, sub_els = [#devices_query{device = #devices_device{id = undefined}}]} = Iq) ->
   xmpp:make_error(Iq,xmpp:err_bad_request());
 process_iq(#iq{type = set, from = From, to = To, sub_els = [
-  #devices_query{device = #devices_device{info = Info, client = Client, description = Desc, id = ID}}]} = Iq) ->
+  #devices_query{device = #devices_device{info = Info, client = Client,
+    public_label = Label, id = ID}}]} = Iq) ->
   LServer = To#jid.lserver,
   Resource = From#jid.lresource,
   OnlineResources = get_resources_by_device_id(From#jid.luser, From#jid.lserver, ID),
   case lists:member(Resource, OnlineResources) of
     true ->
-      case  update_device(LServer, From, ID, [{info,Info}, {client,Client}, {description,Desc}]) of
+      case update_device(LServer, From, ID, [{info,Info}, {client,Client}, {public_label, Label}]) of
+        ok when Label /= undefined ->
+          publish_omemo_devices(From),
+          xmpp:make_iq_result(Iq);
         ok ->
           xmpp:make_iq_result(Iq);
-        notfound ->
+        not_found ->
           xmpp:make_error(Iq,xmpp:err_item_not_found());
         _ ->
           xmpp:make_error(Iq,xmpp:err_bad_request())
@@ -302,7 +339,7 @@ process_iq(#iq{type = set, from = From,
       ReasonTXT = <<"Device was revoked">>,
       lists:foreach(fun(N) -> kick_by_device_id(LServer,LUser,N,ReasonTXT) end, DeviceIDs),
       xmpp:make_iq_result(Iq);
-    notfound ->
+    not_found ->
       xmpp:make_error(Iq,xmpp:err_item_not_found());
     _ ->
       xmpp:make_error(Iq,xmpp:err_bad_request())
@@ -314,7 +351,7 @@ process_iq(#iq{type = set, from = From, to = To, sub_els = [#devices_revoke_all{
   case revoke_all_except(LServer, LUser, Resource) of
     ok ->
       xmpp:make_iq_result(Iq);
-    notfound ->
+    not_found ->
       xmpp:make_error(Iq,xmpp:err_item_not_found());
     _ ->
       xmpp:make_error(Iq,xmpp:err_bad_request())
@@ -326,8 +363,8 @@ process_iq(Iq) ->
 remove_user(User, Server) ->
   JID = jid:to_string(jid:make(User,Server)),
   Devices = sql_get_device_ids(Server,JID),
-  run_hook_revoke_devices(User, Server, Devices),
-  sql_delete_all_devices(Server,JID).
+  sql_delete_all_devices(Server,JID),
+  run_hook_revoke_devices(User, Server, Devices).
 
 %%%%
 %%  Commands
@@ -338,8 +375,8 @@ delete_long_unused_devices(Days,Host) when is_integer(Days) ->
     [] -> 0;
     error -> 1;
     L ->
-      run_hook_revoke_devices(L),
       sql_delete_unused(Days, Host),
+      run_hook_revoke_devices(L),
       0
   end;
 delete_long_unused_devices(_Days, _Host) ->
@@ -348,7 +385,7 @@ delete_long_unused_devices(_Days, _Host) ->
 revoke_device(LServer, LUser, DeviceID) ->
   case sql_revoke_devices(LUser, LServer, [DeviceID]) of
     error -> 1;
-    notfound ->
+    not_found ->
       0;
     _ ->
       run_hook_revoke_devices(LUser, LServer,[DeviceID]),
@@ -393,7 +430,7 @@ check_token_2(User, Server, Token) ->
   end.
 
 register_and_upgrade_to_hotp_session(Iq,User,Server,State,#device_register{device = #devices_device{
-  id = undefined, expire = TTLRaw, info = InfoRaw, client = ClientRaw, description = DescRaw}}) ->
+  id = undefined, expire = TTLRaw, info = InfoRaw, client = ClientRaw, public_label = LabelRaw}}) ->
   SJIDNoRes = jid:make(User,Server),
   #{ip := IP} = State,
   {PAddr, _PPort} = IP,
@@ -402,9 +439,9 @@ register_and_upgrade_to_hotp_session(Iq,User,Server,State,#device_register{devic
   TTL = set_default_ttl(Server, TTLRaw),
   Info = set_default(InfoRaw),
   Client = set_default(ClientRaw),
-  Desc = set_default(DescRaw),
+  Label = set_default(LabelRaw),
   ID = make_device_id(SJID),
-  case sql_register_device(Server, SJID, TTL, Info, Client, ID, IPs, Desc) of
+  case sql_register_device(Server, SJID, TTL, Info, Client, ID, IPs, Label) of
     {ok,Secret,ExpireTime} ->
       xmpp_stream_in:send(State,xmpp:make_iq_result(Iq,
         #devices_device{secret = Secret, id = ID, expire = integer_to_binary(ExpireTime)})),
@@ -417,7 +454,7 @@ register_and_upgrade_to_hotp_session(Iq,User,Server,State,#device_register{devic
 register_and_upgrade_to_hotp_session(Iq,User,Server,State,
     #device_register{device = #devices_device{id = DeviceID} = Device}) ->
   case update_device_secret(User, Server, Device) of
-    notfound ->
+    not_found ->
       xmpp_stream_in:send(State,xmpp:make_error(Iq,xmpp:err_item_not_found())),
       error;
     error->
@@ -514,22 +551,6 @@ new_device_msg(Client,Info, DeviceID,BareJID,IP) ->
   #message{type = chat, from = Server, to = BareJID, id =ID, body = Text,
     sub_els = [X,NLR,CIR,DR,IPBoldReference,SR,UserRef,OriginID]}.
 
-device_list_stanza(Devices) ->
-  lists:map(fun(Device) ->
-    CheckedValues = check_values(Device) ,
-    [ID, Expire, Info, Client, IP, Last, Desc] = CheckedValues,
-    #devices_device{id = ID, expire = Expire,
-      info = Info, client = Client, ip = IP, last_auth = Last, description = Desc}
-                     end, Devices).
-
-check_values(Tuple) ->
-  List = [element(I,Tuple) || I <- lists:seq(1,tuple_size(Tuple))],
-  lists:map(
-    fun(null) -> undefined;
-      (<<>>) -> undefined;
-      (V) -> V
-    end, List).
-
 
 set_default_ttl(LServer,undefined) ->
   ConfigTime =  gen_mod:get_module_opt(LServer, ?MODULE,
@@ -558,6 +579,8 @@ get_resources_by_device_id(User, Server, ID) ->
       end
     end, ejabberd_sm:get_user_info(User, Server)).
 
+update_device(_LServer, _JID, <<>>, _Props) ->
+  not_found;
 update_device(LServer, JID, ID, Props) when is_record(JID, jid) ->
   SJID = jid:to_string(jid:remove_resource(JID)),
   update_device(LServer, SJID, ID, Props);
@@ -571,7 +594,7 @@ update_device(LServer, SJID, ID, Props) ->
     " where jid=" ++ EJID ++ " and device_id=" ++  EID  ++ ";",
   case ejabberd_sql:sql_query(LServer, Query) of
     {updated,0} ->
-      notfound;
+      not_found;
     {updated,_} ->
       ok;
     _ ->
@@ -580,7 +603,7 @@ update_device(LServer, SJID, ID, Props) ->
 
 update_device_secret(User, Server, Device) ->
   #devices_device{id = DeviceID, secret = Secret,
-    expire = TTLRaw, info = Info, client = Client, description = Desc} = Device,
+    expire = TTLRaw, info = Info, client = Client, public_label = Label} = Device,
   SJID = jid:to_string(jid:make(User,Server)),
   Secrets = select_secrets(Server, SJID),
   CheckSecret = case lists:keyfind(DeviceID, 3, Secrets) of
@@ -592,12 +615,12 @@ update_device_secret(User, Server, Device) ->
       NewSecret = make_secret(),
       Expire = integer_to_binary(seconds_since_epoch(set_default_ttl(Server, TTLRaw))),
       Props = [{count, <<$0>>},{secret,NewSecret}, {info,Info},
-        {client,Client}, {description,Desc}, {expire, Expire}],
+        {client,Client}, {public_label, Label}, {expire, Expire}],
       case update_device(Server, SJID, DeviceID, Props ) of
         ok ->  Device#devices_device{secret = NewSecret, expire = Expire};
         Error -> Error
       end;
-    _ -> notfound
+    _ -> not_found
   end.
 
 
@@ -607,6 +630,99 @@ prepare_value(V) when is_integer(V) ->
   integer_to_list(V);
 prepare_value(_V) ->
   "''".
+
+process_packet_payload(User, El) ->
+  try xmpp:decode(El) of
+    #pubsub{publish = #ps_publish{node = ?NODE_DEVICES}} ->
+      not_allowed;
+    #pubsub{retract = #ps_retract{node = ?NODE_DEVICES}} ->
+      not_allowed;
+    #pubsub{publish = #ps_publish{node = ?NODE_BUNDLES,
+      items = [#ps_item{id = ItemId}]}} ->
+      chang_omemo_device(User, ItemId, update);
+    #pubsub{retract = #ps_retract{node = ?NODE_BUNDLES,
+      items = [#ps_item{id = ItemId}] }} ->
+      chang_omemo_device(User, ItemId, delete),
+      publish_omemo_devices(User);
+    _ ->
+      ok
+  catch _:{xmpp_codec, _Reason} ->
+    ok
+  end.
+
+chang_omemo_device(UserJID, OMEMOId, Action) ->
+  {DevID, CurOMEMOId} =
+    case  get_device_info(UserJID) of
+      #devices_device{id = ID, omemo_id = OID} ->
+        {ID, OID};
+      _ -> {<<>>, <<>>}
+    end,
+  LServer = UserJID#jid.lserver,
+  case CurOMEMOId of
+    OMEMOId when Action == delete ->
+      update_device(LServer, UserJID, DevID, [{omemo_id, <<>>}]);
+    OMEMOId ->
+      ok;
+    <<>> when Action /= delete ->
+      update_device(LServer, UserJID, DevID, [{omemo_id, OMEMOId}]);
+    _ ->
+      not_allowd
+  end.
+
+-spec get_device_info(jid()) -> tuple() | atom().
+get_device_info(User) ->
+  {LUser, LServer, Res} = jid:tolower(User),
+  DeviceId =
+    case ejabberd_sm:get_user_info(LUser, LServer, Res) of
+      offline -> <<>>;
+      Info -> proplists:get_value(device_id, Info, <<>>)
+    end,
+  get_device_info(User, DeviceId).
+
+-spec get_device_info(jid() | binary(), binary()) -> tuple() | atom().
+get_device_info(_User, <<>>) ->
+  not_found;
+get_device_info(User, DeviceId) ->
+  {LServer, SJID} =
+    if
+      is_binary(User) ->
+        JID = jid:from_string(User),
+        {JID#jid.lserver, User};
+      true ->
+        {User#jid.lserver,
+          jid:to_string(jid:remove_resource(User))}
+    end,
+  sql_select_user_device(LServer, SJID, DeviceId).
+
+publish_omemo_devices(UserJID) ->
+  LServer = UserJID#jid.lserver,
+  SJID = jid:to_string(jid:remove_resource(UserJID)),
+  Devices = lists:map(
+    fun({ID, Label}) ->
+      LabelAttr = case Label of
+                    <<>> -> [];
+                    _ -> [{<<"label">>, Label}]
+                  end,
+      #xmlel{name = <<"device">>,
+        attrs = [{<<"id">>, ID}] ++ LabelAttr}
+    end, select_omemo_devices(LServer, SJID)),
+  IQ = #iq{from = UserJID,
+    to = jid:remove_resource(UserJID),
+    id = randoms:get_string(),
+    type = set,
+    meta = #{}},
+  Item = #ps_item{
+    id = <<"current">>,
+    sub_els = [
+      #xmlel{name = <<"devices">>,
+      attrs = [{<<"xmlns">>, <<"urn:xmpp:omemo:2">>}],
+      children = Devices}]},
+  Payload = #pubsub{publish = #ps_publish{node = ?NODE_DEVICES, items = [Item]}},
+  mod_pubsub:iq_sm(IQ#iq{sub_els = [Payload]}),
+  ok.
+
+select_omemo_devices(LServer, SJID) ->
+  sql_select_omemo_devices(LServer, SJID).
 
 %%%% SQL Functions
 
@@ -627,6 +743,15 @@ sql_select_secrets(LServer, _SJID) ->
       []
   end.
 
+sql_select_omemo_devices(LServer, _SJID) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(omemo_id)s,@(public_label)s from devices "
+    " where jid=%(_SJID)s and expire > 0 and omemo_id != '' ")) of
+    {selected, List} -> List;
+    _ -> []
+  end.
+
 sql_refresh_session_info(JID,_DeviceID,_IP) ->
   LServer = JID#jid.lserver,
   _SJID = jid:to_string(jid:remove_resource(JID)),
@@ -644,7 +769,7 @@ sql_refresh_session_info(JID,_DeviceID,_IP) ->
       {error, db_failure}
   end.
 
-sql_register_device(LServer, _SJID, TTLSeconds, _Info, _Client, _ID, _IP, _Desc) ->
+sql_register_device(LServer, _SJID, TTLSeconds, _Info, _Client, _ID, _IP, _Label) ->
   _Secret = make_secret(),
   _Expire = seconds_since_epoch(TTLSeconds),
   _TimeNow = seconds_since_epoch(0),
@@ -659,24 +784,37 @@ sql_register_device(LServer, _SJID, TTLSeconds, _Info, _Client, _ID, _IP, _Desc)
       "ip=%(_IP)s",
       "last_usage=%(_TimeNow)d",
       "expire=%(_Expire)d",
-      "description=%(_Desc)s"]) of
+      "public_label=%(_Label)s"]) of
     ok ->
       {ok,_Secret,_Expire};
     _ ->
       {error, db_failure}
   end.
 
+sql_select_user_device(LServer, _SJID, _DeviceID) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(device_id)s, @(expire)s, @(info)s, @(client)s,"
+    " @(ip)s, @(last_usage)s, @(public_label)s, @(omemo_id)s"
+    " from devices where jid=%(_SJID)s and device_id=%(_DeviceID)s")) of
+    {selected, []} ->
+      not_found;
+    {selected, Result} ->
+      hd(to_devices(Result));
+    _ ->
+      error
+  end.
+
 sql_select_user_devices(LServer, _SJID) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(device_id)s, @(expire)s, @(info)s, @(client)s, @(ip)s, @(last_usage)s, @(description)s"
+    ?SQL("select @(device_id)s, @(expire)s, @(info)s, @(client)s,"
+    " @(ip)s, @(last_usage)s, @(public_label)s, @(omemo_id)s"
     " from devices where jid=%(_SJID)s and expire!=0 order by last_usage desc")) of
     {selected, []} ->
-      empty;
-    {selected, [<<>>]} ->
-      empty;
-    {selected, Devices} ->
-      {ok,Devices};
+      not_found;
+    {selected, Result} ->
+      {ok, to_devices(Result)};
     _ ->
       error
   end.
@@ -688,7 +826,7 @@ sql_revoke_devices(LUser, LServer, IDs) ->
    LServer,
    [<<"update devices set expire=0 where jid= '">>, BareJID,<<"' and ">>, IDClause]) of
    {updated, 0} ->
-     notfound;
+     not_found;
    {updated,_N} ->
      ok;
    _ ->
@@ -725,10 +863,26 @@ sql_delete_device(Server,_SJID,_ID) ->
  case ejabberd_sql:sql_query(
     Server,
     ?SQL("delete from devices where jid=%(_SJID)s and device_id=%(_ID)s")) of
-   {updated, 0} -> notfound;
+   {updated, 0} -> not_found;
    {updated,_N} -> ok;
    _ -> error
  end.
+
+to_devices(QueryResult) ->
+  lists:map(fun(Values) ->
+    CheckedValues = check_values(Values) ,
+    [ID, Expire, Info, Client, IP, Last, Label, OMEMOId] = CheckedValues,
+    #devices_device{id = ID, expire = Expire, info = Info, client = Client,
+      ip = IP, last_auth = Last, public_label = Label, omemo_id = OMEMOId}
+            end, QueryResult).
+
+check_values(Tuple) ->
+  List = [element(I,Tuple) || I <- lists:seq(1,tuple_size(Tuple))],
+  lists:map(
+    fun(null) -> undefined;
+      (<<>>) -> undefined;
+      (V) -> V
+    end, List).
 
 %% SQL for API
 
@@ -767,26 +921,32 @@ run_hook_revoke_devices(KVList) ->
 
 run_hook_revoke_devices(LUser, LServer, IDs) ->
   ejabberd_hooks:run(revoke_devices, LServer, [LUser, LServer, IDs]),
-  delete_from_omemo(LUser, LServer, IDs),
+  publish_omemo_devices(jid:make(LUser, LServer)),
   ok.
 
 
--spec revoke_devices(binary(), binary(), list()) -> ok | notfound | error.
+-spec revoke_devices(binary(), binary(), list()) -> ok | not_found | error.
 revoke_devices(_LUser, _LServer, []) ->
-  notfound;
+  not_found;
 revoke_devices(LUser, LServer, IDs) ->
-  run_hook_revoke_devices(LUser, LServer, IDs),
-  sql_revoke_devices(LUser, LServer, IDs).
+  case sql_revoke_devices(LUser, LServer, IDs) of
+    ok ->
+      run_hook_revoke_devices(LUser, LServer, IDs),
+      ok;
+    Err ->
+      Err
+  end.
 
 revoke_all(Server,User) ->
   JID = jid:to_string(jid:make(User,Server)),
   Devices = sql_get_device_ids(Server,JID),
+  Result = sql_revoke_all_devices(Server,JID),
   run_hook_revoke_devices(User, Server, Devices),
   lists:foreach(fun(ID) ->
     ReasonTXT = <<"Device was revoked">>,
     kick_by_device_id(Server,User,ID,ReasonTXT) end, Devices
   ),
-  sql_revoke_all_devices(Server,JID).
+  Result.
 
 revoke_all_except(Server, User, Resource) ->
   JID = jid:make(User,Server),
@@ -827,51 +987,6 @@ device_id_clause(IDs) ->
                 S -> list_to_binary(S)
               end,
   <<Begin/binary,IDValues/binary,Fin/binary>>.
-
-delete_from_omemo(LUser, LServer, IDs) ->
-  JID = jid:make(LUser, LServer),
-  Node = <<"urn:xmpp:omemo:2:devices">>,
-  IQ = #iq{from = JID,
-    to = JID,
-    id = randoms:get_string(),
-    type = get,
-    sub_els = [#pubsub{items = #ps_items{node = Node }}],
-    meta = #{}},
-  case mod_pubsub:iq_sm(IQ) of
-    #iq{type = result, sub_els = [#pubsub{items = #ps_items{items =
-    [#ps_item{sub_els = [#xmlel{name = <<"devices">>, attrs = Attrs, children = Devices }]}]}}]} ->
-      DeletedIDs = extract_omemo_id(IDs),
-      Item = #ps_item{
-        id = <<"current">>,
-        sub_els = [#xmlel{name = <<"devices">>, attrs = Attrs,
-          children = filter_omemo_devices(Devices, DeletedIDs)}]},
-      Payload = #pubsub{publish = #ps_publish{node = Node, items = [Item]}},
-      mod_pubsub:iq_sm(IQ#iq{type = set, sub_els = [Payload]}),
-      lists:foreach(fun(ID) ->
-        Retract = #pubsub{retract = #ps_retract{notify = true,
-          node = <<"urn:xmpp:omemo:2:bundles">>,
-          items = [#ps_item{id = ID}]}},
-        mod_pubsub:iq_sm(IQ#iq{type = set, sub_els = [Retract]})
-                    end, DeletedIDs);
-    _->
-      error
-  end.
-
-extract_omemo_id(DeviceIDs) ->
-  lists:filtermap(fun(I) ->
-    try {true, str:strip(binary:part(I,0,8), left,$0)}
-    catch _:_ ->
-      false
-    end end, DeviceIDs).
-
-filter_omemo_devices(Elems, DeletedIDs) ->
-  lists:filter(fun(El) ->
-    case lists:keyfind(<<"id">>, 1, El#xmlel.attrs) of
-      {_, ID} ->
-        not lists:member(ID, DeletedIDs);
-      _ ->
-        true
-    end end, Elems).
 
 make_secret() ->
   base64:encode(crypto:strong_rand_bytes(20)).

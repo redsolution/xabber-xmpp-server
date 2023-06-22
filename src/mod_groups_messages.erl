@@ -36,7 +36,7 @@
   message_hook/1,
   strip_stanza_id/2,
   send_displayed/3,
-  get_actual_user_info/2, get_displayed_msg/4, shift_references/2, binary_length/1, set_displayed/4
+  get_displayed_msg/4, shift_references/2, binary_length/1, set_displayed/4
 ]).
 -export([get_last/1, seconds_since_epoch/1]).
 
@@ -554,113 +554,116 @@ set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
   Msg = #displayed_msg{chat = {LName,LServer}, stanza_id = integer_to_binary(StanzaID), origin_id = OriginID, bare_peer = {PUser,PServer,<<>>}},
   mnesia:dirty_write(Msg).
 
-%% Actual information about user
+%% Removed updating of information about the author
+%% when requesting a message from the archive
 
-get_actual_user_info(_Server, []) ->
-  [];
-get_actual_user_info(Server, Msgs) ->
-  UsersIDs = lists:map(fun(Pkt) ->
-    {_ID, _IDInt, El} = Pkt,
-    #forwarded{sub_els = [MsgE]} = El,
-    Msg = xmpp:decode(MsgE),
-    X = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-    case X of
-      false ->
-        {false,false};
-      _ ->
-        Reference = xmpp:get_subtag(X, #xmppreference{}),
-        case Reference of
-          false ->
-            {false, false};
-          _ ->
-            Card = xmpp:get_subtag(Reference, #xabbergroupchat_user_card{}),
-            case Card of
-              false ->
-                {false,false};
-              _ ->
-                {jid:to_string(jid:remove_resource(Msg#message.from)),
-                  Card#xabbergroupchat_user_card.id}
-            end
-        end
-    end
-    end, Msgs
-  ),
-  UniqUsersIDs = lists:usort(UsersIDs),
-  Chats = lists:usort([C || {C,_ID} <- UsersIDs]),
-  ChatandUserCards = lists:map(fun(Chat) ->
-    case Chat of
-      false ->
-        {false,[]};
-      _ ->
-        Users = [U ||{C,U} <- UniqUsersIDs ,C == Chat],
-        AllUserCards = lists:map(fun(UsID) ->
-          User = mod_groups_users:get_user_by_id(Server,Chat,UsID),
-          case User of
-            none ->
-              {none,none};
-            _ ->
-              UserCard = mod_groups_users:form_user_card(User,Chat),
-              {UsID, UserCard}
-          end end, Users),
-        UserCards = [{UID,Card}|| {UID,Card} <- AllUserCards, UID =/= none],
-        {Chat, UserCards}
-    end end, Chats),
-  change_all_messages(ChatandUserCards,Msgs).
+%% Actual information about user for mod_mam
+%%
+%%get_actual_user_info(_Server, []) ->
+%%  [];
+%%get_actual_user_info(Server, Msgs) ->
+%%  UsersIDs = lists:map(fun(Pkt) ->
+%%    {_ID, _IDInt, El} = Pkt,
+%%    #forwarded{sub_els = [MsgE]} = El,
+%%    Msg = xmpp:decode(MsgE),
+%%    X = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+%%    case X of
+%%      false ->
+%%        {false,false};
+%%      _ ->
+%%        Reference = xmpp:get_subtag(X, #xmppreference{}),
+%%        case Reference of
+%%          false ->
+%%            {false, false};
+%%          _ ->
+%%            Card = xmpp:get_subtag(Reference, #xabbergroupchat_user_card{}),
+%%            case Card of
+%%              false ->
+%%                {false,false};
+%%              _ ->
+%%                {jid:to_string(jid:remove_resource(Msg#message.from)),
+%%                  Card#xabbergroupchat_user_card.id}
+%%            end
+%%        end
+%%    end
+%%    end, Msgs
+%%  ),
+%%  UniqUsersIDs = lists:usort(UsersIDs),
+%%  Chats = lists:usort([C || {C,_ID} <- UsersIDs]),
+%%  ChatandUserCards = lists:map(fun(Chat) ->
+%%    case Chat of
+%%      false ->
+%%        {false,[]};
+%%      _ ->
+%%        Users = [U ||{C,U} <- UniqUsersIDs ,C == Chat],
+%%        AllUserCards = lists:map(fun(UsID) ->
+%%          User = mod_groups_users:get_user_by_id(Server,Chat,UsID),
+%%          case User of
+%%            none ->
+%%              {none,none};
+%%            _ ->
+%%              UserCard = mod_groups_users:form_user_card(User,Chat),
+%%              {UsID, UserCard}
+%%          end end, Users),
+%%        UserCards = [{UID,Card}|| {UID,Card} <- AllUserCards, UID =/= none],
+%%        {Chat, UserCards}
+%%    end end, Chats),
+%%  change_all_messages(ChatandUserCards,Msgs).
 
-change_all_messages(ChatandUsers, Msgs) ->
-  lists:map(fun(Pkt) ->
-    {_ID, _IDInt, El} = Pkt,
-    #forwarded{sub_els = [Msg0]} = El,
-    Msg = xmpp:decode(Msg0),
-    X = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-    case X of
-      false ->
-        Pkt;
-      _ ->
-        Ref = xmpp:get_subtag(X, #xmppreference{}),
-        case Ref of
-          false ->
-            Pkt;
-          _ ->
-            Card = xmpp:get_subtag(Ref, #xabbergroupchat_user_card{}),
-            change_message(Card,ChatandUsers,Pkt)
-        end
-    end
-            end
-    , Msgs
-  ).
-
-change_message(false,_ChatandUsers,Pkt) ->
-  Pkt;
-change_message(OldCard,ChatandUsers,Pkt) ->
-  {ID, IDInt, El} = Pkt,
-  #forwarded{sub_els = [Msg0]} = El,
-  Msg = xmpp:decode(Msg0),
-  Xtag = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-  CurrentUserID = OldCard#xabbergroupchat_user_card.id,
-  Chat = jid:to_string(jid:remove_resource(Msg#message.from)),
-  Cards = lists:keyfind(Chat,1,ChatandUsers),
-  case Cards of
-    false ->
-      Pkt;
-    _ ->
-      {Chat,UserCards} = Cards,
-      IDNewCard = lists:keyfind(CurrentUserID,1,UserCards),
-      case IDNewCard of
-        false ->
-          Pkt;
-        _ ->
-          {CurrentUserID, NewCard} = IDNewCard,
-          Pkt2 = strip_x_elements(Msg),
-          Sub2 = xmpp:get_els(Pkt2),
-          Reference = xmpp:get_subtag(Xtag, #xmppreference{}),
-          X = Reference#xmppreference{type = <<"mutable">>, sub_els = [NewCard]},
-          NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [X]},
-          XEl = xmpp:encode(NewX),
-          Sub3 = [XEl|Sub2],
-          {ID,IDInt,El#forwarded{sub_els = [Msg0#message{sub_els = Sub3}]}}
-      end
-  end.
+%%change_all_messages(ChatandUsers, Msgs) ->
+%%  lists:map(fun(Pkt) ->
+%%    {_ID, _IDInt, El} = Pkt,
+%%    #forwarded{sub_els = [Msg0]} = El,
+%%    Msg = xmpp:decode(Msg0),
+%%    X = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+%%    case X of
+%%      false ->
+%%        Pkt;
+%%      _ ->
+%%        Ref = xmpp:get_subtag(X, #xmppreference{}),
+%%        case Ref of
+%%          false ->
+%%            Pkt;
+%%          _ ->
+%%            Card = xmpp:get_subtag(Ref, #xabbergroupchat_user_card{}),
+%%            change_message(Card,ChatandUsers,Pkt)
+%%        end
+%%    end
+%%            end
+%%    , Msgs
+%%  ).
+%%
+%%change_message(false,_ChatandUsers,Pkt) ->
+%%  Pkt;
+%%change_message(OldCard,ChatandUsers,Pkt) ->
+%%  {ID, IDInt, El} = Pkt,
+%%  #forwarded{sub_els = [Msg0]} = El,
+%%  Msg = xmpp:decode(Msg0),
+%%  Xtag = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+%%  CurrentUserID = OldCard#xabbergroupchat_user_card.id,
+%%  Chat = jid:to_string(jid:remove_resource(Msg#message.from)),
+%%  Cards = lists:keyfind(Chat,1,ChatandUsers),
+%%  case Cards of
+%%    false ->
+%%      Pkt;
+%%    _ ->
+%%      {Chat,UserCards} = Cards,
+%%      IDNewCard = lists:keyfind(CurrentUserID,1,UserCards),
+%%      case IDNewCard of
+%%        false ->
+%%          Pkt;
+%%        _ ->
+%%          {CurrentUserID, NewCard} = IDNewCard,
+%%          Pkt2 = strip_x_elements(Msg),
+%%          Sub2 = xmpp:get_els(Pkt2),
+%%          Reference = xmpp:get_subtag(Xtag, #xmppreference{}),
+%%          X = Reference#xmppreference{type = <<"mutable">>, sub_els = [NewCard]},
+%%          NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [X]},
+%%          XEl = xmpp:encode(NewX),
+%%          Sub3 = [XEl|Sub2],
+%%          {ID,IDInt,El#forwarded{sub_els = [Msg0#message{sub_els = Sub3}]}}
+%%      end
+%%  end.
 
 
 shift_references(Pkt, Length) ->

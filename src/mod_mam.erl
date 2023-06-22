@@ -1104,13 +1104,13 @@ select_and_send(LServer, Query, RSM, FlipPage, #iq{from = From, to = To} = IQ, M
 	    {groupchat, _Role, _MUCState} ->
 		select(LServer, From, To, Query, RSM, MsgType)
 	end,
-    SortedMsgs = lists:keysort(2, Msgs),
-		SortedMsgs2 = case FlipPage of
-										true -> lists:reverse(SortedMsgs);
-										false -> SortedMsgs
+    SortedMsgs1 = lists:keysort(2, Msgs),
+		SortedMsgs = case FlipPage of
+										true -> lists:reverse(SortedMsgs1);
+										false -> SortedMsgs1
 									end,
-		NewSortedMsgs = mod_groups_messages:get_actual_user_info(LServer,SortedMsgs2),
-    send(NewSortedMsgs, Count, IsComplete, IQ).
+%%		NewSortedMsgs = mod_groups_messages:get_actual_user_info(LServer,SortedMsgs2),
+    send(SortedMsgs, Count, IsComplete, IQ).
 
 select(_LServer, JidRequestor, JidArchive, Query, RSM,
        {groupchat, _Role, #state{config = #config{mam = false},

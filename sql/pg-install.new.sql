@@ -92,15 +92,7 @@ CREATE TABLE archive (
     kind text,
     nick text,
     tags text[],
-    payload_type text DEFAULT 'cleartext',
-    image boolean NOT NULL DEFAULT false,
-    document boolean NOT NULL DEFAULT false,
-    audio boolean NOT NULL DEFAULT false,
-    video boolean NOT NULL DEFAULT false,
-    geo boolean NOT NULL DEFAULT false,
-    sticker boolean NOT NULL DEFAULT false,
-    voice boolean NOT NULL DEFAULT false,
-    encrypted boolean NOT NULL DEFAULT false,
+    conversation_type text DEFAULT 'urn:xabber:chat',
     created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 

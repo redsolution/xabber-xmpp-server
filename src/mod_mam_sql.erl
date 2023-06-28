@@ -40,6 +40,8 @@
 -include("logger.hrl").
 -include("ejabberd_sql_pt.hrl").
 
+-define(NS_XABBER_CHAT, <<"urn:xabber:chat">>).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -112,19 +114,10 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
             {LUser, LHost}, Type, Peer),
     LPeer = jid:encode(
 	      jid:tolower(Peer)),
-    References = filter_all_except_references(Pkt),
-    Is_image = search_in_references(References,<<"image">>),
-  Is_audio = search_in_references(References,<<"audio">>),
-  Is_video = search_in_references(References,<<"video">>),
-  Is_document = search_in_references(References, othe),
-  Is_voice = search_element_in_references(References,#voice_message{}),
-  Is_geo = search_element_in_references(References,#geoloc{}),
-  Is_sticker = search_element_in_references(References,#sticker{}),
-  Is_encrypted = is_encrypted(Pkt),
-    PayloadType = case get_encrypted_type(Pkt) of
-                    false -> <<"cleartext">>;
-                    V -> V
-                  end,
+    ConvType = case get_encrypted_type(Pkt) of
+                 false -> ?NS_XABBER_CHAT;
+                 V -> V
+               end,
     Tags = get_message_tags(Pkt),
     XML = fxml:element_to_binary(Pkt),
     Body = fxml:get_subtag_cdata(Pkt, <<"body">>),
@@ -141,15 +134,7 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
                "xml=%(XML)s",
                "txt=%(Body)s",
                "kind=%(SType)s",
-               "image=%(Is_image)b",
-               "video=%(Is_video)b",
-               "audio=%(Is_audio)b",
-               "document=%(Is_document)b",
-               "geo=%(Is_geo)b",
-               "sticker=%(Is_sticker)b",
-               "voice=%(Is_voice)b",
-               "encrypted=%(Is_encrypted)b",
-               "payload_type=%(PayloadType)s",
+               "conversation_type=%(ConvType)s",
                "tags=%(Tags)as",
                "nick=%(Nick)s"])) of
       {updated, _} ->
@@ -161,18 +146,12 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
 is_encrypted(LServer, StanzaID) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(payload_type)s
+    ?SQL("select @(conversation_type)s
        from archive where timestamp=%(StanzaID)d")) of
-    {selected,[{PType}]} when PType /= <<"cleartext">> ->
+    {selected,[{PType}]} when PType /= ?NS_XABBER_CHAT ->
       {true, PType};
     _ ->
       false
-  end.
-
-is_encrypted(Pkt0) ->
-  case get_encrypted_type(Pkt0) of
-    false -> false;
-    _ -> true
   end.
 
 get_encrypted_type({error, _}) ->
@@ -208,26 +187,6 @@ find_encryption_fallback(Els) ->
       false -> Acc0
     end
               end, false, Els).
-
-filter_all_except_references(Pkt) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = lists:filter(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
-        try xmpp:decode(El) of
-          #xmppreference{} ->
-            true
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          false
-      end
-    end, Els),
-  DecodedEls = lists:map(fun(El) -> xmpp:decode(El) end, NewEls),
-  DecodedEls.
 
 get_all_references(Pkt) ->
   Els = xmpp:get_els(Pkt),
@@ -445,24 +404,17 @@ get_odbctype_and_escape(LServer) ->
 %%% Internal functions
 %%%===================================================================
 make_sql_query(User, LServer, MAMQuery, RSM) ->
-		StanzaId = proplists:get_value('stanza-id', MAMQuery),
     Start = proplists:get_value(start, MAMQuery),
     End = proplists:get_value('end', MAMQuery),
     With = proplists:get_value(with, MAMQuery),
     WithText = proplists:get_value(withtext, MAMQuery),
-    FilterAudio = proplists:get_value(filter_audio, MAMQuery),
-    FilterVideo = proplists:get_value(filter_video, MAMQuery),
-    FilterDocument = proplists:get_value(filter_document, MAMQuery),
-    FilterEncrypted = proplists:get_value(filter_encrypted, MAMQuery),
-    FilterVoice = proplists:get_value(filter_voice, MAMQuery),
-    FilterSticker = proplists:get_value(filter_sticker, MAMQuery),
-    FilterGeo = proplists:get_value(filter_geo, MAMQuery),
-    FilterImage = proplists:get_value(filter_image, MAMQuery),
-    WithTags= proplists:get_value('with-tags', MAMQuery),
-    PayloadType = proplists:get_value('payload-type', MAMQuery),
-    FilterIDs = proplists:get_value(ids, MAMQuery),
-    FilterAfterID = proplists:get_value('after-id', MAMQuery),
-    FilterBeforeID = proplists:get_value('before-id', MAMQuery),
+    WithTags= lists:filter(fun(X) -> X /= <<>> end,
+      proplists:get_value('with-tags', MAMQuery, [])),
+    ConvType = proplists:get_value('conversation-type', MAMQuery, <<>>),
+    FilterIDs = lists:filter(fun(X) -> X /= <<>> end,
+      proplists:get_value(ids, MAMQuery,[])),
+    FilterAfterID = proplists:get_value('after-id', MAMQuery, <<>>),
+    FilterBeforeID = proplists:get_value('before-id', MAMQuery, <<>>),
     {Max, Direction, ID} = get_max_direction_id(RSM),
     {ODBCType, Escape} = get_odbctype_and_escape(LServer),
     LimitClause = if is_integer(Max), Max >= 0, ODBCType /= mssql ->
@@ -521,108 +473,31 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
 			[]
 		end,
     IDsClause = case FilterIDs of
-                  undefined -> [];
                   [] -> [];
                   _ ->
                     [<<" and timestamp in (">>] ++ lists:join(<<$,>>,FilterIDs) ++ [<<$)>>]
                 end,
     BeforeIDClause = case FilterBeforeID of
-                       undefined -> [];
                        <<>> -> [];
                        _ -> [<<" and timestamp < ">>,FilterBeforeID]
                      end,
     AfterIDClause = case FilterAfterID of
-                       undefined -> [];
                        <<>> -> [];
                        _ -> [<<" and timestamp > ">>,FilterAfterID]
                      end,
-    StanzaIdClause = case StanzaId of
-                       <<>> ->
-                         [];
-                       undefined ->
-                         [];
-                       _ ->
-                         [<<" and timestamp = ">>,
-                           StanzaId]
-                     end,
     TagsClause = case WithTags of
                    [] -> [];
-                   undefined -> [];
                    _ ->
                      TL = [<<$',(Escape(T))/binary,$'>> || T <- WithTags],
                      TLB = str:join(TL, <<$,>>),
                      [<<" and ARRAY[",TLB/binary,"] && tags ">>]
                  end,
-    PayloadClause =  if
-                       is_binary(PayloadType), PayloadType /= <<>> ->
-                         [<<" and payload_type='">>,
-                          Escape(PayloadType), <<"' ">>];
-                      true -> []
-                    end,
-    ImageClause = case FilterImage of
-                    false ->
-                      [<<"and image = false ">>];
-                    true ->
-                      [<<"and image = true ">>];
-                    _ ->
-                      []
-                  end,
-    AudioClause = case FilterAudio of
-                    false ->
-                      [<<"and audio = false ">>];
-                    true ->
-                      [<<"and audio = true ">>];
-                    _ ->
-                      []
-                  end,
-    VideoClause = case FilterVideo of
-               false ->
-                 [<<"and video = false ">>];
-               true ->
-                 [<<"and video = true ">>];
-               _ ->
-                 []
-             end,
-    GeoClause = case FilterGeo of
-               false ->
-                 [<<"and geo = false ">>];
-               true ->
-                 [<<"and geo = true ">>];
-               _ ->
-                 []
-             end,
-    EncryptedClause = case FilterEncrypted of
-               false ->
-                 [<<"and encrypted = false ">>];
-               true ->
-                 [<<"and encrypted = true ">>];
-               _ ->
-                 []
-             end,
-    VoiceClause = case FilterVoice of
-               false ->
-                 [<<"and voice = false ">>];
-               true ->
-                 [<<"and voice = true ">>];
-               _ ->
-                 []
-             end,
-    StickerClause = case FilterSticker of
-               false ->
-                 [<<"and sticker = false ">>];
-               true ->
-                 [<<"and sticker = true ">>];
-               _ ->
-                 []
-             end,
-    DocumentClause = case FilterDocument of
-               false ->
-                 [<<"and document = false ">>];
-               true ->
-                 [<<"and document = true ">>];
-               _ ->
-                 []
-             end,
+    ConvClause = case ConvType of
+                   <<>> -> [];
+                   _ ->
+                     [<<" and conversation_type='">>,
+                       Escape(ConvType), <<"' ">>]
+                 end,
     SUser = Escape(User),
     SServer = Escape(LServer),
     Query =
@@ -633,19 +508,17 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
                  " FROM archive WHERE username='">>,
                  SUser, <<"' and server_host='">>,
                  SServer, <<"'">>, WithClause, WithTextClause,
-                  StartClause, EndClause, PageClause, StanzaIdClause,
-                  IDsClause, AfterIDClause, BeforeIDClause, TagsClause, PayloadClause,
-                  ImageClause, AudioClause, VideoClause, VoiceClause,
-                  DocumentClause, StickerClause, GeoClause, EncryptedClause];
+                  StartClause, EndClause, PageClause, IDsClause,
+                  AfterIDClause, BeforeIDClause, TagsClause,
+                  ConvClause];
             false ->
                 [<<"SELECT ">>, TopClause,
                   <<" timestamp, xml, peer, kind, nick"
                   " FROM archive WHERE username='">>,
                  SUser, <<"'">>, WithClause, WithTextClause,
-                  StartClause, EndClause, PageClause, StanzaIdClause,
-                  IDsClause, AfterIDClause, BeforeIDClause, TagsClause, PayloadClause,
-                  ImageClause, AudioClause, VideoClause, VoiceClause,
-                  DocumentClause, StickerClause, GeoClause, EncryptedClause]
+                  StartClause, EndClause, PageClause, IDsClause,
+                  AfterIDClause, BeforeIDClause, TagsClause,
+                  ConvClause]
         end,
 
     QueryPage =
@@ -667,18 +540,14 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
              [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
               SUser, <<"' and server_host='">>,
               SServer, <<"'">>, WithClause, WithTextClause,
-               StartClause, EndClause, StanzaIdClause,
-               IDsClause, AfterIDClause, BeforeIDClause, TagsClause,PayloadClause,
-               ImageClause,AudioClause, VideoClause, VoiceClause,
-               DocumentClause, StickerClause, GeoClause, EncryptedClause, <<";">>]};
+               StartClause, EndClause, IDsClause, AfterIDClause,
+               BeforeIDClause, TagsClause, ConvClause, <<";">>]};
         false ->
             {QueryPage,
              [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
               SUser, <<"'">>, WithClause, WithTextClause,
-              StartClause, EndClause, StanzaIdClause,
-               IDsClause, AfterIDClause, BeforeIDClause, TagsClause,PayloadClause,
-               ImageClause, AudioClause, VideoClause, VoiceClause,
-               DocumentClause,StickerClause, GeoClause, EncryptedClause, <<";">>]}
+              StartClause, EndClause, IDsClause, AfterIDClause,
+               BeforeIDClause, TagsClause, ConvClause, <<";">>]}
     end.
 
 -spec get_max_direction_id(rsm_set() | undefined) ->

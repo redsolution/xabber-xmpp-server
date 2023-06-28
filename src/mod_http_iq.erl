@@ -122,7 +122,7 @@ handle_cast({mam_request, Server, User, ReqID, StanzaID, Remote, Caller}, #state
   XData = #xdata{type = submit,
     fields = [
       #xdata_field{var = <<"FORM_TYPE">>, type='hidden', values = [<<"urn:xmpp:mam:1">>]},
-      #xdata_field{var = <<"{urn:xmpp:sid:0}stanza-id">>, values = [StanzaID]}
+      #xdata_field{var = <<"ids">>, values = [StanzaID]}
     ]},
   Query = #mam_query{id = ReqID, xmlns = <<"urn:xmpp:mam:2">>, xdata = XData},
   IQ=#iq{type=set,

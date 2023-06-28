@@ -98,6 +98,7 @@
 -define(TABLE_SIZE_LIMIT, 2000000000). % A bit less than 2 GiB.
 -define(NS_XABBER_SYNCHRONIZATION_CHAT, <<"https://xabber.com/protocol/synchronization#chat">>).
 -define(CHAT_NS,?NS_XABBER_SYNCHRONIZATION_CHAT).
+-define(NS_XABBER_CHAT, <<"urn:xabber:chat">>).
 -define(NS_OMEMO, <<"urn:xmpp:omemo:2">>).
 -define(AUTO_CLEAN_INTERVAL, 43200000). % 12 hours
 
@@ -881,7 +882,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
         sub_els = [#xabber_conversation_retract{version = RetractVersion}]},
         #xabber_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]};
     _ ->
-      Count = get_count_messages(LServer,LUser,Conversation,Read,<<"cleartext">>),
+      Count = get_count_messages(LServer,LUser,Conversation,Read,?NS_XABBER_CHAT),
       LastMessage = get_last_message(LServer,LUser,Conversation),
       LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #xabber_conversation_unread{count = Count, 'after' = Read},
@@ -918,11 +919,12 @@ get_last_message(LServer,LUser,Conversation) ->
     Conversation, misc:now_to_usec(erlang:now())).
 
 get_last_informative_message(LServer, LUser, Conversation, TS) ->
+  ConvType = ?NS_XABBER_CHAT,
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
     " from archive where username=%(LUser)s and bare_peer=%(Conversation)s "
-    " and %(LServer)H and timestamp < %(TS)d and payload_type='cleartext' "
+    " and %(LServer)H and timestamp < %(TS)d and conversation_type=%(ConvType)s "
     " order by timestamp desc limit 10")) of
     {selected,[]} ->
       [];
@@ -965,13 +967,13 @@ find_informative_message(LUser, LServer, List)->
   end.
 
 %% Get the last encrypted informative chat message
-get_last_encrypted_message(LServer,LUser,Conversation, EType) ->
+get_last_encrypted_message(LServer,LUser,Conversation, ConvType) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
     " from archive where username=%(LUser)s and bare_peer=%(Conversation)s "
-    " and %(LServer)H and txt notnull and txt !='' and payload_type = %(EType)s "
-    " order by timestamp desc limit 1")) of
+    " and %(LServer)H and txt notnull and txt !='' "
+    " and conversation_type = %(ConvType)s order by timestamp desc limit 1")) of
     {selected,[<<>>]} ->
       [];
     {selected,[{TS, XML, Peer, Kind, Nick}]} ->
@@ -1596,12 +1598,12 @@ get_last_stamp(LServer, LUser) ->
       Version
   end.
 
-get_count_messages(LServer,LUser,Peer,TS, PayloadType) ->
+get_count_messages(LServer,LUser,Peer,TS, ConvType) ->
   case ejabberd_sql:sql_query(LServer,
     ?SQL("select @(count(*))d from archive "
     " where username=%(LUser)s and bare_peer=%(Peer)s and txt notnull and txt !='' "
     " and timestamp > %(TS)d and not ARRAY['invite','voip'] && tags "
-    " and payload_type = %(PayloadType)s and %(LServer)H")) of
+    " and conversation_type = %(ConvType)s and %(LServer)H")) of
     {selected,[{Count}]} ->
       Count;
     _ ->

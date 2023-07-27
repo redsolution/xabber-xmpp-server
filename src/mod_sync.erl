@@ -1379,7 +1379,7 @@ update_metainfo(LServer, LUser, Conv, not_encrypted, Opts) ->
       " where username = %(LUser)s and conversation = %(Conv)s "
       " and status != 'deleted' and not encrypted and %(LServer)H" )) of
       {selected,[]} ->
-        conversation_sql_upsert(LServer, LUser, Conv , []),
+        conversation_sql_upsert(LServer, LUser, Conv , Opts),
         ?CHAT_NS;
       {selected,[{Type, Status, Mute}]} ->
         sql_metainfo_update_t(LServer, LUser, Conv,
@@ -1404,7 +1404,7 @@ update_metainfo(LServer, LUser, Conv, Type, Opts) ->
       " and status != 'deleted' and %(LServer)H")) of
       {selected,[]} ->
         conversation_sql_upsert(LServer, LUser, Conv ,
-          [{type, Type}, {encrypted, Encrypted}]);
+          [{type, Type}, {encrypted, Encrypted}] ++ Opts);
       {selected,[{Type, Status, Mute}]} ->
         sql_metainfo_update_t(LServer, LUser, Conv, Type, Status, Mute, Opts);
       {selected, List}  ->
@@ -1416,7 +1416,7 @@ update_metainfo(LServer, LUser, Conv, Type, Opts) ->
             sql_metainfo_update_t(LServer, LUser, Conv, Type, Status, Mute, Opts);
           not IsGroup andalso Type /= ?NS_GROUPCHAT ->
             conversation_sql_upsert(LServer, LUser, Conv ,
-              [{type, Type}, {encrypted, Encrypted}]);
+              [{type, Type}, {encrypted, Encrypted}] ++ Opts);
           true ->
             {type_changed, [T || {T, _, _} <- List]}
         end;
@@ -2345,6 +2345,7 @@ conversation_sql_upsert(LServer, LUser, Conversation , Options) ->
   Encrypted = proplists:get_value(encrypted, Options, false),
   GroupInfo = proplists:get_value('group_info', Options, <<"">>),
   Status = proplists:get_value('status', Options, <<"active">>),
+  Read = proplists:get_value(read, Options, 0),
   TS = time_now(),
   ?SQL_UPSERT_T(
     "conversation_metadata",
@@ -2352,6 +2353,8 @@ conversation_sql_upsert(LServer, LUser, Conversation , Options) ->
       "!conversation=%(Conversation)s",
       "!type=%(Type)s",
       "updated_at=%(TS)d",
+      "read_until = %(Read)s",
+      "read_until_ts = %(Read)d",
       "conversation_thread=%(Thread)s",
       "metadata_updated_at=%(TS)d",
       "status=%(Status)s",

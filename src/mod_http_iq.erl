@@ -156,7 +156,8 @@ handle_info({route, #message{to= #jid{resource = ReqID}, sub_els = [#mam_result{
 handle_info({route, #message{to= #jid{resource = ReqID}, sub_els = [SubEl | _]}= Packet}, State) ->
   try xmpp:decode(SubEl) of
     #mam_result{queryid = ReqID} ->
-      answer(State#state.tab,ReqID, Packet)
+      answer(State#state.tab,ReqID, Packet);
+    _ -> pass
   catch
     _:_ -> pass
   end,

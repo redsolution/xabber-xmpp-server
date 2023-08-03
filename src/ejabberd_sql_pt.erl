@@ -307,13 +307,17 @@ parse1([$%, $( | S], Acc, State) ->
                         append_string("0=0", State3)
                 end;
             {array, InternalType} ->
+                InternalType1 = case InternalType of
+                                  string -> in_array_string;
+                                  _ -> InternalType
+                                end,
                 Convert = erl_syntax:application(
                     erl_syntax:atom(ejabberd_sql),
                     erl_syntax:atom(to_array),
                     [erl_syntax:record_access(
                         erl_syntax:variable(?ESCAPE_VAR),
                         erl_syntax:atom(?ESCAPE_RECORD),
-                        erl_syntax:atom(InternalType)),
+                        erl_syntax:atom(InternalType1)),
                         erl_syntax:variable(Name)]),
                 State2#state{'query' = [{var, Var} | State2#state.'query'],
                             args = [Convert | State2#state.args],

@@ -560,54 +560,54 @@ sql_query_internal([{_, _} | _] = Queries) ->
             sql_query_internal(Query)
     end;
 sql_query_internal(#sql_query{} = Query) ->
-    State = get(?STATE_KEY),
-    Res =
-        try
-            case State#state.db_type of
-                odbc ->
-                    generic_sql_query(Query);
-		mssql ->
-		    mssql_sql_query(Query);
-                pgsql ->
-                    Key = {?PREPARE_KEY, Query#sql_query.hash},
-                    case get(Key) of
-                        undefined ->
-                            case pgsql_prepare(Query, State) of
-                                {ok, _, _, _} ->
-                                    put(Key, prepared);
-                                {error, Error} ->
-                                    ?ERROR_MSG("PREPARE failed for SQL query "
-                                               "at ~p: ~p",
-                                               [Query#sql_query.loc, Error]),
-                                    put(Key, ignore)
-                            end;
-                        _ ->
-                            ok
-                    end,
-                    case get(Key) of
-                        prepared ->
-                            pgsql_execute_sql_query(Query, State);
-                        _ ->
-                            generic_sql_query(Query)
-                    end;
-                mysql ->
-                    generic_sql_query(Query);
-                sqlite ->
-                    sqlite_sql_query(Query)
-            end
-        catch exit:{timeout, _} ->
-                {error, <<"timed out">>};
-              exit:{killed, _} ->
-                {error, <<"killed">>};
-              exit:{normal, _} ->
-                {error, <<"terminated unexpectedly">>};
-              Class:Reason ->
-                ST = erlang:get_stacktrace(),
-                ?ERROR_MSG("Internal error while processing SQL query: ~p",
-                           [{Class, Reason, ST}]),
-                {error, <<"internal error">>}
+  State = get(?STATE_KEY),
+  Res =
+  try
+    case State#state.db_type of
+      odbc ->
+        generic_sql_query(Query);
+      mssql ->
+        mssql_sql_query(Query);
+      pgsql ->
+        Key = {?PREPARE_KEY, Query#sql_query.hash},
+        case get(Key) of
+          undefined ->
+            case pgsql_prepare(Query, State) of
+              {ok, _, _, _} ->
+                put(Key, prepared);
+              {error, Error} ->
+                ?ERROR_MSG("PREPARE failed for SQL query "
+                "at ~p: ~p", [Query#sql_query.loc, Error]),
+                put(Key, ignore)
+            end;
+          _ ->
+            ok
         end,
-    check_error(Res, Query);
+        case get(Key) of
+          prepared ->
+            pgsql_execute_sql_query(Query, State);
+          _ ->
+            pgsql_sql_query(Query)
+        end;
+      mysql ->
+        generic_sql_query(Query);
+      sqlite ->
+        sqlite_sql_query(Query)
+    end
+  catch
+    exit:{timeout, _} ->
+      {error, <<"timed out">>};
+    exit:{killed, _} ->
+      {error, <<"killed">>};
+    exit:{normal, _} ->
+      {error, <<"terminated unexpectedly">>};
+    Class:Reason ->
+      ST = erlang:get_stacktrace(),
+      ?ERROR_MSG("Internal error while processing SQL query: ~p",
+        [{Class, Reason, ST}]),
+      {error, <<"internal error">>}
+  end,
+  check_error(Res, Query);
 sql_query_internal(F) when is_function(F) ->
     case catch execute_fun(F) of
         {aborted, Reason} -> {error, Reason};
@@ -678,8 +678,27 @@ generic_escape() ->
                 integer = fun(X) -> misc:i2l(X) end,
                 boolean = fun(true) -> <<"1">>;
                              (false) -> <<"0">>
-                          end
+                          end,
+                in_array_string = fun(X) -> <<"'", (escape(X))/binary, "'">> end
                }.
+
+pgsql_sql_query(SQLQuery) ->
+  sql_query_format_res(
+    sql_query_internal(pgsql_sql_query_format(SQLQuery)),
+    SQLQuery).
+
+pgsql_sql_query_format(SQLQuery) ->
+  Args = (SQLQuery#sql_query.args)(pgsql_escape()),
+  (SQLQuery#sql_query.format_query)(Args).
+
+pgsql_escape() ->
+  #sql_escape{string = fun(X) -> <<"E'", (escape(X))/binary, "'">> end,
+    integer = fun(X) -> misc:i2l(X) end,
+    boolean = fun(true) -> <<"'t'">>;
+      (false) -> <<"'f'">>
+              end,
+    in_array_string = fun(X) -> <<"E'", (escape(X))/binary, "'">> end
+  }.
 
 sqlite_sql_query(SQLQuery) ->
     sql_query_format_res(
@@ -695,7 +714,8 @@ sqlite_escape() ->
                 integer = fun(X) -> misc:i2l(X) end,
                 boolean = fun(true) -> <<"1">>;
                              (false) -> <<"0">>
-                          end
+                          end,
+                in_array_string = fun(X) -> <<"'", (standard_escape(X))/binary, "'">> end
                }.
 
 standard_escape(S) ->
@@ -719,7 +739,8 @@ pgsql_execute_escape() ->
                 integer = fun(X) -> [misc:i2l(X)] end,
                 boolean = fun(true) -> "1";
                              (false) -> "0"
-                          end
+                          end,
+                in_array_string = fun(X) -> <<"\"", (escape(X))/binary, "\"">> end
                }.
 
 pgsql_execute_sql_query(SQLQuery, State) ->

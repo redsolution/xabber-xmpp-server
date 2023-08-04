@@ -527,7 +527,8 @@ case ID of
         ejabberd_router:route(xmpp:make_error(IQ,xmpp:err_internal_server_error()))
     end
 end;
-process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_message{id = ID, symmetric = true, by = By}]} = IQ) ->
+process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
+  #xabber_retract_message{id = ID, symmetric = true, by = By}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
@@ -537,6 +538,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
     id = ID,
     by = By,
     conversation = jid:remove_resource(To),
+    type = ?NS_GROUPCHAT,
     version = Version,
     xmlns = ?NS_XABBER_REWRITE_NOTIFY
   },
@@ -549,7 +551,8 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;
-process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_user{symmetric = true, id = ID}]} = IQ) ->
+process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
+  #xabber_retract_user{symmetric = true, id = ID}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
@@ -558,6 +561,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
     id = ID,
     symmetric = true,
     conversation = jid:remove_resource(To),
+    type = ?NS_GROUPCHAT,
     by = jid:remove_resource(From),
     version = Version,
     xmlns = ?NS_XABBER_REWRITE_NOTIFY
@@ -571,7 +575,8 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;
-process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_retract_all{symmetric = true}]} = IQ) ->
+process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
+  #xabber_retract_all{symmetric = true}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
@@ -579,6 +584,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
   Retract = #xabber_retract_all{
     symmetric = true,
     conversation = jid:remove_resource(To),
+    type = ?NS_GROUPCHAT,
     version = Version,
     xmlns = ?NS_XABBER_REWRITE_NOTIFY
   },
@@ -589,7 +595,9 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;
-process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_replace{id = IDInt, xabber_replace_message = #xabber_replace_message{body = Text, sub_els = SubEls}}]}=IQ) ->
+process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
+  #xabber_replace{id = IDInt, xabber_replace_message = XRM}]}=IQ) ->
+  #xabber_replace_message{body = Text, sub_els = SubEls} = XRM,
   ID = integer_to_binary(IDInt),
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
@@ -604,6 +612,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [#xabber_re
     id = IDInt,
     version = Version,
     conversation = jid:remove_resource(To),
+    type = ?NS_GROUPCHAT,
     xmlns = ?NS_XABBER_REWRITE_NOTIFY
   },
   Result = ejabberd_hooks:run_fold(replace_message, Server, [], [{Server,User,Chat,ID,Text,Replace,Version}]),

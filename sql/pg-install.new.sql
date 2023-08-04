@@ -487,7 +487,7 @@ CREATE TABLE conversation_metadata(
     username text,
     server_host text NOT NULL,
     conversation text,
-    type text NOT NULL DEFAULT 'https://xabber.com/protocol/synchronization#chat',
+    type text NOT NULL DEFAULT 'urn:xabber:chat',
     retract bigint NOT NULL DEFAULT 0,
     conversation_thread text NOT NULL DEFAULT '',
     read_until text NOT NULL DEFAULT '0',
@@ -523,8 +523,9 @@ CREATE TABLE message_retract(
     server_host text NOT NULL,
     xml text,
     version bigint,
-    type text not null default '',
-    CONSTRAINT uc_retract_message_versions UNIQUE (username,server_host,type,version)
+    conversation text not null,
+    type text not null default 'urn:xabber:chat',
+    CONSTRAINT uc_retract_message_versions UNIQUE (username,server_host,version)
     );
 
 

@@ -314,15 +314,15 @@ notificate(Server,Chat,Stanza) ->
   FromChat = jid:replace_resource(From,<<"Group">>),
   UserList = mod_groups_users:users_to_send(Server,Chat),
   lists:foreach(fun(To) ->
-    PServer = To#jid.lserver,
-    PUser = To#jid.luser,
-    case PServer of
-      Server when Stanza == #message{} ->
-        #message{sub_els = [Event]} = Stanza,
-        ejabberd_hooks:run(xabber_push_notification, Server, [<<"update">>, PUser, Server, Event]);
-      _ ->
-        ok
-    end,
+%%    PServer = To#jid.lserver,
+%%    PUser = To#jid.luser,
+%%    case PServer of
+%%      Server when Stanza == #message{} ->
+%%        #message{sub_els = [Event]} = Stanza,
+%%        ejabberd_hooks:run(xabber_push_notification, Server, [<<"update">>, PUser, Server, Event]);
+%%      _ ->
+%%        ok
+%%    end,
     ejabberd_router:route(FromChat,To,Stanza) end, UserList
   ).
 

@@ -877,12 +877,11 @@ to_devices(QueryResult) ->
             end, QueryResult).
 
 check_values(Tuple) ->
-  List = [element(I,Tuple) || I <- lists:seq(1,tuple_size(Tuple))],
   lists:map(
     fun(null) -> undefined;
       (<<>>) -> undefined;
       (V) -> V
-    end, List).
+    end, tuple_to_list(Tuple)).
 
 %% SQL for API
 

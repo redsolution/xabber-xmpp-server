@@ -40,7 +40,7 @@
 	 check_password/4, user_exists/2,
 	 get_users/2, count_users/2,
 	 store_type/1, plain_password_required/1,
-	 opt_type/1]).
+	 opt_type/1, reload/1]).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -108,32 +108,36 @@ init(Host) ->
 			  State#state.password, State#state.tls_options),
     {ok, State}.
 
+
+reload(Host) ->
+	stop(Host),
+	start(Host).
+
 plain_password_required(_) -> true.
 
 store_type(_) -> external.
 
 check_password(User, AuthzId, Server, Password) ->
     if AuthzId /= <<>> andalso AuthzId /= User ->
-	    false;
+			{nocache, false};
+			Password == <<"">> ->
+				{nocache, false};
        true ->
-	    if Password == <<"">> -> false;
-	       true ->
-		    case catch check_password_ldap(User, Server, Password) of
-		      {'EXIT', _} -> false;
-		      Result -> Result
-		    end
+				 case catch check_password_ldap(User, Server, Password) of
+					 {'EXIT', _} -> {nocache, false};
+					 Result -> {cache, Result}
 	    end
     end.
 
 set_password(User, Server, Password) ->
     {ok, State} = eldap_utils:get_state(Server, ?MODULE),
     case find_user_dn(User, State) of
-      false -> {error, notfound};
+      false -> {cache, {error, db_failure}};
       DN ->
 	    case eldap_pool:modify_passwd(State#state.eldap_id, DN,
 					  Password) of
-		ok -> ok;
-		_Err -> {error, db_failure}
+		ok -> {cache, {ok, Password}};
+		_Err -> {nocache, {error, db_failure}}
 	    end
     end.
 
@@ -149,8 +153,8 @@ count_users(Server, Opts) ->
 %% @spec (User, Server) -> true | false | {error, Error}
 user_exists(User, Server) ->
     case catch user_exists_ldap(User, Server) of
-      {'EXIT', _Error} -> {error, db_failure};
-      Result -> Result
+      {'EXIT', _Error} -> {nocache, {error, db_failure}};
+      Result -> {cache, Result}
     end.
 
 %%%----------------------------------------------------------------------

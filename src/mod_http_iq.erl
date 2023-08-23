@@ -69,8 +69,7 @@ stop(Host) ->
   gen_mod:stop_child(?MODULE, Host).
 
 reload(Host, NewOpts, OldOpts) ->
-  Proc = gen_mod:get_module_proc(Host, ?MODULE),
-  gen_server:cast(Proc, {reload, Host, NewOpts, OldOpts}).
+  do_cast(Host,  {reload, Host, NewOpts, OldOpts}).
 
 mod_opt_type(url) ->
   fun(<<"http://", _/binary>> = URL) -> URL;
@@ -100,9 +99,11 @@ handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
 handle_call(get_url, _From, State) ->
   {reply, State#state.url, State};
-handle_call(Req, _From, State) ->
-  ?WARNING_MSG("unexpected call: ~p", [Req]),
-  {reply, {error, badarg}, State}.
+handle_call(get_presence, _From, State) ->
+  {reply,#presence{type = unavailable}, State};
+handle_call(Req, From, State) ->
+  ?WARNING_MSG("unexpected call: ~p from ~p", [Req, From]),
+  {reply, ok, State}.
 handle_cast({vcard_request, Server, User, ReqID, JID, Caller}, #state{tab = Tab} = State) ->
   make_session(User, Server, ReqID, Caller, Tab),
   Query = #vcard_temp{},
@@ -132,6 +133,9 @@ handle_cast({mam_request, Server, User, ReqID, StanzaID, Remote, Caller}, #state
     sub_els = [Query]},
   ejabberd_router:route(IQ),
   {noreply, State};
+handle_cast({delete_session, ReqID}, #state{tab = Tab} = State) ->
+  delete_session(Tab, ReqID),
+  {noreply, State};
 handle_cast(_Request, State = #state{}) ->
   {noreply, State}.
 
@@ -148,26 +152,34 @@ handle_info({route, #iq{type = IQType}}, State) when IQType == set orelse  IQTyp
 handle_info({route, #iq{to= #jid{resource = ReqID}} = Pkt},
     #state{tab = Tab} = State) ->
   answer(Tab, ReqID, Pkt),
-  delete_session(Tab, ReqID),
   {noreply, State};
-handle_info({route, #message{to= #jid{resource = ReqID}, sub_els = [#mam_result{queryid = ReqID}]}= Packet}, State) ->
+handle_info({route, #message{to= #jid{resource = ReqID},
+  sub_els = [#mam_result{queryid = ReqID}]}= Packet}, State) ->
   answer(State#state.tab,ReqID, Packet),
   {noreply, State};
-handle_info({route, #message{to= #jid{resource = ReqID}, sub_els = [SubEl | _]}= Packet}, State) ->
-  try xmpp:decode(SubEl) of
-    #mam_result{queryid = ReqID} ->
+handle_info({route, #message{to= #jid{lserver = LServer, resource = ReqID},
+  sub_els = [SubEl | _]}= Packet}, State) ->
+  Result = try xmpp:decode(SubEl) of
+            #mam_result{queryid = ReqID} -> ok;
+            _ -> pass
+          catch
+            _:_ -> pass
+          end,
+  case Result of
+    ok ->
       answer(State#state.tab,ReqID, Packet);
-    _ -> pass
-  catch
-    _:_ -> pass
+    _ ->
+      process_messages(LServer, Packet)
   end,
+  {noreply, State};
+handle_info({route, #message{to= #jid{lserver = LServer}}= Packet}, State) ->
+  process_messages(LServer, Packet),
   {noreply, State};
 handle_info(_Info, State) ->
   {noreply, State}.
 
 terminate(_Reason, #state{tab = Tab}) ->
   Sessions = ets:tab2list(Tab),
-  ?INFO_MSG("~p",[Sessions]),
   lists:foreach(fun({ReqID, _, {SID, User, Server}}) ->
     ejabberd_sm:close_session(SID, User, Server, ReqID) end, Sessions),
   ok.
@@ -220,17 +232,15 @@ handle_vcard(Server, User, Target) when is_binary(Target) ->
   handle_vcard(Server, User, JID);
 handle_vcard(Server, User, JID) ->
   ReqID = randoms:get_string(),
-  Proc = gen_mod:get_module_proc(Server, ?MODULE),
-  gen_server:cast(Proc, {vcard_request,Server, User, ReqID, JID, self()}),
-  loop(ReqID).
+  do_cast(Server, {vcard_request,Server, User, ReqID, JID, self()}),
+  loop(Server, ReqID).
 
 handle_archive(_LServer, _LUser, undefined, _To) ->
   {400, [], [<<"no stanza id">>]};
 handle_archive(LServer, LUser, StanzaID, To) ->
   ReqID = randoms:get_string(),
-  Proc = gen_mod:get_module_proc(LServer, ?MODULE),
-  gen_server:cast(Proc, {mam_request,LServer,LUser,ReqID,StanzaID,To, self()}),
-  loop(ReqID).
+  do_cast(LServer, {mam_request,LServer,LUser,ReqID,StanzaID,To, self()}),
+  loop(LServer, ReqID).
 
 %%%===================================================================
 %%% Internal functions
@@ -291,18 +301,24 @@ answer(Tab, ReqID, Pkt) ->
     _ -> pass
   end.
 
-loop(ReqID) ->
-  loop(ReqID, []).
+loop(LServer, ReqID) ->
+  loop(LServer, ReqID, []).
 
-loop(ReqID, Acc) ->
+loop(LServer, ReqID, Acc) ->
   receive
     {request_result, ReqID, #message{} = Pkt} ->
-      loop(ReqID, Acc ++ [Pkt]);
+      loop(LServer, ReqID, Acc ++ [Pkt]);
     {request_result, ReqID, #iq{} = Pkt} ->
+      do_cast(LServer, {delete_session, ReqID}),
       {200, [],[make_string(Acc ++ [Pkt])]}
   after ?TIMEOUT ->
+    do_cast(LServer, {delete_session, ReqID}),
     {408, [],[<<"Request Timeout">>]}
 end.
+
+process_messages(LServer, Packet) ->
+  ejabberd_hooks:run_fold(offline_message_hook,
+    LServer, {bounce, Packet}, []).
 
 get_host(Headers) ->
   Host = proplists:get_value(<<"Xmpp-Domain">>, Headers),
@@ -313,6 +329,10 @@ get_host(Headers) ->
 
 make_string(Values) ->
   list_to_binary(lists:map(fun(X) -> fxml:element_to_binary(xmpp:encode(X)) end, Values)).
+
+do_cast(LServer, Request) ->
+  Proc = gen_mod:get_module_proc(LServer, ?MODULE),
+  gen_server:cast(Proc, Request).
 
 %%%===================================================================
 %%% API

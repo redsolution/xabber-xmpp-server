@@ -217,9 +217,9 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
   Decoded = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
   case lists:keyfind(collect,1,Decoded) of
     {collect, <<"false">>} ->
-      mod_groups_inspector:block_parse_chat(Server,User,ChatJid);
+      mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"no">>);
     {collect, <<"true">>} ->
-      mod_groups_inspector:unblock_parse_chat(Server,User,ChatJid);
+      mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"yes">>);
     _ -> ok
   end,
   case lists:keyfind(xabbergroup_peer, 1, Decoded) of
@@ -308,9 +308,9 @@ answer_presence(From, To, SubEls)->
   Server = To#jid.lserver,
   case lists:keyfind(collect, 1, SubEls) of
     {collect, <<"false">>} ->
-      mod_groups_inspector:block_parse_chat(Server,User,ChatJid);
+      mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"no">>);
     {collect, <<"true">>} ->
-      mod_groups_inspector:unblock_parse_chat(Server,User,ChatJid);
+      mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"yes">>);
     _ -> ok
   end,
   NewHash = case lists:keyfind(vcard_xupdate,1, SubEls) of

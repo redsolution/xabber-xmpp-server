@@ -499,8 +499,17 @@ xabber_registered_users_count(Host) ->
 xabber_register_chat(Server,Creator,Host,Name,LocalJid,Anon,Searchable,Model,Description) ->
   case validate(Anon,Searchable,Model) of
     ok ->
-      case mod_groups_inspector:create_chat(Creator,Host,Server,Name,Anon,LocalJid,Searchable,Description,Model,undefined,undefined,undefined) of
-        {ok, _Created} ->
+      GroupInfo = [
+        #xabbergroupchat_localpart{cdata = jid:nodeprep(LocalJid)},
+        #xabbergroupchat_name{cdata = Name},
+        #xabbergroupchat_description{cdata = Description},
+        #xabbergroupchat_index{cdata = Searchable},
+        #xabbergroupchat_privacy{cdata = Anon},
+        #xabbergroupchat_membership{cdata = Model}
+      ],
+      Owner = jid:to_string(jid:make(Creator, Host)),
+      case mod_groups_chats:create_chat(Server, Owner, GroupInfo) of
+        {ok, _, _, _} ->
           ok;
         _ ->
           1

@@ -50,7 +50,8 @@
   create_p2p_avatar/4,
   handle_iq/1,
   get_vcard_avatar_hash/2,
-  set_update_status/3
+  set_update_status/3,
+  update_chat_avatar_id/3
 ]).
 -export([publish_avatar/3, make_http_request/6, store_user_avatar_file/3]).
 -export([maybe_update_avatar/3]).
@@ -1036,6 +1037,18 @@ sql_update_auto_nickname_t(User, Nickname, Name, FN) ->
     " and auto_nickname != %(FinishNickname)s"
     " and chatgroup not in (select jid from groupchats "
     " where anonymous = 'incognito')")).
+
+update_chat_avatar_id(Server,Chat,Hash) ->
+  case ?SQL_UPSERT(Server, "groupchats",
+    [
+      "avatar_id=%(Hash)s",
+      "!jid=%(Chat)s"
+    ]) of
+    ok ->
+      ok;
+    _Err ->
+      {error, db_failure}
+  end.
 
 trim(String) ->
   case String of

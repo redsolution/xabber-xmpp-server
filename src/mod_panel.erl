@@ -785,7 +785,7 @@ get_online_count(Args) ->
   {200, {[{count, Count}]}}.
 
 add_group(Args) ->
-  #jid{luser = OwnerName, lserver = OwnerHost} = jid:from_string(proplists:get_value(owner,Args)),
+  Owner = proplists:get_value(owner,Args),
   LocalPart = jid:nameprep(proplists:get_value(localpart,Args)),
   GroupHost = jid:nodeprep(proplists:get_value(host,Args)),
   GroupName = proplists:get_value(name,Args),
@@ -797,23 +797,23 @@ add_group(Args) ->
   ChMembership = lists:member(Index,[<<"none">>, <<"local">>, <<"global">>]),
   if
     ChPrivacy andalso ChIndex andalso ChMembership ->
-      add_group(OwnerName, OwnerHost, LocalPart,
+      add_group(Owner, LocalPart,
         GroupHost, GroupName, Privacy, Index, Membership);
     true ->
       badrequest_response()
   end.
 
-add_group(OwnerName, OwnerHost, LocalPart,
-    GroupHost, GroupName, Privacy, Index, Membership) ->
-  case mod_groups_inspector:create_chat(OwnerName,OwnerHost,
-    GroupHost,GroupName,Privacy,LocalPart,Index,<<>>,Membership,
-    undefined,undefined,undefined) of
-    {ok, _Created} ->
-      Info = #{name => GroupName, description => <<>>, privacy => Privacy,
-        membership => Membership, index => Index, message => 0,
-        contacts => <<>>, domains => <<>>, parent => <<"0">>,
-        gstatus => <<"discussion">>},
-      groups_sm:activate(GroupHost, LocalPart, Info),
+add_group(Owner, LocalPart,GroupHost, GroupName,
+    Privacy, Index, Membership) ->
+  GroupInfo = [
+    #xabbergroupchat_localpart{cdata = LocalPart},
+    #xabbergroupchat_name{cdata = GroupName},
+    #xabbergroupchat_index{cdata = Index},
+    #xabbergroupchat_privacy{cdata = Privacy},
+    #xabbergroupchat_membership{cdata = Membership}
+    ],
+  case mod_groups_chats:create_chat(GroupHost, Owner, GroupInfo) of
+    {ok, _ , _, _} ->
       {201, <<"Group created">>};
     exist ->
       {409, <<"JID already exists">> };

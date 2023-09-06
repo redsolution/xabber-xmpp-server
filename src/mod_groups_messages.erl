@@ -234,7 +234,7 @@ do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headlin
           IdAvatar = AvatarI#avatar_info.id,
           AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat),
-          mod_groups_inspector:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar);
+          mod_groups_vcard:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar);
         {avatar_meta,_AvatarInfo,_Smth} ->
           AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
           send_message(Message,AllUsers,FromChat);

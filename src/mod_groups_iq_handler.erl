@@ -145,7 +145,7 @@ process_groupchat(#iq{type=get, to= To, from = From,
   Server = To#jid.lserver,
   UserHost = From#jid.lserver,
   UserJid = jid:to_string(jid:remove_resource(From)),
-  Query = mod_groups_inspector:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
+  Query = mod_groups_chats:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
   xmpp:make_iq_result(Iq,Query);
 process_groupchat(#iq{from = From, to = To, type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DELETE, cdata = Localpart}]} = IQ) ->
   Server = To#jid.lserver,
@@ -275,9 +275,9 @@ make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   Chat = jid:to_string(jid:remove_resource(To)),
   Query = case mod_groups_restrictions:is_permitted(<<"set-restrictions">>, User, Chat) of
             true ->
-              mod_groups_inspector:get_invited_users(Server, Chat);
+              mod_groups_invites:get_invited_users(Server, Chat);
             _ ->
-              mod_groups_inspector:get_invited_users(Server, Chat, User)
+              mod_groups_invites:get_invited_users(Server, Chat, User)
           end,
   ResIq = xmpp:make_iq_result(Iq,Query),
   ejabberd_router:route(ResIq);
@@ -299,7 +299,7 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"revoke">>,
   DecEls = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
   Revoke = lists:keyfind(xabbergroupchat_revoke,1,DecEls),
   #xabbergroupchat_revoke{jid = User} = Revoke,
-  case mod_groups_inspector:revoke(Server,User,Chat,Admin) of
+  case mod_groups_invites:revoke(Server,User,Chat,Admin) of
     ok ->
       ejabberd_hooks:run(revoke_invite, Server, [Chat, User]),
       ResIq = xmpp:make_iq_result(Iq),

@@ -34,12 +34,11 @@
 -export([start/2, stop/1, depends/2, mod_options/1]).
 -export([check_block/4, query/1, get_name_by_id/2]).
 %% Hook handlers
--export([block_handler/2,block_iq_handler/2,unblock_iq_handler/2, block_elements/2, block_handler_pre/2, is_user_blocked/2]).
+-export([block_handler/2,block_iq_handler/2,unblock_iq_handler/2, block_elements/2, block_handler_pre/2]).
 %% API
 -export([get_owners/2, validate_domains/2, validate_data/2]).
 
 start(Host, _Opts) ->
-  ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, is_user_blocked, 10),
   ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, validate_domains, 10),
   ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, validate_data, 15),
   ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, block_iq_handler, 20),
@@ -49,7 +48,6 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_hook, Host, ?MODULE, block_handler, 15).
 
 stop(Host) ->
-  ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, is_user_blocked, 10),
   ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, validate_domains, 10),
   ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, validate_data, 15),
   ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, block_iq_handler, 20),
@@ -152,12 +150,6 @@ block_handler(_Acc, Presence) ->
   User = jid:to_string(jid:remove_resource(From)),
   Domain = From#jid.lserver,
   Server = To#jid.lserver,
-  check_block(Server,Chat,User,Domain).
-
-is_user_blocked(_Acc, {_Admin,Chat,Server,
-  #xabbergroupchat_invite{invite_jid = User, reason = _Reason, send = _Send}}) ->
-  JID = jid:from_string(User),
-  Domain = JID#jid.lserver,
   check_block(Server,Chat,User,Domain).
 
 check_block(Server,Chat,User,Domain) ->

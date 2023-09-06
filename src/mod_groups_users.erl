@@ -41,7 +41,6 @@
   get_users_from_chat/5,
   form_user_card/2,
   form_user_updated/2,
-  user_list_to_send/2,
   users_to_send/2,
   form_kicked/2,
   add_user/6,
@@ -105,7 +104,7 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 25),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, pre_approval, 30),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, is_owner, 35),
-  ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 25),
+  ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
 
 stop(Host) ->
@@ -130,7 +129,7 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 25),
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, pre_approval, 30),
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, is_owner, 35),
-  ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 25),
+  ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20),
   ejabberd_hooks:delete(groupchat_presence_hook, Host, ?MODULE, subscribe_user, 60).
 
@@ -554,20 +553,6 @@ sql_add_user(Server, User, Role, Group, Subs, InvitedBy) ->
       make_incognito_nickname(Server, User, Group, ID);
     _ -> ok
   end.
-
-%% for backward compatibility
-user_list_to_send(Server, Groupchat) ->
- case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(username)s from groupchat_users "
-    " where chatgroup=%(Groupchat)s and subscription='both'")) of
-   {selected,[]} ->
-     [];
-   {selected,Users} ->
-     Users;
-   _ ->
-     []
- end.
 
 sql_users_to_send(Server, Group) ->
   case ejabberd_sql:sql_query(

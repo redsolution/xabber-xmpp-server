@@ -42,7 +42,7 @@
   check_if_peer_to_peer_exist/4, groupchat_exist/2, create_groupchat/13]).
 
 -export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5, handle_update_query/4,
-  change_chat/5, check_create_query/5, create_chat/5,
+  change_chat/5, check_create_query/5, create_chat/3, create_chat/5,
   get_chat_active/2, get_info/2, db_get_info/2, count_users/2,
   get_name_desc/2, define_human_status/3]).
 
@@ -51,6 +51,8 @@
 -export([check_user_rights_to_change_status/4, check_user_rights_to_change_status/5, check_status/5]).
 % Delete chat hook
 -export([delete_chat_hook/4]).
+%% Search
+-export([search/7]).
 
 -define(DEFAULT_GROUP_STATUS, <<"discussion">>).
 
@@ -142,7 +144,15 @@ check_params(SubEls) ->
        {stop, bad_request}
    end.
 
-create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
+%% create chat hook
+create_chat(_Acc, Server, CreatorLUser, CreatorLServer, SubEls)->
+  Creator = jid:to_string(jid:make(CreatorLUser,CreatorLServer)),
+  case create_chat(Server, Creator, SubEls) of
+    exist -> {stop, exist};
+    R -> R
+  end.
+
+create_chat(Server, Creator, SubEls) ->
   LocalPart = case get_value(xabbergroupchat_localpart,SubEls) of
                 undefined -> create_localpart();
                 V -> jid:nodeprep(str:strip(V))
@@ -157,7 +167,6 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
   DomainList = set_value([],get_value(xabbergroup_domains,SubEls)),
   Domains = make_string(DomainList),
   Chat = jid:to_string(jid:make(LocalPart,Server)),
-  Creator = jid:to_string(jid:make(CreatorLUser,CreatorLServer)),
   Status = ?DEFAULT_GROUP_STATUS,
   case ejabberd_sql:sql_query(
     Server,
@@ -190,9 +199,11 @@ create_chat(_Acc, Server,CreatorLUser,CreatorLServer,SubEls) ->
         mod_groups_restrictions:insert_rule(Server,Chat,Creator,Rule,Expires,IssuedBy) end,
         Permissions
       ),
-    {stop,{ok,create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,ContactList,DomainList),Chat,Creator}};
+      Result = create_result_query(LocalPart, Name, Desc, Privacy, Membership, Index,
+        ContactList, DomainList),
+      {ok, Result, Chat, Creator};
     _ ->
-      {stop,exist}
+      exist
   end.
 
 check_user_rights(_Acc,User,Chat,Server) ->
@@ -339,28 +350,19 @@ check_if_users_invited(Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID})
       Chat = jid:to_string(ChatJID),
       CreatorSubscription = mod_groups_users:check_user_if_exist(LServer,Creator,ExistedChat),
       UserSubscription = mod_groups_users:check_user_if_exist(LServer,User,ExistedChat),
-      case UserSubscription of
-        <<"both">> ->
-          ok;
-        <<"none">> ->
+      if
+        UserSubscription == <<"none">>; UserSubscription == <<"wait">> ->
           send_invite_to_p2p(LServer,Creator,User,ExistedChat,Chat);
-        <<"wait">> ->
-          send_invite_to_p2p(LServer,Creator,User,ExistedChat,Chat);
-        _ ->
+        true ->
           ok
       end,
-      case CreatorSubscription of
-        <<"both">> ->
-          {stop,{exist,ExistedChat}};
-        <<"none">> ->
-          Created = created(<<"Private chat">>,ExistedChat,<<"incognito">>,
-            <<"none">>,<<"member-only">>,<<"Private chat">>,<<"0">>,<<"">>,<<"">>),
+      if
+        CreatorSubscription == <<"none">>; CreatorSubscription == <<"wait">> ->
+          {LocalPart, _, _} = jid:tolower(jid:from_string(ExistedChat)),
+          Created = create_result_query(LocalPart,<<"Private chat">>,<<"Private chat">>,
+            <<"incognito">>,<<"member-only">>,<<"none">>,[],[]),
           {stop,{ok,Created}};
-        <<"wait">> ->
-          Created = created(<<"Private chat">>,ExistedChat,<<"incognito">>,
-            <<"none">>,<<"member-only">>,<<"Private chat">>,<<"0">>,<<"">>,<<"">>),
-          {stop,{ok,Created}};
-        _ ->
+        true ->
           {stop,{exist,ExistedChat}}
       end;
     _ ->
@@ -406,7 +408,8 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
   Membership = #xabbergroupchat_membership{cdata = Model},
   Description = #xabbergroupchat_description{cdata = Desc},
   Index = #xabbergroupchat_index{cdata = Search},
-  ChatInfo = #xabbergroupchat_x{parent = BareOldChatJID, sub_els = [Privacy, Membership, Description, Index]},
+  SubEls = [Privacy, Membership, Description, Index],
+  ChatInfo = #xabbergroupchat_x{parent = BareOldChatJID, sub_els = SubEls},
   ChatJID = jid:from_string(Chat),
   Text = <<"You was invited to ",Chat/binary," Please add it to the contacts to join a group chat">>,
   Reason = <<User1Nick/binary,
@@ -423,8 +426,10 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
     body = [#text{lang = <<>>,data = Text}],
     sub_els = [Invite,ChatInfo]},
   ejabberd_router:route(Message),
-  Created = created(ChatName,Chat,Anonymous,Search,Model,Desc,<<"0">>,<<"">>,<<"">>),
-  {stop,{ok,Created}}.
+  SubEls1 = [#xabbergroupchat_localpart{cdata = ChatJID#jid.luser},
+    #xabbergroupchat_name{cdata = ChatName}],
+  Created = #xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE,sub_els = SubEls ++ [SubEls1]},
+  {ok, Created}.
 
 send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
   User1Nick = mod_groups_users:get_nick_in_chat(LServer,Creator,OldChat),
@@ -600,6 +605,58 @@ create_groupchat(Server,Localpart,CreatorJid,Name,ChatJid,Anon,Search,Model,Desc
         "server_host=%(Server)s"
         ])).
 
+%%%%
+%%  Search for group chats
+%%%%
+search(Server,Name,Anonymous,Model,Desc,UserJid,UserHost)->
+  NameS = set_value(<<>>,Name),
+  AnonymousS = set_value(<<>>,Anonymous),
+  ModelS = set_value(<<>>,Model),
+  DescS = set_value(<<>>,Desc),
+  {selected,_Titles,Rows} =
+    search_and_count_chats(Server,NameS,AnonymousS,ModelS,DescS,UserJid,UserHost),
+  Children = lists:map(fun(N) ->
+    [ChatJidQ,NameQ,AnonymousQ,ModelQ,DescQ,ContactListQ,DomainListQ,Count] = N,
+    item_chat(ChatJidQ,NameQ,AnonymousQ,ModelQ,DescQ,ContactListQ,DomainListQ,Count) end,
+    Rows
+  ),
+  query(Children).
+
+search_and_count_chats(Server,Name,Anonymous,_Model,Desc,UserJid,UserHost) ->
+  ejabberd_sql:sql_query(
+    Server,
+    [<<"select chatgroup,name,anonymous,model,description,contacts,domains,count(*)
+    from groupchat_users inner join groupchats on jid=chatgroup
+    where chatgroup IN ((select jid from groupchats
+    where model='open' and (
+    name like '%">>,Name,<<"%' and anonymous like '%">>,Anonymous,<<"%' and description like '%">>,Desc,<<"%'
+    )
+    EXCEPT select chatgroup from groupchat_block
+    where blocked = '">>,UserJid,<<"' or blocked = '">>,UserHost,<<"')
+   UNION (select jid from groupchats where model='member-only' and (
+    name like '%">>,Name,<<"%' and anonymous like '%">>,Anonymous,<<"%' and description like '%">>,Desc,<<"%'
+    )
+   INTERSECT select chatgroup from groupchat_users where username = '">>,UserJid,<<"'))
+   GROUP BY chatgroup,name,anonymous,model,description,contacts,domains ORDER BY chatgroup DESC">>
+    ]).
+
+query(Children) ->
+  #xmlel{name = <<"query">>, attrs = [{"xmlns",?NS_GROUPCHAT}], children = Children}.
+
+item_chat(ChatJidQ,NameQ,AnonymousQ,ModelQ,DescQ,_ContactListQ,_DomainListQ,Count) ->
+  #xmlel{name = <<"item">>, children =
+  [
+    #xmlel{name = <<"jid">>, children = [{xmlcdata,ChatJidQ}]},
+    #xmlel{name = <<"name">>, children = [{xmlcdata,NameQ}]},
+    #xmlel{name = <<"anonymous">>, children = [{xmlcdata,AnonymousQ}]},
+    #xmlel{name = <<"model">>, children = [{xmlcdata,ModelQ}]},
+    #xmlel{name = <<"description">>, children = [{xmlcdata,DescQ}]},
+    #xmlel{name = <<"member-count">>, children = [{xmlcdata,Count}]}
+  ]}.
+%%%%
+%%  End of search for group chats
+%%%%
+
 % Internal functions
 
 get_p2p_chat(LServer,ParentChat,User1,User2) ->
@@ -717,11 +774,6 @@ get_info(Group, _Server) ->
       {Name, Privacy, Index, Membership, Desc, Message, Contacts,
         Domains, Parent, Status}
   end.
-
-created(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList) ->
-  #xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_GROUPCHAT_CREATE}],
-    children = mod_groups_inspector:chat_information(Name,ChatJid,Anonymous,Search,Model,Desc,Message,ContactList,DomainList)
-  }.
 
 form_chat_information(Chat,LServer,Type) ->
   Fields = get_chat_fields(Chat,LServer),

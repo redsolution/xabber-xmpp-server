@@ -40,7 +40,7 @@
   mod_groups_default_restrictions,
   mod_groups_discovery,
   mod_groups_domains,
-  mod_groups_inspector,
+  mod_groups_invites,
   mod_groups_iq_handler,
   mod_groups_messages,
   mod_groups_presence,

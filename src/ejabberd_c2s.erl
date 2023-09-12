@@ -210,7 +210,11 @@ open_session(#{user := U, server := S, resource := R,
 	       undefined -> undefined;
 	       Pres -> get_priority_from_presence(Pres)
 	   end,
-    Info = [{ip, IP}, {conn, Conn}, {auth_module, AuthModule}],
+    FwdFor = case maps:find(forwarded_for, State) of
+               {ok, Value} -> [{forwarded_for,Value}];
+               _-> []
+             end,
+    Info = [{ip, IP}, {conn, Conn}, {auth_module, AuthModule}] ++ FwdFor,
     ejabberd_sm:open_session(SID, U, S, R, Prio, Info),
     xmpp_stream_in:establish(State2).
 

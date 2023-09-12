@@ -197,9 +197,8 @@ check_session(State) ->
   #{auth_module := Auth} = State,
   case Auth of
     mod_devices ->
-      #{ip := IP, jid := JID, device_id := DeviceID, resource := StateResource} = State,
-      {PAddr, _PPort} = IP,
-      IPs = ip_to_binary(PAddr),
+      #{ip := {PeerIP, _}, jid := JID, device_id := DeviceID, resource := StateResource} = State,
+      IPs = make_ip_string(State, PeerIP),
       #jid{lserver = LServer, luser = LUser, lresource = _LRes} = JID,
       ejabberd_sm:set_user_info(LUser, LServer, StateResource, device_id, DeviceID),
       sql_refresh_session_info(JID,DeviceID,IPs);
@@ -253,11 +252,12 @@ process_iq(#iq{type = set, from = From, to = To,
   Client = set_default(ClientRaw),
   Label = set_default(LabelRaw),
   ID = make_device_id(SJID),
-  IP = ejabberd_sm:get_user_ip(LUser, LServer, LResource),
-  IPs = case IP of
-          {PAddr, _PPort} -> ip_to_binary(PAddr);
-          _ -> <<"">>
-        end,
+  SsInfo = ejabberd_sm:get_user_info(LUser, LServer, LResource),
+  PeerIP =  case proplists:get_value(ip, SsInfo) of
+              {V, _} -> V;
+              _ -> <<>>
+            end,
+  IPs = make_ip_string(maps:from_list(SsInfo), PeerIP),
   case sql_register_device(LServer, SJID, TTL, Info, Client, ID, IPs, Label) of
     {ok,Secret,ExpireTime} ->
       ejabberd_router:route(xmpp:make_iq_result(Iq,
@@ -434,7 +434,7 @@ register_and_upgrade_to_hotp_session(Iq,User,Server,State,#device_register{devic
   SJIDNoRes = jid:make(User,Server),
   #{ip := IP} = State,
   {PAddr, _PPort} = IP,
-  IPs = ip_to_binary(PAddr),
+  IPs = make_ip_string(State, PAddr),
   SJID = jid:to_string(SJIDNoRes),
   TTL = set_default_ttl(Server, TTLRaw),
   Info = set_default(InfoRaw),
@@ -486,8 +486,18 @@ make_device_id(SJID) ->
 ip_to_binary(IP) ->
   IPStr = inet_parse:ntoa(IP),
   case string:prefix(IPStr, "::ffff:") of
-    nomatch -> list_to_binary(IPStr); %% IPv6 address
-    V -> list_to_binary(V)            %% IPv4 address
+    nomatch -> list_to_binary(IPStr);
+    V -> list_to_binary(V)
+  end.
+
+make_ip_string(Map, PeerIP) when is_tuple(PeerIP) ->
+  make_ip_string(Map, ip_to_binary(PeerIP));
+make_ip_string(Map, PeerIP) ->
+  case maps:get(forwarded_for, Map, false) of
+    {SrcIP, _} ->
+      AddrB = ip_to_binary(SrcIP),
+      <<AddrB/binary," via ",PeerIP/binary>>;
+    _ -> PeerIP
   end.
 
 bold() ->

@@ -411,8 +411,11 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
     WithTags= lists:filter(fun(X) -> X /= <<>> end,
       proplists:get_value('with-tags', MAMQuery, [])),
     ConvType = proplists:get_value('conversation-type', MAMQuery, <<>>),
-    FilterIDs = lists:filter(fun(X) -> X /= <<>> end,
-      proplists:get_value(ids, MAMQuery,[])),
+    FilterIDs = lists:map(fun(ID) ->
+      case catch binary_to_integer(ID) of
+        I when is_integer(I) -> ID;
+        _ -> <<"0">> %% for correct filtering
+      end end, proplists:get_value(ids, MAMQuery,[])),
     FilterAfterID = proplists:get_value('after-id', MAMQuery, <<>>),
     FilterBeforeID = proplists:get_value('before-id', MAMQuery, <<>>),
     {Max, Direction, ID} = get_max_direction_id(RSM),
@@ -477,13 +480,15 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
                   _ ->
                     [<<" and timestamp in (">>] ++ lists:join(<<$,>>,FilterIDs) ++ [<<$)>>]
                 end,
-    BeforeIDClause = case FilterBeforeID of
-                       <<>> -> [];
-                       _ -> [<<" and timestamp < ">>,FilterBeforeID]
+    BeforeIDClause = case catch binary_to_integer(FilterBeforeID) of
+                       IB when is_integer(IB), IB >= 0 ->
+                         [<<" and timestamp < ">>,FilterBeforeID];
+                       _ -> []
                      end,
-    AfterIDClause = case FilterAfterID of
-                       <<>> -> [];
-                       _ -> [<<" and timestamp > ">>,FilterAfterID]
+    AfterIDClause = case catch binary_to_integer(FilterAfterID) of
+                      IA when is_integer(IA), IA >= 0 ->
+                        [<<" and timestamp > ">>,FilterAfterID];
+                      _ -> []
                      end,
     TagsClause = case WithTags of
                    [] -> [];

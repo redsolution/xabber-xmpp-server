@@ -34,12 +34,11 @@
 -export([get_option/2]).
 
 -define(SUBMODULES, [
-  mod_groups_access_model,
+  groups_access,
   mod_groups_block,
   mod_groups_chats,
   mod_groups_default_restrictions,
   mod_groups_discovery,
-  mod_groups_domains,
   mod_groups_invites,
   mod_groups_iq_handler,
   mod_groups_messages,

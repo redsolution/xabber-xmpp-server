@@ -566,12 +566,12 @@ store_user_avatar_file(Server, Data, UserID) ->
       Err
   end.
 
-send_notifications_about_nick_change(Server,User, OldNickname) ->
-  ChatAndIds = select_chat_for_update_nick(Server,User),
-  lists:foreach(fun(El) ->
-    {Chat} = El,
-    M = notification_message_about_nick(User, Server, Chat, OldNickname),
-    mod_groups_system_message:send_to_all(Chat,M) end, ChatAndIds).
+%%send_notifications_about_nick_change(Server,User, OldNickname) ->
+%%  ChatAndIds = select_chat_for_update_nick(Server,User),
+%%  lists:foreach(fun(El) ->
+%%    {Chat} = El,
+%%    M = notification_message_about_nick(User, Server, Chat, OldNickname),
+%%    mod_groups_system_message:send_to_all(Chat,M) end, ChatAndIds).
 
 send_notifications(ChatAndIds,User,Server) ->
   lists:foreach(fun(El) ->
@@ -591,19 +591,18 @@ notification_message(User, Server, Chat) ->
   NewEls = [OriginID | SubEls],
   #message{from = ChatJID, to = ChatJID, type = headline, id = ID, body = [], sub_els = NewEls, meta = #{}}.
 
-notification_message_about_nick(User, Server, Chat, OldNick) ->
-  UserCard = mod_groups_users:form_user_card(User, Chat),
-  NewNick = UserCard#xabbergroupchat_user_card.nickname,
-%%  Txt = <<" is now known as ">>,
-  MsgTxt = <<OldNick/binary," is now known as ",NewNick/binary>>,
-  ChatJID = jid:replace_resource(jid:from_string(Chat),?RESOURCE),
-  Body = [#text{lang = <<>>,data = MsgTxt}],
-  Version = mod_groups_users:current_chat_version(Server, Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version,
-    sub_els = [UserCard], type = <<"update">>},
-  By = #xmppreference{type = <<"mutable">>, sub_els = [UserCard]},
-  SubEls = [X,By],
-  mod_groups_system_message:form_message(ChatJID,Body,SubEls).
+%%notification_message_about_nick(User, Server, Chat, OldNick) ->
+%%  UserCard = mod_groups_users:form_user_card(User, Chat),
+%%  NewNick = UserCard#xabbergroupchat_user_card.nickname,
+%%  MsgTxt = <<OldNick/binary," is now known as ",NewNick/binary>>,
+%%  ChatJID = jid:replace_resource(jid:from_string(Chat),?RESOURCE),
+%%  Body = [#text{lang = <<>>,data = MsgTxt}],
+%%  Version = mod_groups_users:current_chat_version(Server, Chat),
+%%  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version,
+%%    sub_els = [UserCard], type = <<"update">>},
+%%  By = #xmppreference{type = <<"mutable">>, sub_els = [UserCard]},
+%%  SubEls = [X,By],
+%%  mod_groups_system_message:form_message(ChatJID,Body,SubEls).
 
 get_chat_meta_nodeid(Server,Chat)->
   Node = <<"urn:xmpp:avatar:metadata">>,
@@ -1021,8 +1020,8 @@ update_vcard_info(Server, User, NameRaw, FNRaw, NicknameRaw, Photo) ->
     Length > 0 ->
       case ejabberd_sql:sql_transaction(Server, Fun) of
         {atomic, {updated, OldNickname}} ->
-          handle_vcard_photo(Server,Photo),
-          send_notifications_about_nick_change(Server,User, OldNickname);
+          handle_vcard_photo(Server,Photo);
+%%          send_notifications_about_nick_change(Server,User, OldNickname);
         _ -> ok
       end;
     true -> ok

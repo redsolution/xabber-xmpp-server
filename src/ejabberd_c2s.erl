@@ -634,8 +634,8 @@ route_probe_reply(From, #{jid := To,
 			    {LUser, LServer, R} when R /= LResource -> true;
 			    _ -> false
 			end,
-    Subscription = case jid:tolower(From) of
-			    {LUser, LServer, _} -> none;
+    {Subscription, _} = case jid:tolower(From) of
+			    {LUser, LServer, _} -> {none, none};
 			    _ -> get_subscription(To, From)
 			end,
     if IsAnotherResource orelse
@@ -681,7 +681,16 @@ process_presence_out(#{lserver := LServer, jid := JID,
 			   "the routing of this stanza.">>,
 	    PrivErr = xmpp:err_not_acceptable(PrivErrTxt, Lang),
 	    send_error(State, Pres, PrivErr);
-	allow when Type == subscribe; Type == subscribed;
+	allow when Type == subscribed ->
+	    SubsAsk = get_subscription(From, To),
+	    IsPreApproval = lists:member(SubsAsk,[{none, none}, {none, out}, {to, none}]),
+	    if IsPreApproval -> State;
+	      true ->
+	        BareFrom = jid:remove_resource(From),
+	        ejabberd_router:route(xmpp:set_from_to(Pres, BareFrom, To)),
+	        State
+	    end;
+	allow when Type == subscribe;
 		   Type == unsubscribe; Type == unsubscribed ->
 	    BareFrom = jid:remove_resource(From),
 	    ejabberd_router:route(xmpp:set_from_to(Pres, BareFrom, To)),
@@ -695,7 +704,7 @@ process_presence_out(#{lserver := LServer, jid := JID,
 	    LBareTo = jid:remove_resource(LTo),
 	    LBareFrom = jid:remove_resource(jid:tolower(From)),
 	    if LBareTo /= LBareFrom ->
-		    Subscription = get_subscription(From, To),
+		    {Subscription, _} = get_subscription(From, To),
 		    if Subscription /= both andalso Subscription /= from ->
 			    A = case Type of
 				    available -> ?SETS:add_element(LTo, PresA);
@@ -853,10 +862,10 @@ route_multiple(#{lserver := LServer}, JIDs, Pkt) ->
     ejabberd_router_multicast:route_multicast(From, LServer, JIDs, Pkt).
 
 get_subscription(#jid{luser = LUser, lserver = LServer}, JID) ->
-    {Subscription, _, _} = ejabberd_hooks:run_fold(
+    {Subscription, Ask, _} = ejabberd_hooks:run_fold(
 			     roster_get_jid_info, LServer, {none, none, []},
 			     [LUser, LServer, JID]),
-    Subscription.
+	{Subscription, Ask}.
 
 -spec resource_conflict_action(binary(), binary(), binary()) ->
 				      {accept_resource, binary()} | closenew.

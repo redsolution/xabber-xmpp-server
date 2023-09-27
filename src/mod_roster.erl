@@ -928,7 +928,10 @@ get_jid_info(_, User, Server, JID) ->
     LUser = jid:nodeprep(User),
     LServer = jid:nameprep(Server),
     LJID = jid:tolower(JID),
-    get_subscription_and_groups(LUser, LServer, LJID).
+    case get_subscription_and_groups(LUser, LServer, LJID)of
+      {undefined, V1, V2} -> {none, V1, V2};
+      V -> V
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

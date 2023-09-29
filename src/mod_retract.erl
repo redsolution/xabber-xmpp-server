@@ -314,6 +314,8 @@ process_iq(#iq{from = From, type = get, sub_els = [
   send_retract_query_messages(From, Version, Less, ChatList),
   LastVersion = get_version(LServer, LUser),
   xmpp:make_iq_result(IQ, #xabber_retract_query{version = LastVersion});
+process_iq(#iq{type = set, sub_els = [#xabber_retract_message{id = undefined}]} = IQ) ->
+  xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{type = set, sub_els = [#xabber_retract_message{type = <<>>}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{from = From, to = To, type = set, sub_els = [
@@ -403,6 +405,8 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [
     _ ->
       xmpp:make_error(IQ, xmpp:err_bad_request())
   end;
+process_iq(#iq{type = set,sub_els = [#xabber_replace{id = undefined}]} = IQ)->
+  xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{type = set,sub_els = [#xabber_replace{type = <<>>}]} = IQ)->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{from = From,to = To, type = set, sub_els = [

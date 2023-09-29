@@ -384,12 +384,11 @@ create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
     Privacy, Index, Membership, Desc, 0, <<"">>, <<"">>, OldChat),
   Info = #{name => ChatName, description => Desc, privacy => Privacy,
     membership => Membership, index => Index, message => 0,
-    contacts => <<>>, domains => <<>>, parent => OldChat,
+    contacts => <<>>, domains => <<>>, parent => OldChat, user_count => <<"0">>,
     gstatus => ?DEFAULT_GROUP_STATUS},
   groups_sm:activate(LServer, Localpart, Info),
   Info1 = add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
   Info2 = add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
-  %%  Info = {AvatarID,AvatarType,AvatarUrl,AvatarSize,Nickname,ParseAvatar,Badge}
   Expires = <<"0">>,
   IssuedBy = <<"server">>,
   Rule = <<"send-invitations">>,
@@ -428,7 +427,7 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
   ejabberd_router:route(Message),
   SubEls1 = [#xabbergroupchat_localpart{cdata = ChatJID#jid.luser},
     #xabbergroupchat_name{cdata = ChatName}],
-  Created = #xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE,sub_els = SubEls ++ [SubEls1]},
+  Created = #xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE,sub_els = SubEls ++ SubEls1},
   {ok, Created}.
 
 send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->

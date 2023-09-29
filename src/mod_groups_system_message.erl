@@ -56,7 +56,7 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, users_kicked, 35),
 %%  ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, users_blocked, 35),
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 55),
+  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 80),
   ejabberd_hooks:add(groupchat_user_change_own_avatar, Host, ?MODULE, user_change_own_avatar, 10),
   ejabberd_hooks:add(groupchat_user_change_some_avatar, Host, ?MODULE, user_change_avatar, 10),
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, user_left, 25).
@@ -71,7 +71,7 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, users_kicked, 35),
 %%  ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, users_blocked, 35),
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 55),
+  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 80),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, user_left, 25).
 
 depends(_Host, _Opts) ->  [].

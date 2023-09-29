@@ -56,11 +56,11 @@
   get_user_id/3,
   get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/4,
   update_user_status/3, user_no_read/2, get_nick_in_chat/3, get_user_by_id_and_allow_to_invite/3,
-  pre_approval/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2,
+  process_subscribed/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2,
   change_peer_to_peer_invitation_state/4
 ]).
 
--export([is_exist/2,is_owner/2]).
+-export([is_exist/2, set_default_restrictions/2]).
 
 %% Change user settings hook export
 -export([check_if_exist/6, get_user_rights/6, validate_request/6, change_user_rights/6, user_rights/3, check_if_request_user_exist/6, user_rights_and_time/3]).
@@ -101,9 +101,9 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, validate_data, 10),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, validate_rights, 15),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, update_user, 20),
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 25),
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, pre_approval, 30),
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, is_owner, 35),
+  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 30),
+  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, process_subscribed, 20),
+  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, set_default_restrictions, 40),
   ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
 
@@ -126,9 +126,9 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, validate_data, 10),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, validate_rights, 15),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, update_user, 20),
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 25),
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, pre_approval, 30),
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, is_owner, 35),
+  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 30),
+  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, process_subscribed, 20),
+  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, set_default_restrictions, 40),
   ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20),
   ejabberd_hooks:delete(groupchat_presence_hook, Host, ?MODULE, subscribe_user, 60).
@@ -341,14 +341,8 @@ current_chat_version(Server,Chat)->
 
 get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
   User = jid:to_string(jid:remove_resource(UserJID)),
-  Status = check_user_if_exist(Server,User,Chat),
   From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   To = jid:remove_resource(UserJID),
-  case Status of
-    not_exist ->
-      add_user(Server,User,<<"member">>,Chat,<<"wait">>,<<>>);
-    _ -> ok
-  end,
   case mod_groups_chats:is_anonim(Server,Chat) of
     true ->
       mod_groups_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>);
@@ -384,35 +378,33 @@ subscribe_user(_Acc, Presence) ->
     not_exist ->
       case add_user(Server,User,Role,
         Chat,Subscription, <<>>) of
-        ok -> {stop,ok};
-        _ ->  {stop,not_ok}
+        ok -> ok;
+        _ ->  {stop, not_allowed}
       end;
     <<"none">> ->
       change_subscription(Server,Chat,User,Subscription),
-      {stop,ok};
+      ok;
     <<"wait">> ->
-      {stop,ok};
+      ok;
     <<"both">> ->
-      {stop,exist}
+      {stop, exist}
   end.
 
-pre_approval(_Acc,{Server,To,Chat,_Lang}) ->
+process_subscribed(_Acc,{Server,To,Chat,_Lang}) ->
   User = jid:to_string(jid:remove_resource(To)),
-  Role = <<"member">>,
-  Subscription = <<"both">>,
   Status = check_user_if_exist(Server,User,Chat),
-  Result = case Status of
-             not_exist ->
-               add_user(Server,User,Role,Chat,Subscription,<<>>);
-             <<"none">> ->
-               change_subscription(Server,Chat,User,Subscription);
-             <<"wait">> ->
-               change_subscription(Server,Chat,User,Subscription);
-             <<"both">> ->
-               {stop,both}
-           end,
-  mod_groups_chats:update_user_counter(Chat),
-  Result.
+  case Status of
+    <<"wait">> ->
+      change_subscription(Server, Chat, User, <<"both">>),
+      mod_groups_chats:update_user_counter(Chat),
+      ok;
+    <<"both">> ->
+      {stop,both};
+    _ ->
+     ?ERROR_MSG("Wrong subscription: user ~s, group ~s, status, ~s",
+       [User, Chat, Status]),
+      {stop, error}
+  end.
 
 delete_user(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
   Subscription = check_user(Server,User,Chat),
@@ -442,7 +434,7 @@ is_exist(_Acc,{Server,To,Chat,_Lang}) ->
       ok
   end.
 
-is_owner(_Acc,{Server,To,Chat,_Lang}) ->
+set_default_restrictions(_Acc,{Server,To,Chat,_Lang}) ->
   User = jid:to_string(jid:remove_resource(To)),
   case mod_groups_restrictions:is_owner(Server,Chat,User) of
     yes ->

@@ -34,7 +34,7 @@
 -export([
   form_presence/1,
   form_presence/3,
-  process_presence/1,
+  check_in_subscription/2,
   groupchat_changed/5,
   send_presence/3,
   change_present_state/3,
@@ -85,10 +85,12 @@ terminate(_Reason, State) ->
   unregister_hooks(Host).
 
 register_hooks(Host) ->
+  ejabberd_hooks:add(roster_in_subscription, Host, ?MODULE, check_in_subscription, 10),
   ejabberd_hooks:add(revoke_invite, Host, ?MODULE, revoke_invite, 10),
   ejabberd_hooks:add(groupchat_properties_changed, Host, ?MODULE, groupchat_changed, 10).
 
 unregister_hooks(Host) ->
+  ejabberd_hooks:delete(roster_in_subscription, Host, ?MODULE, check_in_subscription, 10),
   ejabberd_hooks:delete(revoke_invite, Host, ?MODULE, revoke_invite, 10),
   ejabberd_hooks:delete(groupchat_properties_changed, Host, ?MODULE, groupchat_changed, 10).
 
@@ -165,13 +167,17 @@ send_presence(Message,Users,From) ->
   ejabberd_router:route(From, User ,Message),
   send_presence(Message,RestUsers,From).
 
-process_presence(#presence{to=To} = Presence) ->
+check_in_subscription(Acc, #presence{to=To} = Packet) ->
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
-  process_presence(mod_groups_chats:get_chat_active(Server,Chat),Presence).
+  case mod_groups_chats:get_chat_active(Server,Chat) of
+    false -> Acc;
+    <<"inactive">> -> {stop, false};
+    _ ->
+      answer_presence(Packet),
+      {stop, false}
+  end.
 
-process_presence({selected,[]},Packet) ->
-  Packet;
 process_presence(false, Packet) ->
   Packet;
 process_presence(<<"inactive">>, _Packet) ->
@@ -212,32 +218,35 @@ answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
   end;
 answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} = Presence) ->
   Server = To#jid.lserver,
-  User = jid:to_string(jid:remove_resource(From)),
-  ChatJid = jid:to_string(jid:remove_resource(To)),
-  Decoded = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
-  case lists:keyfind(collect,1,Decoded) of
-    {collect, <<"false">>} ->
-      mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"no">>);
-    {collect, <<"true">>} ->
-      mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"yes">>);
-    _ -> ok
-  end,
-  case lists:keyfind(xabbergroup_peer, 1, Decoded) of
-      {xabbergroup_peer,_JID,_ID, PeerState} ->
-        mod_groups_users:change_peer_to_peer_invitation_state(
-          Server, User, ChatJid, PeerState);
-       _ -> ok
-  end,
-  Result = ejabberd_hooks:run_fold(groupchat_presence_hook, Server, [], [Presence]),
   FromChat = jid:replace_resource(To,<<"Group">>),
+  Result = ejabberd_hooks:run_fold(groupchat_presence_hook, Server, [], [Presence]),
   case Result of
-    not_ok ->
+    not_allowed ->
       ejabberd_router:route(FromChat, From, #presence{type = unsubscribed});
+    error ->
+      ejabberd_router:route(FromChat, From,
+        #presence{type = error, sub_els = xmpp:err_internal_server_error()});
     _ ->
       UserBare = jid:remove_resource(From),
+      ChatJid = jid:to_string(jid:remove_resource(To)),
       ejabberd_router:route(FromChat, UserBare, form_presence(ChatJid, subscribed, [])),
       ejabberd_router:route(FromChat, UserBare, form_presence(ChatJid, subscribe, [])),
-      ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta())
+      ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta()),
+      User = jid:to_string(jid:remove_resource(From)),
+      Decoded = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
+      case lists:keyfind(collect,1,Decoded) of
+        {collect, <<"false">>} ->
+          mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"no">>);
+        {collect, <<"true">>} ->
+          mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"yes">>);
+        _ -> ok
+      end,
+      case lists:keyfind(xabbergroup_peer, 1, Decoded) of
+        {xabbergroup_peer,_JID,_ID, PeerState} ->
+          mod_groups_users:change_peer_to_peer_invitation_state(
+            Server, User, ChatJid, PeerState);
+        _ -> ok
+      end
   end;
 answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) ->
   Server = To#jid.lserver,
@@ -249,8 +258,6 @@ answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) -
       Users = mod_groups_users:users_to_send(Server,Chat),
       send_presence(form_presence(Chat, available, [present]), Users, FromChat),
       ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta());
-    not_ok ->
-      ejabberd_router:route(FromChat, From, #presence{type = unsubscribed});
     _ ->
       ok
   end;

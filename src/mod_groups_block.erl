@@ -34,7 +34,7 @@
 -export([start/2, stop/1, depends/2, mod_options/1]).
 -export([check_block/4, query/1, get_name_by_id/2]).
 %% Hook handlers
--export([block_handler/2,block_iq_handler/2,unblock_iq_handler/2, block_elements/2, block_handler_pre/2]).
+-export([block_iq_handler/2,unblock_iq_handler/2, block_elements/2]).
 %% API
 -export([get_owners/2, validate_domains/2, validate_data/2]).
 
@@ -43,18 +43,14 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, validate_data, 15),
   ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, block_iq_handler, 20),
   ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, block_elements, 25),
-  ejabberd_hooks:add(groupchat_unblock_hook, Host, ?MODULE, unblock_iq_handler, 10),
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, block_handler_pre, 15),
-  ejabberd_hooks:add(groupchat_presence_hook, Host, ?MODULE, block_handler, 15).
+  ejabberd_hooks:add(groupchat_unblock_hook, Host, ?MODULE, unblock_iq_handler, 10).
 
 stop(Host) ->
   ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, validate_domains, 10),
   ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, validate_data, 15),
   ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, block_iq_handler, 20),
   ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, block_elements, 25),
-  ejabberd_hooks:delete(groupchat_unblock_hook, Host, ?MODULE, unblock_iq_handler, 10),
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, block_handler_pre, 15),
-  ejabberd_hooks:delete(groupchat_presence_hook, Host, ?MODULE, block_handler, 15).
+  ejabberd_hooks:delete(groupchat_unblock_hook, Host, ?MODULE, unblock_iq_handler, 10).
 
 depends(_Host, _Opts) -> [].
 
@@ -139,23 +135,11 @@ unblock_iq_handler(_Acc, #iq{to = To, from = From, sub_els = Sub}) ->
       {stop,not_ok}
   end.
 
-block_handler_pre(_Acc,{Server,From,Chat,_Lang}) ->
-  User = jid:to_string(jid:remove_resource(From)),
-  Domain = From#jid.lserver,
-  check_block(Server,Chat,User,Domain).
-
-block_handler(_Acc, Presence) ->
-  #presence{to = To, from = From} = Presence,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  User = jid:to_string(jid:remove_resource(From)),
-  Domain = From#jid.lserver,
-  Server = To#jid.lserver,
-  check_block(Server,Chat,User,Domain).
-
-check_block(Server,Chat,User,Domain) ->
+check_block(Server, Chat, User, Domain) ->
   case  ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(blocked)s from groupchat_block where chatgroup=%(Chat)s and blocked=%(User)s or blocked=%(Domain)s")) of
+    ?SQL("select @(blocked)s from groupchat_block
+     where chatgroup=%(Chat)s and (blocked=%(User)s or blocked=%(Domain)s)")) of
     {selected,[]} ->
       ok;
     {selected,[{_Info}]} ->

@@ -32,17 +32,15 @@
 -export([start/2, stop/1, reload/3, depends/2, mod_options/1]).
 
 %% Hook handlers
--export([check_access/2, check_access_pre/2]).
+-export([check_access/2]).
 %% API
 %%-export([]).
 
 start(Host, _Opts) ->
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, check_access_pre, 23),
   ejabberd_hooks:add(groupchat_presence_hook, Host, ?MODULE, check_access, 25),
   ok.
 
 stop(Host) ->
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, check_access_pre, 23),
   ejabberd_hooks:delete(groupchat_presence_hook, Host, ?MODULE, check_access, 25).
 
 reload(_, _, _) -> ok.
@@ -57,12 +55,6 @@ check_access(_Acc, #presence{to = To, from = From}) ->
   Group = jid:to_string(jid:remove_resource(To)),
   UserJID = jid:remove_resource(From),
   Server = To#jid.lserver,
-  check_access(Server, UserJID, Group).
-
-check_access_pre(_Acc,{Server, UserJID, Group, _Lang}) ->
-  check_access(Server, UserJID, Group).
-
-check_access(Server, UserJID, Group) ->
   case mod_groups_chats:get_info(Group, Server) of
     {_, _, _, Membership, _, _, _, Domains, _, _} ->
       case check_access(UserJID, Group, Membership, Domains) of
@@ -77,11 +69,19 @@ check_access(Server, UserJID, Group) ->
 %% Internal functions
 
 check_access(UserJID, Group, Membership, Domains) ->
-  case check_domain(UserJID#jid.lserver, Domains) of
+  Domain = UserJID#jid.lserver,
+  case check_domain(Domain, Domains) of
     true ->
-      check_membership(UserJID, Group, Membership);
+      {_, GServer, _} = jid:tolower(jid:from_string(Group)),
+      case mod_groups_block:check_block(GServer, Group,
+        jid:to_string(UserJID), Domain) of
+        ok ->
+          check_membership(UserJID, Group, Membership);
+        _ ->
+          not_allowed
+      end;
     _ ->
-      not_ok
+      not_allowed
   end.
 
 check_domain(_, <<>>) -> true;
@@ -103,6 +103,6 @@ check_if_user_invited(UserJID, Group) ->
   {_, Server, _} = jid:tolower(jid:from_string(Group)),
   UserB = jid:to_string(UserJID),
   case mod_groups_users:check_user_if_exist(Server, UserB, Group) of
-    not_exist -> not_ok;
+    not_exist -> not_allowed;
     _ -> ok %% todo: is the user with subscription "none" invited?
   end.

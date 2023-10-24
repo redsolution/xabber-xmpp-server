@@ -35,7 +35,7 @@
 -export([start/2, stop/1, reload/3, mod_opt_type/1, mod_options/1, depends/2]).
 %% API
 -export([maybe_kick/1, maybe_kick/4, block_user/3, unblock_user/2, get_user/2,
-  store_user/3, remove_user/2]).
+  store_user/3, remove_user/2, unblock_user/3]).
 
 
 -include("logger.hrl").
@@ -131,11 +131,13 @@ maybe_kick(JID , Lang, {_TS,PID}, LastTS) ->
 maybe_notify(JID, Reason, LastTS) ->
   EarlierThan = seconds_since_epoch() - ?DELAY,
   if
-    LastTS < EarlierThan ->
+    LastTS < EarlierThan andalso Reason /= <<>> ->
       From = jid:make(<<>>,JID#jid.lserver),
       ErrMsg = #message{type = chat, from = From, to = JID,
         id = randoms:get_string(), body = [#text{lang = <<>>, data = Reason}]},
       ejabberd_router:route(ErrMsg),
+      {ok, seconds_since_epoch()};
+    LastTS < EarlierThan ->
       {ok, seconds_since_epoch()};
     true ->
       ok
@@ -156,9 +158,14 @@ block_user(User, Server, Reason) ->
   end,
   From = jid:make(<<>>,LServer),
   To = jid:make(LUser,LServer),
-  Msg = #message{type = chat, from = From, to = To,
-    id = randoms:get_string(), body = [#text{lang = <<>>, data = Reason}]},
-  ejabberd_router:route(Msg),
+  if
+    Reason /= <<>> ->
+      Msg = #message{type = chat, from = From, to = To,
+        id = randoms:get_string(), body = [#text{lang = <<>>, data = Reason}]},
+      ejabberd_router:route(Msg);
+    true ->
+      ok
+  end,
   ejabberd_sm:kick_user(User,Server).
 
 unblock_user(User, Server) ->
@@ -168,6 +175,19 @@ unblock_user(User, Server) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
   gen_server:cast(Proc, {delete_last, {LUser, LServer}}),
   ets_cache:delete(?BLOCK_USERS_CACHE, {LUser, LServer}, cache_nodes(LServer)).
+
+unblock_user(User, Server, Reason) ->
+  unblock_user(User, Server),
+  if
+    Reason /= <<>> ->
+      From = jid:make(<<>>, Server),
+      To = jid:make(User, Server),
+      Msg = #message{type = chat, from = From, to = To,
+        id = randoms:get_string(), body = [#text{lang = <<>>, data = Reason}]},
+      ejabberd_router:route(Msg);
+    true ->
+      ok
+  end.
 
 -spec init_cache(binary(), gen_mod:opts()) -> ok.
 init_cache(Host, Opts) ->

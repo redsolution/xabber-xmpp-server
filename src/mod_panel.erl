@@ -695,9 +695,10 @@ block_user(Args) ->
 
 unblock_user(Args) ->
   {Username, Host} = extract_user_host(Args),
+  Reason = proplists:get_value(reason, Args, <<>>),
   case gen_mod:is_loaded(Host, mod_block_users) of
     true ->
-      mod_block_users:unblock_user(Username, Host),
+      mod_block_users:unblock_user(Username, Host, Reason),
       {200, <<>>};
     _ ->
       {503, <<"feature not implemented">>}

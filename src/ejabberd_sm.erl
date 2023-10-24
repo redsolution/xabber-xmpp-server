@@ -208,7 +208,8 @@ bounce_offline_message(Acc) ->
 -spec disconnect_removed_user(binary(), binary()) -> ok.
 
 disconnect_removed_user(User, Server) ->
-    route(jid:make(User, Server), {exit, <<"User removed">>}).
+    route(jid:make(User, Server), {kick, user_removed,
+      xmpp:serr_not_authorized(<<"User removed">>, <<"en">>)}).
 
 get_user_resources(User, Server) ->
     LUser = jid:nodeprep(User),

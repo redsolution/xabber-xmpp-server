@@ -364,7 +364,10 @@ remove_user(User, Server) ->
   JID = jid:to_string(jid:make(User,Server)),
   Devices = sql_get_device_ids(Server,JID),
   sql_delete_all_devices(Server,JID),
-  run_hook_revoke_devices(User, Server, Devices).
+  run_hook_revoke_devices(User, Server, Devices),
+  lists:foreach(fun(D) ->
+    kick_by_device_id(Server, User, D, <<"User removed">>)
+                end, Devices).
 
 %%%%
 %%  Commands
@@ -977,14 +980,15 @@ revoke_all_except(Server, User, Resource) ->
 
 kick_by_device_id(_Server,_User, undefined,_Reason) ->
   ok;
-kick_by_device_id(Server,User, DeviceID,Reason) ->
+kick_by_device_id(Server, User, DeviceID, Reason) ->
   Resources = get_resources_by_device_id(User,Server, DeviceID),
   From =  jid:from_string(Server),
   Message = #message{type = headline, from = From,
     sub_els = [#devices_revoke{devices = [#devices_device{id = DeviceID}]}]},
   lists:foreach(fun(Resource) ->
-    ejabberd_router:route(Message#message{id = randoms:get_string(), to = jid:make(User, Server, Resource)}),
-    mod_admin_extra:kick_session(User,Server,Resource,Reason)
+    JID = jid:make(User, Server, Resource),
+    ejabberd_router:route(Message#message{id = randoms:get_string(), to = JID}),
+    ejabberd_sm:route(JID, {kick, revoke_device, xmpp:serr_not_authorized(Reason, <<"en">>)})
                 end, Resources).
 
 device_id_clause(IDs) ->

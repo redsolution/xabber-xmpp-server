@@ -99,8 +99,15 @@ groupchat_avatar_changed(LServer, Chat, User) ->
   M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M).
 
-groupchat_changed(LServer, Chat, User, ChatProperties, Status) ->
+groupchat_changed(LServer, Chat, User, ChatProperties1, Status) ->
   ChatJID = jid:from_string(Chat),
+  NotifyProperties = lists:filter(fun({Key,_}) ->
+    lists:suffix("_notify", atom_to_list(Key)) end, ChatProperties1),
+  ChatProperties2 = ChatProperties1 -- NotifyProperties,
+  ChatProperties = lists:filter(fun({Key,_}) ->
+    KeyNotify = list_to_atom(atom_to_list(Key) ++ "_notify"),
+    proplists:get_value(KeyNotify, NotifyProperties, true)
+                                end, ChatProperties2),
   Version = mod_groups_users:current_chat_version(LServer,Chat),
   IsNameChanged = proplists:get_value(name_changed, ChatProperties, false),
   IsDescChanged = proplists:get_value(desc_changed, ChatProperties, false),

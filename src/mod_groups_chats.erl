@@ -247,7 +247,7 @@ change_pinned_msg(Server, Group, User, MsgID) ->
     _ ->
       sql_update_pinned(Server, Group, NewMessage),
       groups_sm:update_group_session_info(Group,#{message => NewMessage}),
-      Properties = [{pinned_changed, true}],
+      Properties = [{pinned_changed, true}, {pinned_changed_notify, (NewMessage /= 0)}],
       ejabberd_hooks:run(groupchat_properties_changed,
         Server,[Server, Group, User, Properties, Status]),
       ok

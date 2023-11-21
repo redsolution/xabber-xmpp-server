@@ -549,11 +549,17 @@ process_messages() ->
   end.
 
 -spec process_message(atom(), stanza()) -> any().
-process_message(in, #message{type = chat, body = [], from = From, to = To,
+process_message(in, #message{type = Type, body = [], from = From, to = To,
   sub_els = SubEls} = Pkt) ->
-  check_voip_msg(in, Pkt),
-  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-  handle_sub_els(chat,DecSubEls,From,To);
+  case check_voip_msg(in, Pkt) of
+    true -> ok;
+    _ ->
+      lists:foreach(fun(El)->
+        try xmpp:decode(El) of
+          R ->  handle_sub_els(Type, R, From, To)
+        catch _:_ -> ok
+        end end, SubEls)
+  end;
 process_message(in, #message{type = chat, from = Peer, to = To,
   meta = #{stanza_id := TS}} = Pkt) ->
   {LUser, LServer, _ } = jid:tolower(To),
@@ -616,9 +622,9 @@ process_message(in, #message{type = chat, from = Peer, to = To,
           ok
       end
   end;
-process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
-  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-  handle_sub_els(headline,DecSubEls,From,To);
+%%process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
+%%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
+%%  handle_sub_els(headline,DecSubEls,From,To);
 process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
   to = To, meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
   %% Messages for groups should not get here,
@@ -1657,7 +1663,7 @@ convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer) ->
 %%% Handle sub_els
 %%%===================================================================
 
-handle_sub_els(chat, [#message_displayed{id = OriginID} = Displayed], From, To) ->
+handle_sub_els(chat, #message_displayed{id = OriginID} = Displayed, From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
@@ -1690,7 +1696,7 @@ handle_sub_els(chat, [#message_displayed{id = OriginID} = Displayed], From, To) 
         end
     end,
   update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type1,TS);
-handle_sub_els(chat, [#message_received{id = OriginID} = Delivered], From, To) ->
+handle_sub_els(chat, #message_received{id = OriginID} = Delivered, From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
@@ -1704,17 +1710,17 @@ handle_sub_els(chat, [#message_received{id = OriginID} = Delivered], From, To) -
     _ ->
       update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,?NS_XABBER_CHAT,StanzaID1)
   end;
-handle_sub_els(headline, [#xabber_retract_message{version = _Version, id = undefined,
-  conversation = _Conv}], _From, _To) ->
+handle_sub_els(headline, #xabber_retract_message{version = _Version, id = undefined,
+  conversation = _Conv}, _From, _To) ->
   ok;
-handle_sub_els(headline, [#xabber_retract_message{version = _Version,  id = _ID,
-  conversation = undefined}], _From, _To) ->
+handle_sub_els(headline, #xabber_retract_message{version = _Version,  id = _ID,
+  conversation = undefined}, _From, _To) ->
   ok;
-handle_sub_els(headline, [#xabber_retract_message{version =  undefined, id = _ID,
-  conversation = _Conv}], _From, _To) ->
+handle_sub_els(headline, #xabber_retract_message{version =  undefined, id = _ID,
+  conversation = _Conv}, _From, _To) ->
   ok;
-handle_sub_els(headline, [#xabber_retract_message{type = Type, version = Version, id = StanzaID,
-  conversation = ConversationJID} = Retract], _From, To) ->
+handle_sub_els(headline, #xabber_retract_message{type = Type, version = Version, id = StanzaID,
+  conversation = ConversationJID} = Retract, _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
@@ -1732,8 +1738,8 @@ handle_sub_els(headline, [#xabber_retract_message{type = Type, version = Version
       pass
   end,
   ok;
-handle_sub_els(headline, [#xabber_retract_user{version = Version, id = UserID,
-  conversation = ConversationJID} = Retract], _From, To) ->
+handle_sub_els(headline, #xabber_retract_user{version = Version, id = UserID,
+  conversation = ConversationJID} = Retract, _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
@@ -1745,9 +1751,9 @@ handle_sub_els(headline, [#xabber_retract_user{version = Version, id = UserID,
   TS = time_now(),
   update_retract(LServer,LUser,Conversation,Version,<<>>,TS),
   send_push_about_retract(LServer,LUser,Conversation,Retract,<<>>,TS);
-handle_sub_els(headline, [
+handle_sub_els(headline,
   #xabber_retract_all{type = Type, version = Version,
-  conversation = ConversationJID} = Retract], _From, To)
+  conversation = ConversationJID} = Retract, _From, To)
   when ConversationJID =/= undefined andalso Version =/= undefined ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
@@ -1760,10 +1766,10 @@ handle_sub_els(headline, [
   end,
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
   send_push_about_retract(LServer,LUser,Conversation,Retract,Type,TS);
-handle_sub_els(headline, [#xabber_replace{version = undefined, conversation = _ConversationJID} = _Retract],
+handle_sub_els(headline, #xabber_replace{version = undefined, conversation = _ConversationJID} = _Retract,
     _From, _To) ->
   ok;
-handle_sub_els(headline, [#xabber_replace{type = Type, version = Version, conversation = ConversationJID} = Replace],
+handle_sub_els(headline, #xabber_replace{type = Type, version = Version, conversation = ConversationJID} = Replace,
     _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   Conversation = jid:to_string(ConversationJID),
@@ -1776,7 +1782,7 @@ handle_sub_els(headline, [#xabber_replace{type = Type, version = Version, conver
       pass
   end,
   ok;
-handle_sub_els(headline, [#delivery_x{ sub_els = [Message]}], From, To) ->
+handle_sub_els(headline, #delivery_x{ sub_els = [Message]}, From, To) ->
   MessageD = xmpp:decode(Message),
   %% Bad server or client may send an error message
   if
@@ -1787,7 +1793,7 @@ handle_sub_els(headline, [#delivery_x{ sub_els = [Message]}], From, To) ->
     true ->
       ok
   end;
-handle_sub_els(_Type, _SubEls, _From, _To) ->
+handle_sub_els(_Type, _SubEl, _From, _To) ->
   ok.
 
 process_delivery_msg(MessageD, From, To) ->
@@ -1849,7 +1855,9 @@ check_voip_msg(Direction, #message{type = chat,
       true;
     true ->
       false
-  end.
+  end;
+check_voip_msg(_, _) ->
+  false.
 
 %%%===================================================================
 %%% Internal functions

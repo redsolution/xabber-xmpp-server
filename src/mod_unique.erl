@@ -160,7 +160,7 @@ send_received(
         to = JID,
         type = headline,
         sub_els = [NewUniqueReceived]},
-    ejabberd_router:route(jlib:make_jid(<<"">>, LServer, <<"">>), JID, Confirmation).
+    ejabberd_router:route(jid:make(LServer), JID, Confirmation).
 
 %%store_origin_id(LServer, LUser, StanzaID, OriginID) ->
 %%    case ejabberd_sql:sql_query(

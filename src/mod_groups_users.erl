@@ -1076,7 +1076,7 @@ change_peer_to_peer_invitation_state(LServer, User, Chat, State)
     " (select anonymous from groupchats where jid = %(Chat)s and %(LServer)H)"
     )),
     ok;
-change_peer_to_peer_invitation_state(_, _, _, _S) ->?INFO_MSG("P2P2 ~p",[_S]), ok.
+change_peer_to_peer_invitation_state(_, _, _, _) -> ok.
 
 %% user rights change functions
 user_rights(LServer,Chat,User) ->

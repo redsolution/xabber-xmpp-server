@@ -25,7 +25,6 @@
 -module(mod_registration_keys).
 -author("ilya.kalashnikov@redsolution.com").
 -behaviour(gen_mod).
--include("xmpp.hrl").
 -include("logger.hrl").
 -include("ejabberd_sql_pt.hrl").
 -compile([{parse_transform, ejabberd_sql_pt}]).
@@ -98,7 +97,7 @@ check_key(LServer, Key) ->
 %% Utils
 -spec seconds_since_epoch(integer()) -> non_neg_integer().
 seconds_since_epoch(Diff) ->
-  {Mega, Secs, _} = os:timestamp(),
+  {Mega, Secs, _} = erlang:timestamp(),
   Mega * 1000000 + Secs + Diff.
 
 %% SQL

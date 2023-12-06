@@ -3152,7 +3152,8 @@ user_resources(User, Server) ->
 
 -spec user_resource(binary(), binary(), binary()) -> binary().
 user_resource(User, Server, <<>>) ->
-    case user_resources(User, Server) of
+    Resources = [ R || {_, R} <- ejabberd_sm:get_user_present_resources(User, Server)],
+    case Resources of
 	[R | _] -> R;
 	_ -> <<>>
     end;

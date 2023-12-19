@@ -55,7 +55,8 @@
   process_iq/1,
   pubsub_publish_item/6,
   user_send_packet/1,
-  get_device_info/1
+  get_device_info/1,
+  c2s_session_resumed/1
 ]).
 
 -include("ejabberd.hrl").
@@ -79,6 +80,7 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(c2s_session_opened, Host, ?MODULE, check_session, 50),
   ejabberd_hooks:add(pubsub_publish_item, Host, ?MODULE, pubsub_publish_item, 80),
   ejabberd_hooks:add(user_send_packet, Host, ?MODULE, user_send_packet, 10),
+  ejabberd_hooks:add(c2s_session_resumed, Host, ?MODULE, c2s_session_resumed, 10),
   gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_DEVICES, ?MODULE, process_iq),
   gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_DEVICES_QUERY, ?MODULE, process_iq),
   ok.
@@ -99,6 +101,7 @@ stop(Host) ->
   ejabberd_hooks:delete(c2s_session_opened, Host, ?MODULE, check_session, 50),
   ejabberd_hooks:delete(pubsub_publish_item, Host, ?MODULE, pubsub_publish_item, 80),
   ejabberd_hooks:delete(user_send_packet, Host, ?MODULE, user_send_packet, 10),
+  ejabberd_hooks:delete(c2s_session_resumed, Host, ?MODULE, c2s_session_resumed, 10),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_DEVICES),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_DEVICES_QUERY),
   ok.
@@ -238,6 +241,13 @@ update_presence({#presence{type = available} = Pres,
   {Pres, State};
 update_presence(Acc) ->
   Acc.
+
+c2s_session_resumed(#{user := U, server := S, resource := R,
+  device_id := DeviceID} = State) ->
+  ejabberd_sm:set_user_info(U, S, R, device_id, DeviceID),
+  State;
+c2s_session_resumed(State) ->
+  State.
 
 process_iq(#iq{type = set, from = #jid{lserver = S1}, to = #jid{lserver = S2}} = Iq) when S1 =/= S2 ->
   xmpp:make_error(Iq,xmpp:err_not_allowed());

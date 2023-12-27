@@ -50,7 +50,7 @@ store_session(LUser, LServer, NowTS, PushJID, Node, XData) ->
     Service = jid:encode(PushLJID),
     case ?SQL_UPSERT(LServer, "xabber_push_session",
 		     ["!username=%(LUser)s",
-                      "!server_host=%(LServer)s",
+		      "!server_host=%(LServer)s",
 		      "!timestamp=%(TS)d",
 		      "!service=%(Service)s",
 		      "!node=%(Node)s",

@@ -185,7 +185,7 @@ get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select
-    coalesce(min(@(timestamp)d),0)
+    coalesce(max(@(timestamp)d),0)
     from archive
     where username=%(LUser)s and timestamp > %(TS)d
     and xml like %(OriginIDLike)s

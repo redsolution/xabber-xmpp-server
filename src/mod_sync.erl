@@ -1797,27 +1797,32 @@ handle_sub_els(_Type, _SubEl, _From, _To) ->
   ok.
 
 process_delivery_msg(MessageD, From, To) ->
-  {PUser, PServer, _} = jid:tolower(From),
-  PeerJID = jid:make(PUser, PServer),
-  {LUser,LServer,_} = jid:tolower(To),
-  Conversation = jid:to_string(PeerJID),
-  StanzaID = get_stanza_id(MessageD,PeerJID),
-  MsgTS = case is_local(PServer) of
-            false ->
-              Time = get_unique_time(MessageD,PeerJID),
-              get_and_store_user_card(LServer, LUser,
-                PeerJID, MessageD),
-              LastMsg = #external_group_last_msg{
-                group = {PUser, PServer}, id = StanzaID,
-                user_id =get_user_id(MessageD),
-                packet = xmpp:set_from(MessageD, From)},
-              eg_store_message(LServer, LastMsg, Time),
-              Time;
-            _ ->
-              StanzaID
-          end,
-  update_metainfo(read_delivered, LServer, LUser, Conversation,
-    StanzaID, ?NS_GROUPCHAT, MsgTS).
+  BarePeer = jid:remove_resource(From),
+  case get_stanza_id(MessageD, BarePeer) of
+    undefined ->
+      ?ERROR_MSG("Bad delivery receipt. From ~p to ~p\n~p",
+        [From, To, MessageD]);
+    StanzaID ->
+      {PUser, PServer, _} = jid:tolower(From),
+      {LUser,LServer,_} = jid:tolower(To),
+      Conversation = jid:to_string(BarePeer),
+      MsgTS = case is_local(PServer) of
+                false ->
+                  Time = get_unique_time(MessageD, BarePeer),
+                  get_and_store_user_card(LServer, LUser,
+                    BarePeer, MessageD),
+                  LastMsg = #external_group_last_msg{
+                    group = {PUser, PServer}, id = StanzaID,
+                    user_id =get_user_id(MessageD),
+                    packet = xmpp:set_from(MessageD, From)},
+                  eg_store_message(LServer, LastMsg, Time),
+                  Time;
+                _ ->
+                  StanzaID
+              end,
+      update_metainfo(read_delivered, LServer, LUser, Conversation,
+        StanzaID, ?NS_GROUPCHAT, MsgTS)
+  end.
 
 %%%===================================================================
 %%% Check VoIP message

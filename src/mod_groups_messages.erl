@@ -279,7 +279,8 @@ do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline}
           ok
       end
   end;
-do_route(#message{body=[], from = From, type = chat, to = To} = Msg) ->
+do_route(#message{body=[], from = From, type = Type, to = To} = Msg)
+  when Type == normal orelse Type == chat ->
   {_, LServer, _} = jid:tolower(To),
   ChatJID = jid:remove_resource(To),
   SUser = jid:to_string(jid:remove_resource(From)),
@@ -428,7 +429,7 @@ transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
                  Id;
                Val -> Val
              end,
-  Retry = xmpp:get_subtag(ArchiveMsg, #delivery_retry{}),
+  Retry = xmpp:get_subtag(Pkt, #delivery_retry{}),
   Pkt0 = strip_stanza_id(ArchiveMsg,Server),
   Pkt1 = mod_unique:remove_request(Pkt0,Retry),
   case Retry of
@@ -439,16 +440,22 @@ transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
         #message{} = Found ->
           FoundMeta = Found#message.meta,
           StanzaID = integer_to_binary(maps:get('stanza_id', FoundMeta)),
-          Message =  case mod_mam_sql:select(Server, To, To,[{'stanza-id',StanzaID}], undefined, chat) of
-                       {[{_, _, Forwarded}], true, 1} ->
-                         Message1 = hd(Forwarded#forwarded.sub_els),
-                         Message2 = Message1#message{meta = FoundMeta},
-                         xmpp:set_from_to(Message2,From,To);
-                       _ ->
-                         %%  message not found in archive
-                         Found
-                     end,
-          send_received(Message, From, OriginID,To);
+          Mod = gen_mod:db_mod(Server, 'mod_mam'),
+          case Mod:select(Server, To, To,
+            [{'ids',[StanzaID]}], undefined, chat) of
+            {[{_, _, Forwarded}], true, 1} ->
+              Message1 = hd(Forwarded#forwarded.sub_els),
+              Message2 = Message1#message{meta = FoundMeta},
+              Message = xmpp:set_from_to(Message2, From, To),
+              send_received(Message, From, OriginID, To);
+            Err ->
+              %%  message not found in archive
+              ?ERROR_MSG("The message is gone!!!"
+              " group: ~p, server: ~p, id: ~p.\n ~p",
+                [LUser, Server, StanzaID, Err]),
+              ejabberd_router:route_error(Pkt,
+                xmpp:err_internal_server_error())
+          end;
         _ ->
          send_received_and_message(Pkt1, From, To, OriginID, Users)
       end

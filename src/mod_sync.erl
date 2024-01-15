@@ -179,7 +179,7 @@ handle_cast({eg_save_message, Record , TS, IsService},
   {noreply, State#state{eg_last_message = Acc1}};
 handle_cast({eg_change_last_message, Group, Replace},
     #state{eg_last_retract = Acc} = State)->
-  ID = integer_to_binary(Replace#xabber_replace.id),
+  ID = Replace#xabber_replace.id,
   Ver = integer_to_binary(Replace#xabber_replace.version),
   Acc1 = case lists:member({Group, ID, Ver}, Acc) of
            true -> Acc;
@@ -1725,8 +1725,7 @@ handle_sub_els(headline, #xabber_retract_message{type = Type, version = Version,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
     false ->
-      eg_delete_one_msg(LServer, PUser, PServer,
-        integer_to_binary(StanzaID), Version);
+      eg_delete_one_msg(LServer, PUser, PServer, StanzaID, Version);
     _ -> ok
   end,
   Conversation = jid:to_string(ConversationJID),

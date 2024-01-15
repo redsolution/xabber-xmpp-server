@@ -69,7 +69,7 @@
 {
   server_id = <<>>                       :: binary() | '_',
   iq_id = <<>>                           :: binary() | '_',
-  message_id = <<>>                      :: non_neg_integer() | '_',
+  message_id = <<>>                      :: binary() | '_',
   usr = {<<>>, <<>>, <<>>}               :: {binary(), binary(), binary()} | '_',
   rewrite_ask = none                     :: rewriteask() | '_',
   xml = undefined                        :: any() | '_'
@@ -705,7 +705,7 @@ replace_message(XML, RewriteAsk, LUser,LServer,StanzaID, _Version) ->
   NewTXT = ReplaceMessage#xabber_replace_message.body,
   NewMessage = OldMessage#message{body = [#text{data = NewTXT,lang = Lang}], sub_els = NewEls ++ [Replaced]},
   NewXML = fxml:element_to_binary(xmpp:encode(NewMessage)),
-  NewElsWithAll = set_stanza_id(NewEls,jid:make(LUser,LServer),integer_to_binary(StanzaID)),
+  NewElsWithAll = set_stanza_id(NewEls,jid:make(LUser,LServer), StanzaID),
   NewReplaceMessage = ReplaceMessage#xabber_replace_message{sub_els = NewElsWithAll},
   ejabberd_sql:sql_query(
     LServer,
@@ -782,7 +782,8 @@ send_retract_query_messages(User, Version, Less, ChatList) ->
     Msg#message{id= randoms:get_string(), sub_els = [Event, Delay]}
                       end, RetractNotifications),
   Msgs2 = lists:map(fun({Conv, CType, _}) ->
-    Invalidate = #xabber_retract_invalidate{version = Version, conversation = Conv,
+    Invalidate = #xabber_retract_invalidate{version = Version,
+      conversation = jid:from_string(Conv),
       type = CType},
     Msg#message{id= randoms:get_string(), sub_els = [Invalidate]}
                     end, DropArchiveChats),
@@ -886,8 +887,8 @@ check_iq({Packet, #{lserver := LServer} = S2SState}) ->
 
 %% retract jobs
 
-set_rewrite_job(ServerID, Type, {LUser,LServer,LResource}, StanzaIDBinary, IQID, XML) ->
-  RewriteJob = #rewrite_job{server_id = ServerID, iq_id = IQID, message_id = StanzaIDBinary,
+set_rewrite_job(ServerID, Type, {LUser,LServer,LResource}, StanzaID, IQID, XML) ->
+  RewriteJob = #rewrite_job{server_id = ServerID, iq_id = IQID, message_id = StanzaID,
     usr = {LUser,LServer,LResource}, rewrite_ask = Type, xml = XML},
   mnesia:dirty_write(RewriteJob).
 
@@ -938,7 +939,7 @@ get_our_stanza_id(LServer, LUser, ForeignSJID, FID) ->
           _ -> false
         end end, ValueList),
       case lists:sort(R) of
-        [H | _] -> H;
+        [H | _] -> integer_to_binary(H);
         _ -> not_found
       end;
       _ ->

@@ -596,9 +596,8 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;
 process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
-  #xabber_replace{id = IDInt, xabber_replace_message = XRM}]}=IQ) ->
+  #xabber_replace{id = ID, xabber_replace_message = XRM}]}=IQ) ->
   #xabber_replace_message{body = Text, sub_els = SubEls} = XRM,
-  ID = integer_to_binary(IDInt),
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
@@ -609,7 +608,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
   NewMessage = #xabber_replace_message{replaced = Replaced, stanza_id = StanzaID, body = Text, sub_els = NewEls},
   Replace = #xabber_replace{
     xabber_replace_message = NewMessage,
-    id = IDInt,
+    id = ID,
     version = Version,
     conversation = jid:remove_resource(To),
     type = ?NS_GROUPCHAT,

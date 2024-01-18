@@ -86,7 +86,7 @@
 -export([process/2]).
 
 %% register commands
--export([get_commands_spec/0, set_admin/2, issue_token/3]).
+-export([get_commands_spec/0, set_admin/2, issue_token/3, add_group/8]).
 
 %% internal
 %%-export([create_user/1]).
@@ -131,7 +131,29 @@ get_commands_spec() ->
       args_desc = ["Username", "Local vhost served by ejabberd","Time to live of generated token in seconds"],
       args_example = [<<"bob">>, <<"example.com">>, 3600],
       args = [{user, binary}, {host, binary},{ttl, integer}],
-      result = {res, rescode}}
+      result = {res, rescode}},
+    #ejabberd_commands{name = create_group, tags = [groups],
+      desc = "Create groupchat with owner",
+      module = ?MODULE, function = add_group,
+      args = [{host, binary},
+        {ownerusername, binary},
+        {ownerdomain, binary},
+        {name, binary},
+        {localpart, binary},
+        {privacy, binary},
+        {index, binary},
+        {membership, binary}
+      ],
+      args_example = [<<"myserver.com">>, <<"user1">>, <<"someserver.com">>,  <<"Group 3">>,
+        <<"group3">>, <<"public">>, <<"global">>, <<"open">>, <<"Group number 3">>],
+      args_desc = ["Host","Owner username", "Owner domain", "Group name",
+        "Group localpart", "Group privacy", "Group index", "Group membership"],
+      result = {result, string},
+      result_example = "created",
+      result_desc = "Returns i:\n"
+      " - created\n"
+      " - error: already exist\n"
+      " - error:"}
   ].
 
 %%===================================================================
@@ -820,6 +842,23 @@ add_group(Owner, LocalPart,GroupHost, GroupName,
       {409, <<"JID already exists">> };
     _ ->
       {500, <<>>}
+  end.
+
+add_group(GroupHost, OwnerUsername, OwnerDomain, GroupName,
+    LocalPart, Privacy, Index, Membership) ->
+  OwnerJID = jid:make(OwnerUsername, OwnerDomain),
+  case OwnerJID#jid.luser of
+    <<>> ->
+      error;
+    _ ->
+      Args = [{localpart, LocalPart}, {host, GroupHost},
+        {owner, jid:to_string(OwnerJID)}, {name, GroupName},
+        {privacy, Privacy},{index, Index}, {membership, Membership}],
+      case add_group(Args) of
+        {201,_} -> "created";
+        {409,_} -> "error: already exist";
+        _ -> "error"
+      end
   end.
 
 remove_group(Args) ->

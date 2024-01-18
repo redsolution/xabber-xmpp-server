@@ -97,11 +97,10 @@ create_id() ->
   list_to_binary(string:to_lower(binary_to_list(ID))).
 
 -spec send_to_all(binary(), binary()) -> ok.
-send_to_all(Chat,Stanza) ->
+send_to_all(Chat,Pkt1) ->
   ChatJID = jid:from_string(Chat),
   FromChannel = jid:replace_resource(ChatJID,<<"Channel">>),
   Server = ChatJID#jid.lserver,
-  Pkt1 = mod_groups_messages:strip_stanza_id(Stanza,Server),
   {Pkt2, _State2} = ejabberd_hooks:run_fold(
     user_send_packet, Server, {Pkt1, #{jid => ChatJID}}, []),
 %%  #message{meta = #{stanza_id := TS}} = Pkt2,

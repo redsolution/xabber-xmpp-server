@@ -34,9 +34,11 @@
   handle_info/2, terminate/2, code_change/3]).
 -export([
   message_hook/1,
-  strip_stanza_id/2,
   send_displayed/3,
-  get_displayed_msg/4, shift_references/2, binary_length/1, set_displayed/4
+  get_displayed_msg/4,
+  shift_references/2,
+  set_displayed/4,
+  strip_group_elements/1
 ]).
 -export([get_last/1, seconds_since_epoch/1]).
 
@@ -397,46 +399,39 @@ filter_packet(Pkt,BareJID) ->
     end, Els),
   xmpp:set_els(Pkt, NewEls).
 
-binary_length(Binary) ->
-  B1 = binary:replace(Binary,<<"&">>,<<"&amp;">>,[global]),
-  B2 = binary:replace(B1,<<">">>,<<"&gt;">>,[global]),
-  B3 = binary:replace(B2,<<"<">>,<<"&lt;">>,[global]),
-  B4 = binary:replace(B3,<<"\"">>,<<"&quot;">>,[global]),
-  B5 = binary:replace(B4,<<"\'">>,<<"&apos;">>,[global]),
-  string:len(unicode:characters_to_list(B5)).
-
 transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
-  Text = xmpp:get_text(Body),
   Server = To#jid.lserver,
-  LUser = To#jid.luser,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Jid = jid:to_string(jid:remove_resource(From)),
-  UserCard = mod_groups_users:form_user_card(Jid,Chat),
-  User = mod_groups_users:choose_name(UserCard),
-  Username = <<User/binary, ":", "\n">>,
-  Length = binary_length(Username),
-  Reference = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, 'begin' = 0, 'end' = Length, sub_els = [UserCard]}]},
-  NewBody = [#text{lang = <<>>,data = <<Username/binary, Text/binary >>}],
-  AllUsers = mod_groups_users:users_to_send(Server,Chat),
-  Users = AllUsers -- [jid:remove_resource(From)],
-  PktSanitarized1 = strip_x_elements(Pkt),
-  PktSanitarized = strip_reference_elements(PktSanitarized1),
-  Els2 = shift_references(PktSanitarized, Length),
-  NewEls = [Reference|Els2],
-  ArchiveMsg = Pkt#message{body = NewBody, sub_els = NewEls, to = jid:remove_resource(From)},
+  GroupS = jid:to_string(jid:remove_resource(To)),
+  UserS = jid:to_string(jid:remove_resource(From)),
+  UserBareJID = jid:remove_resource(From),
+  UserCard = mod_groups_users:form_user_card(UserS, GroupS),
+  Username = mod_groups_users:choose_name(UserCard),
+  Header = <<Username/binary, ":", "\n">>,
+  Length = misc:escaped_text_len(Header),
+  Reference = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT,
+    sub_els = [#xmppreference{ 'begin' = 0, 'end' = Length,
+      type = <<"mutable">>, sub_els = [UserCard]}]},
+  NewBody = [T#text{data = <<Header/binary, Text/binary >>}
+    || #text{data = Text} = T <- Body],
+  AllUsers = mod_groups_users:users_to_send(Server, GroupS),
+  Users = AllUsers -- [UserBareJID],
+  Els1 = strip_group_elements(xmpp:get_els(Pkt)),
+  Els2 = shift_references(Els1, Length),
+  ArchiveMsg = Pkt#message{body = NewBody, sub_els = [Reference|Els2],
+    to = UserBareJID},
   OriginID = case get_origin_id(xmpp:get_subtag(ArchiveMsg, #origin_id{})) of
                false ->
                  Id;
                Val -> Val
              end,
   Retry = xmpp:get_subtag(Pkt, #delivery_retry{}),
-  Pkt0 = strip_stanza_id(ArchiveMsg,Server),
+  Pkt0 = strip_stanza_id(ArchiveMsg),
   Pkt1 = mod_unique:remove_request(Pkt0,Retry),
   case Retry of
     false ->
       send_received_and_message(Pkt1, From, To, OriginID, Users);
     _ ->
-      case mod_unique:get_message(Server, LUser, OriginID) of
+      case mod_unique:get_message(Server, To#jid.luser, OriginID) of
         #message{} = Found ->
           FoundMeta = Found#message.meta,
           StanzaID = integer_to_binary(maps:get('stanza_id', FoundMeta)),
@@ -450,9 +445,8 @@ transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
               send_received(Message, From, OriginID, To);
             Err ->
               %%  message not found in archive
-              ?ERROR_MSG("The message is gone!!!"
-              " group: ~p, server: ~p, id: ~p.\n ~p",
-                [LUser, Server, StanzaID, Err]),
+              ?ERROR_MSG("The message is gone!!! group: ~p, id: ~p.\n ~p",
+                [GroupS, StanzaID, Err]),
               ejabberd_router:route_error(Pkt,
                 xmpp:err_internal_server_error())
           end;
@@ -470,38 +464,20 @@ get_origin_id(OriginId) ->
       ID
   end.
 
--spec strip_reference_elements(stanza()) -> stanza().
-strip_reference_elements(Pkt) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = lists:filter(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = <<"groupchat">>} ->
-            false;
-          #xmppreference{type = _Any} ->
-            true
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els),
-  xmpp:set_els(Pkt, NewEls).
-
--spec strip_x_elements(stanza()) -> stanza().
-strip_x_elements(Pkt) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = lists:filter(
+-spec strip_group_elements(stanza()) -> stanza().
+strip_group_elements(Els) ->
+  lists:filter(
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
       IsGroupsNS = str:prefix(?NS_GROUPCHAT, NS),
-      if (Name == <<"x">> andalso IsGroupsNS) ->
+      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0);
+      (Name == <<"x">> andalso IsGroupsNS) ->
         try xmpp:decode(El) of
+          #xmppreference{type = <<"groupchat">>} ->
+            false;
+          #xmppreference{type = _Any} ->
+            true;
           #xabbergroupchat_x{} ->
             false
         catch _:{xmpp_codec, _} ->
@@ -510,29 +486,20 @@ strip_x_elements(Pkt) ->
         true ->
           true
       end
-    end, Els),
-  xmpp:set_els(Pkt, NewEls).
+    end, Els).
 
--spec strip_stanza_id(stanza(), binary()) -> stanza().
-strip_stanza_id(Pkt, LServer) ->
+-spec strip_stanza_id(stanza()) -> stanza().
+strip_stanza_id(Pkt) ->
   Els = xmpp:get_els(Pkt),
   NewEls = lists:filter(
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
-      (Name == <<"time">> andalso NS == ?NS_UNIQUE);
-      (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
-        try xmpp:decode(El) of
-          #mam_archived{by = By} ->
-            By#jid.lserver == LServer;
-          #unique_time{by = By} ->
-            By#jid.lserver == LServer;
-          #stanza_id{by = By} ->
-            By#jid.lserver == LServer
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
+      if
+        (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
+          (Name == <<"time">> andalso NS == ?NS_UNIQUE);
+          (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
+          false;
         true ->
           true
       end
@@ -673,9 +640,8 @@ set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
 %%  end.
 
 
-shift_references(Pkt, Length) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = lists:filtermap(
+shift_references(Els, Length) ->
+  lists:filtermap(
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
@@ -691,8 +657,7 @@ shift_references(Pkt, Length) ->
         true ->
           true
       end
-    end, Els),
-  NewEls.
+    end, Els).
 
 %% Block to write
 

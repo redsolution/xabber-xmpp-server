@@ -479,6 +479,7 @@ register_and_upgrade_to_hotp_session(Iq,User,Server,State,
   end.
 
 set_count(User, Server, DeviceID, Count) ->
+  ?INFO_MSG("SET COUNT to ~p : user ~p device ~p",[Count, User, DeviceID]),
   sql_update_count(User, Server, DeviceID, Count).
 
 
@@ -516,66 +517,50 @@ make_ip_string(Map, PeerIP) ->
 bold() ->
   #xmlel{
     name = <<"bold">>,
-    attrs = [
-      {<<"xmlns">>, ?NS_XABBER_MARKUP}
-    ],
-    children = []
+    attrs = [{<<"xmlns">>, ?NS_XABBER_MARKUP}]
   }.
 
 uri(User) ->
   XMPP = <<"xmpp:",User/binary>>,
   #xabber_groupchat_mention{cdata = XMPP}.
 
-bin_len(Binary) ->
-  B1 = binary:replace(Binary,<<"&">>,<<"&amp;">>,[global]),
-  B2 = binary:replace(B1,<<">">>,<<"&gt;">>,[global]),
-  B3 = binary:replace(B2,<<"<">>,<<"&lt;">>,[global]),
-  B4 = binary:replace(B3,<<"\"">>,<<"&quot;">>,[global]),
-  B5 = binary:replace(B4,<<"\'">>,<<"&apos;">>,[global]),
-  string:len(unicode:characters_to_list(B5)).
-
 new_device_msg(<<>>, Info, DeviceID, BareJID, IP) ->
   new_device_msg(<<"Unknow client">>, Info, DeviceID, BareJID, IP);
 new_device_msg(Client, <<>>, DeviceID ,BareJID, IP) ->
   new_device_msg(Client, <<"Unknow device">>, DeviceID, BareJID, IP);
-new_device_msg(Client,Info, DeviceID,BareJID,IP) ->
+new_device_msg(Client, Info, DeviceID, BareJID, IP) ->
   User = jid:to_string(BareJID),
   Server = jid:make(BareJID#jid.lserver),
   X = #devices_device{id = DeviceID},
   Time = get_time_now(),
+  RefBold = #xmppreference{type = <<"decoration">>, sub_els = [bold()]},
   NewLogin = <<"New login">>,
   Dear = <<". Dear ">>,
   Detected = <<", we detected a new login into your account from a new device on ">>,
   FL = <<NewLogin/binary, Dear/binary, User/binary, Detected/binary, Time/binary, "\n\n">>,
-  SL = <<Client/binary, "\n">>,
-  ThL = <<Info/binary,"\n">>,
-  FoL = <<IP/binary,"\n\n">>,
+  Device = <<Client/binary, "\n",Info/binary,"\n",IP/binary,"\n\n">>,
   FiLStart = <<"If this wasn't you, go to ">>,
-  FilMiddle = <<"Settings > XMPP Account > Active sessions">>,
+  FilMiddle = <<"Settings > Devices">>,
   FilEnd = <<" and terminate suspicious sessions.">>,
   FiL = <<FiLStart/binary, FilMiddle/binary, FilEnd/binary>>,
-  TextStr = <<FL/binary, SL/binary, ThL/binary,FoL/binary, FiL/binary>>,
-  FirstSecondLinesLength = bin_len(FL) + bin_len(SL),
-  SettingsRefStart =  FirstSecondLinesLength + bin_len(ThL) + bin_len(FoL) + bin_len(FiLStart),
-  UserRef = #xmppreference{'begin' = bin_len(NewLogin) + bin_len(Dear),
-    'end' = bin_len(NewLogin) + bin_len(Dear) + bin_len(User), type = <<"decoration">>, sub_els = [uri(User)]},
-  NLR = #xmppreference{'begin' = 0, 'end' = bin_len(NewLogin), type = <<"decoration">>, sub_els = [bold()]},
-  CIR = #xmppreference{'begin' = bin_len(FL), 'end' = bin_len(FL) + bin_len(Info),
-    type = <<"decoration">>, sub_els = [bold()]},
-  DR = #xmppreference{'begin' = FirstSecondLinesLength,
-    'end' = FirstSecondLinesLength + bin_len(ThL), type = <<"decoration">>, sub_els = [bold()]},
-  SR = #xmppreference{'begin' = SettingsRefStart,
-    'end' = SettingsRefStart + bin_len(FilMiddle) , type = <<"decoration">>, sub_els = [bold()]},
-  IPBoldReference = #xmppreference{'begin' = FirstSecondLinesLength + bin_len(ThL) ,
-    'end' = FirstSecondLinesLength + bin_len(ThL) + bin_len(FoL), type = <<"decoratio">>, sub_els = [bold()]},
+  TextStr = <<FL/binary,Device/binary,FiL/binary>>,
+  UserBegin = misc:escaped_text_len(<<NewLogin/binary,Dear/binary>>),
+  UserEnd = misc:escaped_text_len(<<NewLogin/binary,Dear/binary,User/binary>>),
+  SettingsBegin = misc:escaped_text_len(<<FL/binary,Device/binary,FiLStart/binary>>),
+  NLRef = RefBold#xmppreference{'begin' = 0, 'end' = misc:escaped_text_len(NewLogin)},
+  UserRef = RefBold#xmppreference{'begin' = UserBegin, 'end' = UserEnd, sub_els = [uri(User)]},
+  DeviceRef = RefBold#xmppreference{'begin' = misc:escaped_text_len(FL),
+    'end' = misc:escaped_text_len(<<FL/binary,Device/binary>>)},
+  SettingsRef = RefBold#xmppreference{'begin'= SettingsBegin,
+    'end' = SettingsBegin + misc:escaped_text_len(FilMiddle)},
   Text = [#text{lang = <<>>,data = TextStr}],
   ID = randoms:get_string(),
   OriginID = #origin_id{id = ID},
   #message{type = chat, from = Server, to = BareJID, id =ID, body = Text,
-    sub_els = [X,NLR,CIR,DR,IPBoldReference,SR,UserRef,OriginID]}.
+    sub_els = [X, NLRef, UserRef, DeviceRef, SettingsRef, OriginID]}.
 
 
-set_default_ttl(LServer,undefined) ->
+set_default_ttl(LServer, undefined) ->
   ConfigTime =  gen_mod:get_module_opt(LServer, ?MODULE,
     device_expiration_time),
   case ConfigTime of

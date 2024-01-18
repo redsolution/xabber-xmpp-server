@@ -34,7 +34,8 @@
 	 l2i/1, i2l/1, i2l/2, expr_to_term/1, term_to_expr/1,
 	 now_to_usec/1, usec_to_now/1, encode_pid/1, decode_pid/2,
 	 compile_exprs/2, join_atoms/2, try_read_file/1,
-	 css_dir/0, img_dir/0, js_dir/0, read_css/1, read_img/1, read_js/1]).
+	 css_dir/0, img_dir/0, js_dir/0, read_css/1, read_img/1, read_js/1,
+	 escaped_text_len/1]).
 
 %% Deprecated functions
 -export([decode_base64/1, encode_base64/1]).
@@ -304,3 +305,12 @@ read_file(Path) ->
 		       [Path, file:format_error(Why)]),
 	    Err
     end.
+
+-spec escaped_text_len(binary()) -> integer().
+escaped_text_len(Binary) ->
+  B1 = binary:replace(Binary,<<"&">>,<<"&amp;">>,[global]),
+  B2 = binary:replace(B1,<<">">>,<<"&gt;">>,[global]),
+  B3 = binary:replace(B2,<<"<">>,<<"&lt;">>,[global]),
+  B4 = binary:replace(B3,<<"\"">>,<<"&quot;">>,[global]),
+  B5 = binary:replace(B4,<<"\'">>,<<"&apos;">>,[global]),
+  string:len(unicode:characters_to_list(B5)).

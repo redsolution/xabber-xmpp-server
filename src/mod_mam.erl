@@ -434,18 +434,10 @@ get_stanza_id(#message{meta = #{stanza_id := ID}}) ->
 
 -spec init_stanza_id(stanza(), binary()) -> stanza().
 init_stanza_id(Pkt, LServer) ->
-    TimeStamp = misc:now_to_usec(erlang:now()),
-    ID = TimeStamp,
-	  To = xmpp:get_from(Pkt),
-	case mod_xabber_entity:is_group(To#jid.luser, To#jid.lserver) of
-		false ->
-			Pkt1 = strip_my_stanza_id(Pkt, LServer),
-			Pkt2 = xmpp:put_meta(Pkt1, unique_time, TimeStamp),
-			xmpp:put_meta(Pkt2, stanza_id, ID);
-		_ ->
-			Pkt2 = xmpp:put_meta(Pkt, unique_time, TimeStamp),
-			xmpp:put_meta(Pkt2, stanza_id, ID)
-	end.
+	ID = misc:now_to_usec(erlang:now()),
+	Pkt1 = strip_my_stanza_id(Pkt, LServer),
+	Pkt2 = xmpp:put_meta(Pkt1, unique_time, ID),
+	xmpp:put_meta(Pkt2, stanza_id, ID).
 
 -spec init_stanza_id_incoming(stanza(), binary()) -> stanza().
 init_stanza_id_incoming(Pkt, _LServer) ->
@@ -666,16 +658,6 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
 		       Prefs#archive_prefs.never, NS),
 				xmpp:make_iq_result(IQ, PrefsEl)
 			end;
-%%process_iq(IQ) ->
-%%	From = xmpp:get_from(IQ),
-%%	Chat = jid:to_string(jid:remove_resource(From)),
-%%	LServer = From#jid.lserver,
-%%	case mod_groupchat_sql:search_for_chat(LServer,Chat) of
-%%		{selected,[]} ->
-%%			xmpp:make_error(IQ, xmpp:err_not_allowed());
-%%		_ ->
-%%			process_iq(LServer, IQ, chat)
-%%	end.
 process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}} = IQ) ->
 	IsLocal = lists:member(LServer,ejabberd_config:get_myhosts()),
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of

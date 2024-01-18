@@ -33,12 +33,15 @@
 -include("ejabberd_sql_pt.hrl").
 %% API
 -export([get_version/2]).
--export([strip_els/1, filter_els/1, shift_references/2]).
--export([user_in_chat/2,check_user_permission/2,check_if_message_exist/2,check_if_message_pinned/2,check_if_less/2,send_query/2]).
+-export([user_in_chat/2,check_user_permission/2,check_if_message_exist/2,
+  check_if_message_pinned/2,check_if_less/2,send_query/2]).
 -export([check_user/2,delete_message/2,store_event/2,send_notifications/2]).
--export([check_user_permission_to_delete_messages/2, check_and_unpin_message/2, delete_user_messages/2]).
--export([check_user_before_all/2,check_user_permission_to_delete_all/2,check_pinned_messages/2,delete_messages/2]).
--export([check_replace_permission/2,replace_message/2,store_event_replace/2,send_notifications_replace/2, check_user_replace/2]).
+-export([check_user_permission_to_delete_messages/2, check_and_unpin_message/2,
+  delete_user_messages/2]).
+-export([check_user_before_all/2,check_user_permission_to_delete_all/2,
+  check_pinned_messages/2,delete_messages/2]).
+-export([check_replace_permission/2,replace_message/2,store_event_replace/2,
+  send_notifications_replace/2, check_user_replace/2]).
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 -export([check_pinned_message/3]).
@@ -123,8 +126,8 @@ check_replace_permission(_Acc, {Server,User,Chat,ID,_X,_Replace,_V}) ->
       {stop,not_ok}
   end.
 
-replace_message(_Acc, {Server,_User,Chat,ID,X,Replace,_V}) ->
-  replace_message_from_archive(Server,Chat,ID,X,Replace).
+replace_message(_Acc, {Server, User, Chat, ID, X, Replace, _V}) ->
+  replace_message_from_archive(Server, Chat, User,  ID, X, Replace).
 
 store_event_replace(Acc, {Server,_User,Chat,_ID,_X, _Replace, Version}) ->
   XR = xmpp:encode(Acc),
@@ -134,7 +137,7 @@ store_event_replace(Acc, {Server,_User,Chat,_ID,_X, _Replace, Version}) ->
 
 send_notifications_replace(Acc, {Server,_User,Chat,_ID,_X,  _Replace, _Version}) ->
   M = #message{type = headline, id = randoms:get_string(), sub_els = [Acc]},
-  notificate(Server,Chat,M),
+  notify(Server, Chat, M),
   {stop,ok}.
 
 %% retract_all hook
@@ -161,7 +164,7 @@ check_pinned_messages(_Acc, {Server,_User,Chat,_ID,_X,_V}) ->
   case find_and_delete_pinned_message(Server,Chat) of
     {updated,1} ->
       P = mod_groups_presence:form_presence(Chat),
-      notificate(Server,Chat,P),
+      notify(Server, Chat, P),
       ok;
     _ ->
       ok
@@ -190,7 +193,7 @@ check_and_unpin_message(_Acc, {Server,_U,Chat,ID,_X,_V}) ->
   case find_and_delete_pinned_message(Server,Chat,User) of
     {updated,1} ->
       P = mod_groups_presence:form_presence(Chat),
-      notificate(Server,Chat,P),
+      notify(Server, Chat, P),
       ok;
     _ ->
       ok
@@ -239,7 +242,7 @@ check_if_message_pinned(_Acc, {Server,_User,Chat,ID,_X,_V}) ->
     _ ->
       delete_pinned_message(Server,Chat,ID),
       Presence = mod_groups_presence:form_presence(Chat),
-      notificate(Server,Chat,Presence),
+      notify(Server, Chat, Presence),
       ok
   end.
 
@@ -254,7 +257,7 @@ store_event(_Acc, {Server,_User,Chat,_ID,Retract,Version}) ->
 
 send_notifications(_Acc, {Server,_User,Chat,_ID,Retract,_Version}) ->
   M = #message{type = headline, id = randoms:get_string(), sub_els = [Retract]},
-  notificate(Server,Chat,M),
+  notify(Server, Chat, M),
   {stop,ok}.
 
 %% retract_query hook
@@ -309,80 +312,71 @@ send_query(_Acc,{Server,UserJID,Chat,Version,_Less}) ->
 
 
 %% Internal functions
-notificate(Server,Chat,Stanza) ->
+notify(Server, Chat, Stanza) ->
   From = jid:from_string(Chat),
   FromChat = jid:replace_resource(From,<<"Group">>),
   UserList = mod_groups_users:users_to_send(Server,Chat),
   lists:foreach(fun(To) ->
-%%    PServer = To#jid.lserver,
-%%    PUser = To#jid.luser,
-%%    case PServer of
-%%      Server when Stanza == #message{} ->
-%%        #message{sub_els = [Event]} = Stanza,
-%%        ejabberd_hooks:run(xabber_push_notification, Server, [<<"update">>, PUser, Server, Event]);
-%%      _ ->
-%%        ok
-%%    end,
-    ejabberd_router:route(FromChat,To,Stanza) end, UserList
-  ).
+    ejabberd_router:route(FromChat,To,Stanza) end, UserList).
 
-replace_message_from_archive(Server,Chat,ID,Text,Replace) ->
+replace_message_from_archive(Server, Chat, UserS, ID, Text, Replace) ->
   #xabber_replace{ xabber_replace_message = XabberReplaceMessage} = Replace,
   NewEls = XabberReplaceMessage#xabber_replace_message.sub_els,
   ChatJID = jid:from_string(Chat),
-  User = ChatJID#jid.luser,
-  {selected,[{Xml}]} = ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(xml)s from archive"
-    " where username=%(User)s and timestamp=%(ID)d and %(Server)H")),
-  M = fxml_stream:parse_element(Xml),
-  MD = xmpp:decode(M),
+  GUser = ChatJID#jid.luser,
+  Mod = gen_mod:db_mod(Server, 'mod_mam'),
+  MD = case Mod:select(Server, ChatJID, ChatJID,[{'ids',[ID]}],
+    undefined, chat) of
+         {[{_, _, Forwarded}], true, 1} ->
+           hd(Forwarded#forwarded.sub_els);
+         Err ->
+           %%  message not found in archive
+           ?ERROR_MSG("The message is gone!!! group: ~p, id: ~p.\n ~p",
+             [Chat, ID, Err]),
+      error
+  end,
   From = MD#message.from,
   MessageID = MD#message.id,
   To = MD#message.to,
   Meta = MD#message.meta,
   Type = MD#message.type,
-  Sub = MD#message.sub_els,
-  X = xmpp:get_subtag(MD, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-  Reference = xmpp:get_subtag(X, #xmppreference{}),
   NewSubFiltered = filter_els(NewEls),
-  UserCard = xmpp:get_subtag(Reference, #xabbergroupchat_user_card{}),
-  UserID = UserCard#xabbergroupchat_user_card.id,
-  UserJID = mod_groups_users:get_user_by_id(Server,Chat,UserID),
-  ActualCard = mod_groups_users:form_user_card(UserJID,Chat),
+  ActualCard = mod_groups_users:form_user_card(UserS,Chat),
   UserChoose = mod_groups_users:choose_name(ActualCard),
   Username = <<UserChoose/binary, ":", "\n">>,
-  Length = mod_groups_messages:binary_length(Username),
-  NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [ActualCard], 'begin' = 0, 'end' = Length}]},
-  Els1 = strip_els(Sub),
-  NewSubRefShift = shift_references(NewSubFiltered, Length),
-  Els2 = Els1 ++ [NewX] ++ NewSubRefShift,
+  Length = misc:escaped_text_len(Username),
+  NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT,
+    sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [ActualCard],
+      'begin' = 0, 'end' = Length}]},
+  NewSubRefShift = mod_groups_messages:shift_references(NewSubFiltered, Length),
+  Els2 = [#origin_id{id = MessageID}] ++ [NewX] ++ NewSubRefShift,
   NewText = <<Username/binary, Text/binary >>,
   NewBody = [#text{lang = <<>>,data = NewText}],
   Replaced = XabberReplaceMessage#xabber_replace_message.replaced,
-  MessageDecoded = #message{id = MessageID, type = Type, from = From, to = To, sub_els = [Replaced|Els2], meta = Meta, body = NewBody},
+  MessageDecoded = #message{id = MessageID, type = Type, from = From, to = To,
+    sub_els = [Replaced|Els2], meta = Meta, body = NewBody},
   NewM = xmpp:encode(MessageDecoded),
   XML = fxml:element_to_binary(NewM),
   ?SQL_UPSERT(
     Server,
     "archive",
     ["!timestamp=%(ID)d",
-      "!username=%(User)s",
+      "!username=%(GUser)s",
+      "!server_host=%(Server)s",
       "xml=%(XML)s",
-      "txt=%(NewText)s",
-      "server_host=%(Server)s"]),
+      "txt=%(NewText)s"]),
   Time = #unique_time{by = ChatJID, stamp = misc:usec_to_now(binary_to_integer(ID))},
-  NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{body = NewText, sub_els = Els2 ++ [Time]},
-  NewReplace = Replace#xabber_replace{xabber_replace_message = NewXabberReplaceMessage},
-  NewReplace.
+  NewXabberReplaceMessage = XabberReplaceMessage#xabber_replace_message{
+    body = NewText, sub_els = Els2 ++ [Time]},
+  Replace#xabber_replace{xabber_replace_message = NewXabberReplaceMessage}.
 
-get_owner_of_message(Server,Chat,ID) ->
+get_owner_of_message(Server, Chat, ID) ->
   ChatJID = jid:from_string(Chat),
   User = ChatJID#jid.luser,
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(bare_peer)s from archive"
-    " where username=%(User)s and timestamp=%(ID)d")) of
+    ?SQL("select @(bare_peer)s from archive where username=%(User)s "
+    " and timestamp=%(ID)d and %(Server)H")) of
     {selected,[<<>>]} ->
       [];
     {selected,[{Query}]} ->
@@ -396,28 +390,32 @@ check_message(Server,Chat,ID) ->
   User = ChatJID#jid.luser,
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(timestamp)s from archive"
-    " where username=%(User)s and timestamp=%(ID)d")) of
+    ?SQL("select @(timestamp)s from archive where username=%(User)s "
+    " and timestamp=%(ID)d and %(Server)H")) of
     {selected,[]} ->
       no_message;
     {selected,Query} ->
       Query
   end.
-find_and_delete_pinned_message(Server,Chat) ->
-  ChatJID = jid:from_string(Chat),
-  ChatName = ChatJID#jid.luser,
-  ejabberd_sql:sql_query(
-    Server,
-    ?SQL("update groupchats set message = 0 where jid=%(Chat)s and message IN (select @(timestamp)s from archive"
-    " where username=%(ChatName)s);")).
 
-find_and_delete_pinned_message(Server,Chat,User) ->
+find_and_delete_pinned_message(Server, Chat) ->
   ChatJID = jid:from_string(Chat),
   ChatName = ChatJID#jid.luser,
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchats set message = 0 where jid=%(Chat)s and message IN (select @(timestamp)s from archive"
-    " where username=%(ChatName)s and bare_peer=%(User)s);")).
+    ?SQL("update groupchats set message = 0 where jid=%(Chat)s "
+    " and message IN (select @(timestamp)s from archive"
+    " where username=%(ChatName)s and %(Server)H);")).
+
+find_and_delete_pinned_message(Server, Chat, User) ->
+  ChatJID = jid:from_string(Chat),
+  ChatName = ChatJID#jid.luser,
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchats set message = 0 where jid=%(Chat)s "
+    " and message IN (select @(timestamp)s from archive"
+    " where username=%(ChatName)s and bare_peer=%(User)s "
+    " and %(Server)H);")).
 
 check_pinned_message(Server,Chat,ID) ->
   case ejabberd_sql:sql_query(
@@ -436,29 +434,28 @@ delete_pinned_message(Server,Chat,ID) ->
     ?SQL("update groupchats set message = 0 "
     " where jid=%(Chat)s and message=%(ID)d")).
 
-delete_user_messages_from_archive(Server,Chat,BarePeer) ->
+delete_user_messages_from_archive(Server, Chat, BarePeer) ->
   ChatJID = jid:from_string(Chat),
   User = ChatJID#jid.luser,
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("delete from archive"
-    " where username=%(User)s and bare_peer=%(BarePeer)s")).
+    ?SQL("delete from archive where username=%(User)s "
+    " and bare_peer=%(BarePeer)s and %(Server)H")).
 
-delete_message_from_archive(Server,Chat,ID) ->
+delete_message_from_archive(Server, Chat, ID) ->
   ChatJID = jid:from_string(Chat),
   User = ChatJID#jid.luser,
   ejabberd_sql:sql_query(
   Server,
-  ?SQL("delete from archive"
-  " where username=%(User)s and timestamp=%(ID)d")).
+  ?SQL("delete from archive where username=%(User)s "
+  " and timestamp=%(ID)d and %(Server)H")).
 
-delete_messages_from_archive(Server,Chat) ->
+delete_messages_from_archive(Server, Chat) ->
   ChatJID = jid:from_string(Chat),
   User = ChatJID#jid.luser,
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("delete from archive"
-    " where username=%(User)s and %(Server)H")).
+    ?SQL("delete from archive where username=%(User)s and %(Server)H")).
 
 get_count_events(Server,Chat,Version) ->
   case ejabberd_sql:sql_query(
@@ -469,21 +466,22 @@ get_count_events(Server,Chat,Version) ->
       Count
   end.
 
-get_query(Server,Chat,Version) ->
+get_query(Server, Chat, Version) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(xml)s from groupchat_retract"
-		" where chatgroup=%(Chat)s and version > %(Version)d order by version")) of
+    ?SQL("select @(xml)s from groupchat_retract where chatgroup=%(Chat)s "
+    " and version > %(Version)d order by version")) of
     {selected,[<<>>]} ->
       [];
     {selected,Query} ->
       Query
   end.
 
-get_version(Server,Chat) ->
+get_version(Server, Chat) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select coalesce(max(@(version)d),0) from groupchat_retract where chatgroup = %(Chat)s")) of
+    ?SQL("select coalesce(max(@(version)d),0) from groupchat_retract "
+    " where chatgroup = %(Chat)s")) of
     {selected,[{Version}]} ->
       Version;
     {selected,_} ->
@@ -503,72 +501,17 @@ insert_event(Server,Chat,Txt,Version) ->
         "version=%(Version)s"
       ])).
 
-strip_els(Els) ->
-  NewEls = lists:filter(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
-      (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0);
-      (Name == <<"time">> andalso NS == ?NS_UNIQUE);
-      (Name == <<"origin-id">> andalso NS == ?NS_SID_0);
-      (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
-        try xmpp:decode(El) of
-          #mam_archived{} ->
-            false;
-          #unique_time{} ->
-            false;
-          #origin_id{} ->
-            true;
-          #stanza_id{} ->
-            false;
-          #xmppreference{type = _Any} ->
-            false
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          false
-      end
-    end, Els),
-  NewEls.
-
 filter_els(Els) ->
-  NewEls = lists:filter(
+  NewEls = mod_groups_messages:strip_group_elements(Els),
+  lists:filter(
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = <<"groupchat">>} ->
-            false;
-          #xmppreference{type = _Any} ->
-            true
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
+      if
+        Name == <<"origin-id">> andalso NS == ?NS_SID_0 ->
+          false;
         true ->
           true
       end
-    end, Els),
-  NewEls.
+    end, NewEls).
 
-shift_references(Els, Length) ->
-  NewEls = lists:filtermap(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub}};
-          #xmppreference{type = Type, 'begin' = Begin, 'end' = End, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = Begin + Length, 'end' = End + Length, sub_els = Sub}}
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els),
-  NewEls.

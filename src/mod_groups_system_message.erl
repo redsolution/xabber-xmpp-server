@@ -246,12 +246,10 @@ chat_created(LServer,User,Chat,Lang) ->
     sub_els = [NameEl,Privacy,Membership,Description,Index]
   },
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
-  SubEls = [XEl,By],
-  M = form_message(jid:from_string(Chat),Body,SubEls),
+  M = form_message(jid:from_string(Chat),Body,[XEl,By]),
   ChatJID = jid:from_string(Chat),
-  Pkt1 = mod_groups_messages:strip_stanza_id(M,LServer),
   ejabberd_hooks:run_fold(
-    user_send_packet, LServer, {Pkt1, #{jid => ChatJID}}, []).
+    user_send_packet, LServer, {M, #{jid => ChatJID}}, []).
 
 users_blocked(Acc, #iq{lang = Lang,to = To, from = From}) ->
   Chat = jid:to_string(jid:remove_resource(To)),
@@ -415,33 +413,33 @@ user_updated({User,OldCard}, LServer,Chat, Admin,_ID,Nick,_Badge,Lang) ->
     User when OldNick =/= NewNick andalso OldBadge =/= NewBadge ->
       Txt = <<" changed his/her badge and is now known as ">>,
       MsgTxt = text_for_msg(Lang,Txt,OldName,UserID,[]),
-      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+      send_user_updated(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
     User when OldNick =/= NewNick andalso OldBadge == NewBadge ->
       Txt = <<" is now known as ">>,
       MsgTxt = text_for_msg(Lang,Txt,OldName,UserID,[]),
-      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+      send_user_updated(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
     User when OldNick == NewNick andalso OldBadge =/= NewBadge ->
       Txt = <<" changed his/her badge">>,
       MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
-      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+      send_user_updated(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
     _ when OldNick =/= NewNick andalso OldBadge =/= NewBadge ->
       Txt = <<" nickname was changed to ", Nick/binary," and badge was changed by ">>,
       MsgTxt = text_for_msg(Lang,Txt,OldName,UserID,[]),
-      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+      send_user_updated(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
     _ when OldNick =/= NewNick andalso OldBadge == NewBadge ->
       Txt = <<" nickname was changed to ", Nick/binary," by ">>,
       MsgTxt = text_for_msg(Lang,Txt,OldName,UserID,[]),
-      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+      send_user_updated(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
     _ when OldNick == NewNick andalso OldBadge =/= NewBadge ->
       Txt = <<" badge was changed by ">>,
       MsgTxt = text_for_msg(Lang,Txt,Acc,UserID,[]),
-      maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
+      send_user_updated(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt);
     _ ->
       ok
   end,
   {stop,ok}.
 
-maybe_send(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt) ->
+send_user_updated(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt) ->
   ChatJID = jid:from_string(Chat),
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groups_users:current_chat_version(LServer,Chat),
@@ -547,11 +545,10 @@ send_presences(Server,Chat) ->
   mod_groups_presence:send_presence(mod_groups_presence:form_presence(Chat),Users,FromChat).
 
 -spec send_to_all(binary(), binary()) -> ok.
-send_to_all(Chat,Stanza) ->
+send_to_all(Chat, Pkt1) ->
   ChatJID = jid:from_string(Chat),
   FromChat = jid:replace_resource(ChatJID,<<"Group">>),
   Server = ChatJID#jid.lserver,
-  Pkt1 = mod_groups_messages:strip_stanza_id(Stanza,Server),
   {Pkt2, _State2} = ejabberd_hooks:run_fold(
     user_send_packet, Server, {Pkt1, #{jid => ChatJID}}, []),
   #message{meta = #{stanza_id := TS}} = Pkt2,

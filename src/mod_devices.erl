@@ -479,7 +479,6 @@ register_and_upgrade_to_hotp_session(Iq,User,Server,State,
   end.
 
 set_count(User, Server, DeviceID, Count) ->
-  ?INFO_MSG("SET COUNT to ~p : user ~p device ~p",[Count, User, DeviceID]),
   sql_update_count(User, Server, DeviceID, Count).
 
 

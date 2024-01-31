@@ -329,28 +329,34 @@ make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
   Els = [Identity]++Features++[X],
   Q = query_disco_info(Els),
   ejabberd_router:route(xmpp:make_iq_result(Iq,Q));
-make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:2">>},{<<"queryid">>,_QID}]}]} = Iq) ->
+make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
+  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:2">>},{<<"queryid">>,_QID}]}]} = Iq) ->
   process_mam_iq(Iq);
-make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:1">>},{<<"queryid">>,_QID}]}]} = Iq) ->
+make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
+  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:1">>},{<<"queryid">>,_QID}]}]} = Iq) ->
   process_mam_iq(Iq);
-make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:2">>}]}]} = Iq) ->
+make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
+  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:2">>}]}]} = Iq) ->
   process_mam_iq(Iq);
-make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:1">>}]}]} = Iq) ->
+make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
+  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:1">>}]}]} = Iq) ->
   process_mam_iq(Iq);
-make_action(#iq{from = From, to = To, type = get,
-  sub_els =
-  [#xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,?NS_XABBER_SYNCHRONIZATION},{<<"stamp">>,Stamp}]}]} = IQ) ->
-  User = jid:to_string(jid:remove_resource(From)),
-  Chat = jid:to_string(jid:remove_resource(To)),
-  LServer = To#jid.lserver,
-  Result = ejabberd_hooks:run_fold(synchronization_request, LServer, [], [LServer,User,Chat,Stamp]),
-  case Result of
-    {ok,Sync} ->
-      ?DEBUG("Send iq ~p~n res ~p",[IQ,Sync]),
-      ejabberd_router:route(xmpp:make_iq_result(IQ,Sync));
-    _ ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
-  end;
+%%make_action(#iq{from = From, to = To, type = get,
+%%  sub_els = [#xmlel{name = <<"query">>,
+%%    attrs = [{<<"xmlns">>,?NS_XABBER_SYNCHRONIZATION},
+%%      {<<"stamp">>,Stamp}]}]} = IQ) ->
+%%  User = jid:to_string(jid:remove_resource(From)),
+%%  Chat = jid:to_string(jid:remove_resource(To)),
+%%  LServer = To#jid.lserver,
+%%  Result = ejabberd_hooks:run_fold(synchronization_request, LServer, [],
+%%    [LServer,User,Chat,Stamp]),
+%%  case Result of
+%%    {ok,Sync} ->
+%%      ?DEBUG("Send iq ~p~n res ~p",[IQ,Sync]),
+%%      ejabberd_router:route(xmpp:make_iq_result(IQ,Sync));
+%%    _ ->
+%%      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
+%%  end;
 make_action(#iq{from = UserJID, to = ChatJID, type = result,
   sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:metadata">>,
     items = [#ps_item{id = _Hash, sub_els = Subs}]}}]}) ->
@@ -373,7 +379,8 @@ make_action(#iq{from = UserJID, to = ChatJID, type = result,
   catch _:_ ->
     ok
   end;
-make_action(#iq{type = result, sub_els = [#xmlel{name = <<"pubsub">>, attrs = _Attrs, children = _Children}] = SubEls} = IQ) ->
+make_action(#iq{type = result, sub_els = [#xmlel{name = <<"pubsub">>,
+  attrs = _Attrs, children = _Children}] = SubEls} = IQ) ->
   ?DEBUG("Catch pubsub result2 iq ~p",[IQ]),
   SubElsDec = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
   DECIQ = IQ#iq{sub_els = SubElsDec},
@@ -389,43 +396,36 @@ make_action(IQ) ->
 process_groupchat_iq(#iq{type = set, sub_els = [#mam_query{}]} = Iq) ->
   process_mam_iq(Iq);
 process_groupchat_iq(#iq{from = From, to = To, type = get,
-  sub_els = [#xabber_retract_query{version = undefined, 'less-than' = undefined}]} = IQ) ->
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Server = To#jid.lserver,
-  CheckUser = mod_groups_users:check_user(Server,jid:to_string(jid:remove_resource(From)),Chat),
-  case CheckUser of
-    not_exist ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()));
+  sub_els = [#xabber_retract_query{version = undefined,
+    'less-than' = undefined}]} = IQ) ->
+  case mod_groups_retract:get_version_reply(From, To) of
+    {ok, Reply} ->
+      ejabberd_router:route(xmpp:make_iq_result(IQ,Reply));
     _ ->
-      Version = mod_groups_retract:get_version(Server,Chat),
-      ejabberd_router:route(xmpp:make_iq_result(IQ, #xabber_retract_query{version=Version}))
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end,
   ignore;
 process_groupchat_iq(#iq{from = From, to = To, type = get,
   sub_els = [#xabber_retract_query{version = Version, 'less-than' = Less}]} = IQ) ->
-  Chat = jid:to_string(jid:remove_resource(To)),
-  FromChat = jid:replace_resource(To,<<"Group">>),
+  Group = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Result = ejabberd_hooks:run_fold(retract_query, Server, [], [{Server,From,Chat,Version,Less}]),
-    case Result of
-      ok ->
-        ejabberd_router:route(xmpp:make_iq_result(IQ)),
-        ignore;
-      too_much ->
-        CurrentVersion = mod_groups_retract:get_version(Server,Chat),
-        Invalidate = #xabber_retract_invalidate{version = CurrentVersion},
-        ejabberd_router:route(#message{from = FromChat, to = From, id = randoms:get_string(), type = headline, sub_els = [Invalidate]}),
-        ejabberd_router:route(xmpp:make_iq_result(IQ)),
-        ignore;
-      _ ->
-        ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed())),
-        ignore
-    end;
-process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set, sub_els = [#xabbergroup_kick{} = Kick]} = IQ) ->
+  case mod_groups_retract:send_rewrite_archive(Server, From,
+    Group, Version, Less) of
+    ok ->
+      CurrentVer = mod_groups_retract:get_version(Server, Group),
+      ejabberd_router:route(xmpp:make_iq_result(IQ,
+        #xabber_retract_query{version=CurrentVer}));
+    _ ->
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
+  end,
+  ignore;
+process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set,
+  sub_els = [#xabbergroup_kick{} = Kick]} = IQ) ->
   LServer = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
   Admin = jid:to_string(jid:remove_resource(From)),
-  case ejabberd_hooks:run_fold(groupchat_user_kick, LServer, [], [LServer,Chat,Admin,Kick,Lang]) of
+  case ejabberd_hooks:run_fold(groupchat_user_kick, LServer, [],
+    [LServer,Chat,Admin,Kick,Lang]) of
     {error, Error} ->
       ejabberd_router:route(xmpp:make_error(IQ, Error));
     R when is_list(R) ->
@@ -434,7 +434,9 @@ process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set, sub_els 
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_internal_server_error()))
   end,
   ignore;
-process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, id = ID, rsm = undefined, version = undefined, sub_els = []}]} = IQ) ->
+process_groupchat_iq(#iq{from = From, to = To, type = get,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, id = ID,
+    rsm = undefined, version = undefined, sub_els = []}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   LServer = To#jid.lserver,
@@ -447,7 +449,9 @@ process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergro
       Err = xmpp:make_error(IQ,xmpp:err_not_allowed()),
       ejabberd_router:route(Err)
   end;
-process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, version = Version, rsm = RSM, sub_els = []}]} = IQ) ->
+process_groupchat_iq(#iq{from = From, to = To, type = get,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS,
+    version = Version, rsm = RSM, sub_els = []}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   LServer = To#jid.lserver,
@@ -460,24 +464,31 @@ process_groupchat_iq(#iq{from = From, to = To, type = get, sub_els = [#xabbergro
       Err = xmpp:make_error(IQ,xmpp:err_not_allowed()),
       ejabberd_router:route(Err)
   end;
-process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = [#xabbergroupchat_user_card{id = ID, nickname = Nickname, badge = Badge}]}]} = IQ) ->
+process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS,
+    sub_els = [#xabbergroupchat_user_card{id = ID,
+      nickname = Nickname, badge = Badge}]}]} = IQ) ->
   LServer = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
   Admin = jid:to_string(jid:remove_resource(From)),
-case ejabberd_hooks:run_fold(groupchat_update_user_hook, LServer, [], [LServer,Chat,Admin,ID,Nickname,Badge,Lang]) of
-  ok ->
-    ejabberd_router:route(xmpp:make_iq_result(IQ));
-  {error, Error} ->
-    ejabberd_router:route(xmpp:make_error(IQ, Error));
-  _ ->
-    ejabberd_router:route(xmpp:make_error(IQ, xmpp:serr_internal_server_error()))
-end;
+  case ejabberd_hooks:run_fold(groupchat_update_user_hook,
+    LServer, [], [LServer,Chat,Admin,ID,Nickname,Badge,Lang]) of
+    ok ->
+      ejabberd_router:route(xmpp:make_iq_result(IQ));
+    {error, Error} ->
+      ejabberd_router:route(xmpp:make_error(IQ, Error));
+    _ ->
+      ejabberd_router:route(xmpp:make_error(IQ, xmpp:serr_internal_server_error()))
+  end;
 process_groupchat_iq(#iq{to = To, type = get, sub_els = [#vcard_temp{}]} = IQ) ->
   LUser = To#jid.luser,
   Server = To#jid.lserver,
   Vcard = mod_groups_vcard:get_vcard(LUser,Server),
   ejabberd_router:route(xmpp:make_iq_result(IQ,Vcard));
-process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [#xabbergroupchat_user_card{id = ID}]}]} = IQ) when ID == <<>> orelse ID == <<"">> ->
+process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To,
+  sub_els = [#xabbergroupchat_query_rights{
+    sub_els = [#xabbergroupchat_user_card{id = ID}]}]} = IQ)
+  when ID == <<>> orelse ID == <<"">> ->
   User = jid:to_string(jid:remove_resource(From)),
   LServer = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
@@ -489,11 +500,14 @@ process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To, sub_els 
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:serr_internal_server_error()))
   end;
-process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [#xabbergroupchat_user_card{id = ID}]}]} = IQ) ->
+process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To,
+  sub_els = [#xabbergroupchat_query_rights{
+    sub_els = [#xabbergroupchat_user_card{id = ID}]}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   LServer = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
-  case ejabberd_hooks:run_fold(request_change_user_settings, LServer, [], [LServer,User,Chat,ID,Lang]) of
+  case ejabberd_hooks:run_fold(request_change_user_settings, LServer, [],
+    [LServer,User,Chat,ID,Lang]) of
     not_ok ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()));
     not_exist ->
@@ -503,17 +517,21 @@ process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To, sub_els 
     _ ->
       ejabberd_router:route(xmpp:make_iq_result(IQ))
   end;
-process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els = [#xabbergroupchat_query_rights{sub_els = [#xdata{type = 'submit', fields = FS}]}]} = IQ) ->
+process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To,
+  sub_els = [#xabbergroupchat_query_rights{
+    sub_els = [#xdata{type = 'submit', fields = FS}]}]} = IQ) ->
   User = jid:to_string(jid:remove_resource(From)),
   LServer = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
-  IDEl = [Values|| #xdata_field{type = Type, var = Var, values = Values} <- FS, Var == <<"user-id">>, Type == 'hidden'],
+  IDEl = [Values|| #xdata_field{type = Type, var = Var, values = Values} <- FS,
+    Var == <<"user-id">>, Type == 'hidden'],
   ID = list_to_binary(IDEl),
 case ID of
   <<>> ->
     ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_item_not_found()));
   _ ->
-    Result = ejabberd_hooks:run_fold(change_user_settings, LServer, FS, [LServer,User,Chat,ID,Lang]),
+    Result = ejabberd_hooks:run_fold(change_user_settings, LServer, FS,
+      [LServer,User,Chat,ID,Lang]),
     case Result of
       {ok,Form} ->
         ejabberd_router:route(xmpp:make_iq_result(IQ,Form));
@@ -528,115 +546,70 @@ case ID of
     end
 end;
 process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
-  #xabber_retract_message{id = ID, symmetric = true, by = By}]} = IQ) ->
-  User = jid:to_string(jid:remove_resource(From)),
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Server = To#jid.lserver,
-  Version = mod_groups_retract:get_version(Server,Chat) + 1,
-  Retract = #xabber_retract_message{
-    symmetric = true,
-    id = ID,
-    by = By,
-    conversation = jid:remove_resource(To),
-    type = ?NS_GROUPCHAT,
-    version = Version,
-    xmlns = ?NS_XABBER_REWRITE_NOTIFY
-  },
-  Result = ejabberd_hooks:run_fold(retract_message, Server, [], [{Server,User,Chat,ID,Retract,Version}]),
-  case Result of
-    ok ->
-      ejabberd_router:route(xmpp:make_iq_result(IQ));
-    no_message ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_item_not_found()));
-    _ ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
-  end;
+  #xabber_retract_message{symmetric = true} = Retract]} = IQ) ->
+  R = case mod_groups_retract:retract_message(From, To, Retract) of
+        ok ->
+          xmpp:make_iq_result(IQ);
+        {error, not_found} ->
+          xmpp:make_error(IQ, xmpp:err_item_not_found());
+        {error, not_allowed} ->
+          xmpp:make_error(IQ, xmpp:err_not_allowed());
+        _ ->
+          xmpp:make_error(IQ, xmpp:err_internal_server_error())
+      end,
+  ejabberd_router:route(R),
+  ignore;
 process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
-  #xabber_retract_user{symmetric = true, id = ID}]} = IQ) ->
-  User = jid:to_string(jid:remove_resource(From)),
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Server = To#jid.lserver,
-  Version = mod_groups_retract:get_version(Server,Chat) + 1,
-  Retract = #xabber_retract_user{
-    id = ID,
-    symmetric = true,
-    conversation = jid:remove_resource(To),
-    type = ?NS_GROUPCHAT,
-    by = jid:remove_resource(From),
-    version = Version,
-    xmlns = ?NS_XABBER_REWRITE_NOTIFY
-  },
-  Result = ejabberd_hooks:run_fold(retract_user, Server, [], [{Server,User,Chat,ID,Retract,Version}]),
-  case Result of
-    ok ->
-      ejabberd_router:route(xmpp:make_iq_result(IQ));
-    no_user ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_item_not_found()));
-    _ ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
-  end;
+  #xabber_retract_user{symmetric = true} = Retract]} = IQ) ->
+  R = case mod_groups_retract:retract_user_messages(From, To, Retract) of
+        ok ->
+          xmpp:make_iq_result(IQ);
+        _ ->
+          xmpp:make_error(IQ, xmpp:err_not_allowed())
+      end,
+  ejabberd_router:route(R),
+  ignore;
 process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
   #xabber_retract_all{symmetric = true}]} = IQ) ->
-  User = jid:to_string(jid:remove_resource(From)),
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Server = To#jid.lserver,
-  Version = mod_groups_retract:get_version(Server,Chat) + 1,
-  Retract = #xabber_retract_all{
-    symmetric = true,
-    conversation = jid:remove_resource(To),
-    type = ?NS_GROUPCHAT,
-    version = Version,
-    xmlns = ?NS_XABBER_REWRITE_NOTIFY
-  },
-  Result = ejabberd_hooks:run_fold(retract_all, Server, [], [{Server,User,Chat,<<"0000">>,Retract,Version}]),
-  case Result of
-    ok ->
-      ejabberd_router:route(xmpp:make_iq_result(IQ));
-    _ ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
-  end;
+  R = case mod_groups_retract:retract_all_messages(From, To) of
+        ok ->
+          xmpp:make_iq_result(IQ);
+        _ ->
+          xmpp:make_error(IQ, xmpp:err_not_allowed())
+  end,
+  ejabberd_router:route(R),
+  ignore;
 process_groupchat_iq(#iq{from = From, to = To, type = set, sub_els = [
-  #xabber_replace{id = ID, xabber_replace_message = XRM}]}=IQ) ->
-  #xabber_replace_message{body = Text, sub_els = SubEls} = XRM,
-  User = jid:to_string(jid:remove_resource(From)),
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Server = To#jid.lserver,
-  Version = mod_groups_retract:get_version(Server,Chat) + 1,
-  NewEls = filter_from_server_stanzas(SubEls),
-  Replaced = #replaced{stamp = erlang:timestamp()},
-  StanzaID = #stanza_id{id = ID, by = jid:remove_resource(To)},
-  NewMessage = #xabber_replace_message{replaced = Replaced, stanza_id = StanzaID, body = Text, sub_els = NewEls},
-  Replace = #xabber_replace{
-    xabber_replace_message = NewMessage,
-    id = ID,
-    version = Version,
-    conversation = jid:remove_resource(To),
-    type = ?NS_GROUPCHAT,
-    xmlns = ?NS_XABBER_REWRITE_NOTIFY
-  },
-  Result = ejabberd_hooks:run_fold(replace_message, Server, [], [{Server,User,Chat,ID,Text,Replace,Version}]),
-  case Result of
-    ok ->
-      xmpp:make_iq_result(IQ);
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_not_allowed())
-  end;
-process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS}]} = IQ) ->
+  #xabber_replace{} = Replace]}=IQ) ->
+  R = case mod_groups_retract:rewrite_message(From, To, Replace) of
+        ok ->
+          xmpp:make_iq_result(IQ);
+        _ ->
+          xmpp:make_error(IQ, xmpp:err_not_allowed())
+      end,
+  ejabberd_router:route(R),
+  ignore;
+process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS}]} = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
-  Result = ejabberd_hooks:run_fold(groupchat_default_rights_form, Server, [], [User,Chat,Server,Lang]),
+  Result = ejabberd_hooks:run_fold(groupchat_default_rights_form, Server, [],
+    [User,Chat,Server,Lang]),
   case Result of
     {ok, Query} ->
       ejabberd_router:route(xmpp:make_iq_result(IQ, Query));
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;
-process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS, sub_els = [#xdata{type = submit, fields = FS}]}]} = IQ) ->
+process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS,
+    sub_els = [#xdata{type = submit, fields = FS}]}]} = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
-  Result = ejabberd_hooks:run_fold(set_groupchat_default_rights, Server, FS, [User,Chat,Server,Lang]),
+  Result = ejabberd_hooks:run_fold(set_groupchat_default_rights, Server, FS,
+    [User,Chat,Server,Lang]),
   case Result of
     {ok, Query} ->
       ejabberd_router:route(xmpp:make_iq_result(IQ, Query));
@@ -645,20 +618,24 @@ process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els 
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
   end;
-process_groupchat_iq(#iq{type = get, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS}]} = IQ) ->
+process_groupchat_iq(#iq{type = get, from = From, to = To,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS}]} = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
   Result = ejabberd_hooks:run_fold(group_status_info, Server, [], [User,Chat,Server]),
   case Result of
     {ok, Form} ->
-      ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS, sub_els = [Form]}));
+      ejabberd_router:route(xmpp:make_iq_result(IQ,
+        #xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS, sub_els = [Form]}));
     {error, Err} ->
       ejabberd_router:route(xmpp:make_error(IQ, Err));
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()))
   end;
-process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS, sub_els = [#xdata{type = submit, fields = FSRaw}]}]} = IQ) ->
+process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS,
+    sub_els = [#xdata{type = submit, fields = FSRaw}]}]} = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
@@ -669,8 +646,10 @@ process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els 
       Result = ejabberd_hooks:run_fold(group_status_change, Server, [], [User,Chat,Server,FS]),
       case Result of
         {ok, Form, Status} ->
-          ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User, [{status_changed, true}], Status]),
-          ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS, sub_els = [Form]}));
+          ejabberd_hooks:run(groupchat_properties_changed,Server,[Server, Chat, User,
+            [{status_changed, true}], Status]),
+          ejabberd_router:route(xmpp:make_iq_result(IQ,
+            #xabbergroupchat{xmlns = ?NS_GROUPCHAT_STATUS, sub_els = [Form]}));
         {error, Err} ->
           ejabberd_router:route(xmpp:make_error(IQ, Err));
         _ ->
@@ -681,20 +660,24 @@ process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To, sub_els 
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()))
   end;
-process_groupchat_iq(#iq{type = get, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT}]} = IQ) ->
+process_groupchat_iq(#iq{type = get, from = From, to = To,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT}]} = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
   Result = ejabberd_hooks:run_fold(groupchat_info, Server, [], [User,Chat,Server]),
   case Result of
     {ok, Form} ->
-      ejabberd_router:route(xmpp:make_iq_result(IQ, #xabbergroupchat{xmlns = ?NS_GROUPCHAT, sub_els = [Form]}));
+      ejabberd_router:route(xmpp:make_iq_result(IQ,
+        #xabbergroupchat{xmlns = ?NS_GROUPCHAT, sub_els = [Form]}));
     {error, Err} ->
       ejabberd_router:route(xmpp:make_error(IQ, Err));
     _ ->
       ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request()))
   end;
-process_groupchat_iq(#iq{type = set, from = From, to = To, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT, sub_els = [#xdata{type = submit, fields = FS}]}]} = IQ) ->
+process_groupchat_iq(#iq{type = set, from = From, to = To,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT,
+    sub_els = [#xdata{type = submit, fields = FS}]}]} = IQ) ->
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
@@ -728,33 +711,6 @@ process_groupchat_iq(#iq{type = error} = IQ) ->
   ?DEBUG("Drop error iq ~p", [IQ]);
 process_groupchat_iq(IQ) ->
   ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request())).
-
-filter_from_server_stanzas(Els) ->
-  NewEls = lists:filter(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
-      (Name == <<"time">> andalso NS == ?NS_UNIQUE);
-      (Name == <<"origin-id">> andalso NS == ?NS_SID_0);
-      (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
-        try xmpp:decode(El) of
-          #mam_archived{} ->
-            false;
-          #unique_time{} ->
-            false;
-          #origin_id{} ->
-            false;
-          #stanza_id{} ->
-            false
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els),
-  NewEls.
 
 -spec disco_sm_features({error, stanza_error()} | {result, [binary()]} | empty,
                                              jid(), jid(), binary(), binary()) ->

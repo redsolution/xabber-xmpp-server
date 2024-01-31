@@ -45,7 +45,8 @@
 
 -export([
   delete_message/3,
-  get_version/2
+  get_version/2,
+  filter_new_els/1
 ]).
 
 -include("ejabberd.hrl").
@@ -210,12 +211,12 @@ unregister_iq_handlers(Host) ->
   gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_REWRITE).
 
 pre_process_iq(#iq{to = To} = IQ) ->
-  LUser = To#jid.luser,
-  LServer = To#jid.lserver,
-  case mod_xabber_entity:get_entity_type(LUser,LServer) of
+  {PUser, PServer, _} = jid:tolower(To),
+  case mod_xabber_entity:get_entity_type(PUser, PServer) of
     group -> mod_groups_iq_handler:make_action(IQ);
     channel -> mod_channels_iq_handler:process_iq(IQ);
-    _ -> process_iq(IQ)
+    _ ->
+      process_iq(IQ)
   end.
 
 -spec process_iq(iq()) -> iq().
@@ -223,44 +224,39 @@ process_iq(#iq{type = set, lang = Lang, sub_els = [#xabber_retract_query{}]} = I
   Txt = <<"Value 'set' of 'type' attribute is not allowed">>,
   xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
 %% Query the current version
-process_iq(#iq{from = From, type = get, sub_els = [#xabber_retract_query{version = undefined}]} = IQ) ->
-  {LUser, LServer, _LResource} = jid:tolower(From),
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
+  to = #jid{luser = LUser, lserver = LServer}, type = get,
+  sub_els = [#xabber_retract_query{version = undefined}]} = IQ) ->
   Version = get_version(LServer, LUser),
   xmpp:make_iq_result(IQ, #xabber_retract_query{version = Version});
-process_iq(#iq{from = From, type = get, sub_els = [
-  #xabber_retract_query{version = Version, 'less-than' = Less0}]} = IQ) ->
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer} = From,
+  to = #jid{luser = LUser, lserver = LServer}, type = get,
+  sub_els = [#xabber_retract_query{version = Ver, 'less-than' = Less0}]} = IQ) ->
   Less = if
            Less0 > 50 orelse Less0 == undefined -> 50;
            true -> Less0
          end,
-  {LUser, LServer, _LResource} = jid:tolower(From),
-  ChatList = get_count_events(LServer, LUser, Version),
-  send_retract_query_messages(From, Version, Less, ChatList),
+  ChatList = get_count_events(LServer, LUser, Ver),
+  send_retract_query_messages(From, Ver, Less, ChatList),
   LastVersion = get_version(LServer, LUser),
   xmpp:make_iq_result(IQ, #xabber_retract_query{version = LastVersion});
 process_iq(#iq{type = set, sub_els = [#xabber_retract_message{id = undefined}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{type = set, sub_els = [#xabber_retract_message{type = <<>>}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
-process_iq(#iq{from = From, to = To, type = set, sub_els = [
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
+  to = #jid{luser = LUser, lserver = LServer}, type = set, sub_els = [
   #xabber_retract_message{symmetric = false, id = StanzaID, type = CType}]} = IQ) ->
-  case jid:remove_resource(From) of
-    To ->
-      LUser = To#jid.luser,
-      LServer = To#jid.lserver,
-      case get_bare_peer(LServer,LUser,StanzaID) of
-        not_found ->
-          xmpp:make_error(IQ, xmpp:err_item_not_found());
-        PeerS ->
-          PeerJID = jid:from_string(PeerS),
-          Version = get_version(LServer, LUser) + 1,
-          Retract = #xabber_retract_message{id = StanzaID, conversation = PeerJID,
-            symmetric = false, version = Version, type = check_type(CType),
-            xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-          start_retract_message(LUser, LServer, StanzaID, IQ, Retract, Version)
-      end;
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_not_allowed())
+  case get_bare_peer(LServer,LUser,StanzaID) of
+    not_found ->
+      xmpp:make_error(IQ, xmpp:err_item_not_found());
+    PeerS ->
+      PeerJID = jid:from_string(PeerS),
+      Version = get_version(LServer, LUser) + 1,
+      Retract = #xabber_retract_message{id = StanzaID, conversation = PeerJID,
+        symmetric = false, version = Version, type = check_type(CType),
+        xmlns = ?NS_XABBER_REWRITE_NOTIFY},
+      start_retract_message(LUser, LServer, StanzaID, IQ, Retract, Version)
   end;
 process_iq(#iq{from = From, to = To, type = set, sub_els = [
   #xabber_retract_message{symmetric = true, id = StanzaID, type = CTRaw}]} = IQ) ->
@@ -315,20 +311,14 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [
   end;
 process_iq(#iq{type = set, sub_els = [#xabber_retract_all{ type = <<>>}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
-process_iq(#iq{from = From, to = To, type = set, sub_els = [
-  #xabber_retract_all{conversation = RetractUserJID, symmetric = false, type = CType}]} = IQ) ->
-  case (jid:remove_resource(To) == jid:remove_resource(From)) of
-    true ->
-      LServer = From#jid.lserver,
-      LUser = From#jid.luser,
-      Version = get_version(LServer,LUser) + 1,
-      NewRetractAsk = #xabber_retract_all{type = check_type(CType),
-        conversation = RetractUserJID,
-        version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-      start_retract_all_message(LUser, LServer, IQ, NewRetractAsk, Version);
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_bad_request())
-  end;
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
+  to = #jid{luser = LUser, lserver = LServer}, type = set, sub_els = [
+  #xabber_retract_all{conversation = Conv, symmetric = false, type = CType}]} = IQ) ->
+  Version = get_version(LServer,LUser) + 1,
+  NewRetractAsk = #xabber_retract_all{type = check_type(CType),
+    conversation = Conv,
+    version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
+  start_retract_all_message(LUser, LServer, IQ, NewRetractAsk, Version);
 process_iq(#iq{type = set,sub_els = [#xabber_replace{id = undefined}]} = IQ)->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{type = set,sub_els = [#xabber_replace{type = <<>>}]} = IQ)->

@@ -176,15 +176,8 @@ process(Path, #request{method = Method, data = Data, q = Q, headers = Headers} =
     Auth when is_map(Auth) ->
       {User, Server, <<"">>} = maps:get(usr, Auth),
       Result = case get_permissions(User, Server) of
-                 {error, notfound} ->
-                   case Path of
-                     [<<"issue_token">>] ->
-                       handle_request(Method, Path, Req, {}, User, Server);
-                     _ ->
-                       forbidden_response()
-                   end;
-                 {error, _} ->
-                   {500, <<>>};
+                 {error, notfound} -> forbidden_response();
+                 {error, _} -> {500, <<>>};
                  Perms ->
                    handle_request(Method, Path, Req, Perms, User, Server)
       end,
@@ -311,12 +304,7 @@ handle_request('DELETE',[<<"groups">>], #request{data = Data},
   check_and_run(Adm, Server, Args , fun remove_group/1);
 handle_request('GET',[<<"groups">>], #request{q = Q},
     {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r->
-  ArgsHost = check_args(Q, [host]),
-  Args = case check_args(Q, [limit, page]) of
-           error -> ArgsHost;
-           Args1 when ArgsHost =/= error-> ArgsHost ++ Args1;
-           _ -> error
-         end,
+  Args = check_args(Q, [host]),
   check_and_run(Adm, Server, Args , fun get_groups/1);
 handle_request('GET',[<<"groups">>,<<"count">>], #request{q = Q},
     {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r->
@@ -338,7 +326,7 @@ handle_request(_,[<<"vcard">>], _, _, _, _) ->
   forbidden_response();
 handle_request('POST',[<<"circles">>], #request{data = Data},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [circle, host, name, description, display]),
+  Args = extract_args(Data, [circle, host]),
   check_and_run(Adm, Server, Args, fun add_circle/1);
 handle_request('DELETE',[<<"circles">>], #request{data = Data},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
@@ -441,34 +429,30 @@ json_error(HTTPCode, JSONCode, Message) ->
       {<<"message">>, Message}]})
   }.
 
-delete_undefined(PList) ->
-  lists:filter(fun({_K, V})->
-    case V of
-      undefined -> false;
-      _ -> true
-    end end, PList).
-
 decode_json(Data) ->
-  try
-    case jiffy:decode(Data) of
-      List when is_list(List) -> List;
-      {List} when is_list(List) -> List;
-      Other -> [Other]
-    end
-  catch
-    _:_  -> error
-  end.
+  PL = try
+         case jiffy:decode(Data) of
+           List when is_list(List) -> List;
+           {List} when is_list(List) -> List;
+           Other -> [Other]
+         end
+      catch _:_  -> []
+      end,
+  lists:map(fun({K, null}) -> {K, <<>>};
+    (V) -> V end, PL).
 
-check_args(Args, Keys) ->
-  Len = length(Keys),
-  PL = lists:map(fun(Key) ->
-    Value = proplists:get_value(atom_to_binary(Key,latin1), Args, undefined),
-    {Key, Value}
-                 end, Keys),
-  Result  = delete_undefined(PL),
-  case length(Result) of
-    Len ->
-      Result;
+check_args(ArgsRaw, RequiredKeys) ->
+  Args = lists:map(
+    fun({K, V}) ->
+      {binary_to_atom(K, latin1), V}
+    end, ArgsRaw
+  ),
+  ExistingKeys = lists:filter(
+    fun(Key) ->
+      lists:keymember(Key, 1, Args)
+    end, RequiredKeys),
+  case RequiredKeys of
+    ExistingKeys -> Args;
     _ -> error
   end.
 
@@ -476,7 +460,7 @@ extract_args(<<>>, _Keys) ->
   error;
 extract_args(Data, Keys) ->
   case decode_json(Data) of
-    error ->
+    [] ->
       error;
     Args ->
       check_args(Args, Keys)
@@ -490,7 +474,7 @@ check_and_run(true, _UserHost, Args, Fun)->
     Result -> Result
   end;
 check_and_run(_IsAdmin, UserHost, Args, Fun) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   if
     Host == UserHost ->
       Fun(Args);
@@ -500,19 +484,17 @@ check_and_run(_IsAdmin, UserHost, Args, Fun) ->
 
 check_host(undefined)->
   badrequest_response();
-check_host(Host) when is_binary(Host)->
-  JID = try
-          jid:from_string(Host)
-        catch
-           _:_  -> undefined
-        end,
-  check_host(JID);
-check_host(#jid{lserver = LServer}) ->
-  case lists:member(LServer, ejabberd_config:get_myhosts()) of
-    true ->
-      {ok, LServer};
-    _ ->
-      {404,<<"Unknown Host">>}
+check_host(Host) ->
+  case jid:nameprep(Host) of
+    error ->
+      badrequest_response();
+    LServer ->
+      case lists:member(LServer, ejabberd_config:get_myhosts()) of
+        true ->
+          {ok, LServer};
+        _ ->
+          {404,<<"Unknown Host">>}
+      end
   end.
 
 check_user(User, Host) when User == undefined orelse Host == undefined ->
@@ -566,16 +548,10 @@ parse_permissions(Perms) ->
 
 %% Commands
 issue_token(User, Server, TTL) ->
-  case oauth2:authorize_password({User, Server},  [<<"sasl_auth">>], admin_generated) of
-    {ok, {_Ctx,Authorization}} ->
-      {ok, {_AppCtx2, Response}} = oauth2:issue_token(Authorization, [{expiry_time, TTL}]),
-      {ok, AccessToken} = oauth2_response:access_token(Response),
-      Expires = seconds_since_epoch(TTL),
-      sql_save_token(User, Server, AccessToken, Expires),
-      {201, {[{token, AccessToken},{expires_in, TTL}]}};
-    {error, _Error} ->
-      badrequest_response()
-  end.
+  AccessToken = oauth2_token:generate(32),
+  Expires = seconds_since_epoch(TTL),
+  sql_save_token(User, Server, AccessToken, Expires),
+  {201, {[{token, AccessToken},{expires_in, TTL}]}}.
 
 revoke_token(User, Server, Token) ->
   sql_remove_token(Server, User, Token),
@@ -602,8 +578,8 @@ set_admin(Args) ->
   end.
 
 set_admin(Username, Host) ->
-  Username = jid:nameprep(Username),
-  Host = jid:nodeprep(Host),
+  Username = jid:nodeprep(Username),
+  Host = jid:nameprep(Host),
   sql_set_permissions(Username, Host, true, <<>>).
 
 remove_admin(Args) ->
@@ -614,7 +590,7 @@ remove_admin(Args) ->
   end.
 
 get_reg_keys(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   Keys = mod_registration_keys:get_keys(Host),
   case mod_registration_keys:get_keys(Host) of
     error ->
@@ -625,7 +601,7 @@ get_reg_keys(Args) ->
   end.
 
 make_reg_key(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   Expire = case proplists:get_value(expire,Args) of
              V when is_integer(V) -> V;
              V -> binary_to_integer(V)
@@ -639,7 +615,7 @@ make_reg_key(Args) ->
   end.
 
 update_reg_key(Key, Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   Expire = case proplists:get_value(expire,Args) of
              V when is_integer(V) -> V;
              V -> binary_to_integer(V)
@@ -655,7 +631,7 @@ update_reg_key(Key, Args) ->
   end.
 
 remove_reg_key(Key, Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   mod_registration_keys:remove_key(Host,Key),
   {200, <<>>}.
 
@@ -765,13 +741,13 @@ sql_unban_user(Username, Host) ->
     "where username=%(Username)s and %(Host)H")).
 
 get_users(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
-  Users = lists:sort(get_users(Host, [])),
-  Result = {[{users, lists:map(fun({U,_S, B}) -> {[{username,U},{backend,B}]} end, Users)}]},
-  {200, Result}.
+  Host = extract_host(Args),
+  Users1 = lists:sort(get_users(Host, [])),
+  Users2 = [{[{username,U},{backend,B}]} || {U,_S, B} <- Users1],
+  {200, {[{users, Users2}]}}.
 
 get_users_count(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   Count = length(get_users(Host, [])),
   {200, {[{count, Count}]}}.
 
@@ -803,21 +779,22 @@ auth_modules(Server) ->
     || M <- Methods].
 
 get_online_count(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
-  Count = length(lists:usort([U || {U, _H, _R} <- ejabberd_sm:get_vh_session_list(Host)])),
+  Host = extract_host(Args),
+  Count = length(lists:usort(
+    [U || {U, _H, _R} <- ejabberd_sm:get_vh_session_list(Host)])),
   {200, {[{count, Count}]}}.
 
 add_group(Args) ->
   Owner = proplists:get_value(owner,Args),
-  LocalPart = jid:nameprep(proplists:get_value(localpart,Args)),
-  GroupHost = jid:nodeprep(proplists:get_value(host,Args)),
+  LocalPart = jid:nodeprep(proplists:get_value(localpart,Args)),
+  GroupHost = extract_host(Args),
   GroupName = proplists:get_value(name,Args),
   Privacy = proplists:get_value(privacy,Args),
   Index = proplists:get_value(index,Args),
   Membership = proplists:get_value(membership,Args),
   ChPrivacy = lists:member(Privacy,[<<"public">>, <<"incognito">>]),
   ChIndex = lists:member(Index,[<<"none">>, <<"local">>, <<"global">>]),
-  ChMembership = lists:member(Index,[<<"none">>, <<"local">>, <<"global">>]),
+  ChMembership = lists:member(Index,[<<"open">>, <<"member-only">>]),
   if
     ChPrivacy andalso ChIndex andalso ChMembership ->
       add_group(Owner, LocalPart,
@@ -862,8 +839,8 @@ add_group(GroupHost, OwnerUsername, OwnerDomain, GroupName,
   end.
 
 remove_group(Args) ->
-  LUser = jid:nameprep(proplists:get_value(localpart,Args)),
-  LServer = jid:nodeprep(proplists:get_value(host,Args)),
+  LUser = jid:nodeprep(proplists:get_value(localpart,Args)),
+  LServer = extract_host(Args),
   JID = jid:make(LUser, LServer),
   case mod_xabber_entity:is_group(LUser, LServer) of
     true ->
@@ -874,7 +851,7 @@ remove_group(Args) ->
   end.
 
 get_groups(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   Limit = binary_to_integer(proplists:get_value(limit, Args, <<"250">>)),
   Page = binary_to_integer(proplists:get_value(page, Args, <<"1">>)),
   Groups = mod_groups_chats:get_all_info(Host, Limit, Page),
@@ -883,7 +860,7 @@ get_groups(Args) ->
   {200, {[{groups,GroupArray}]}}.
 
 get_groups_count(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   Count = mod_groups_chats:get_count_chats(Host),
   {200, {[{count, Count}]}}.
 
@@ -918,22 +895,29 @@ get_vcard(Args) ->
 
 add_circle(Args)->
   Circle = jid:nameprep(proplists:get_value(circle,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
-  Display = case proplists:get_value(display,Args) of
+  Host = jid:nameprep(proplists:get_value(host, Args)),
+  OldDisplay = proplists:get_value(display, Args, []),
+  Display = case proplists:get_value(displayed_groups, Args) of
               L when is_list(L) -> L;
-              _ -> []
+              _ -> OldDisplay
             end,
-  Opts = [proplists:lookup(name,Args),
-    proplists:lookup(description,Args ),
-    {displayed_groups, Display}],
+  AllUsers = case proplists:get_value(all_users, Args, false) of
+               true ->
+                 [{all_users, true}];
+               _ -> []
+             end,
+  Opts = [
+    {name, proplists:get_value(name, Args, Circle)},
+    {description, proplists:get_value(description, Args, <<>>)},
+    {displayed_groups, Display}] ++ AllUsers,
   case mod_shared_roster:create_group(Host, Circle, Opts) of
     {atomic, _} -> {200, <<>>};
     _ -> badrequest_response()
   end.
 
 remove_circle(Args) ->
-  Circle = jid:nameprep(proplists:get_value(circle,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Circle = jid:nodeprep(proplists:get_value(circle,Args)),
+  Host = extract_host(Args),
   mod_shared_roster:delete_group(Host, Circle),
   {200, <<>>}.
 
@@ -944,8 +928,8 @@ circle_remove_members(Args)->
   circle_change_members(remove, Args).
 
 circle_change_members(Action, Args)->
-  Circle = jid:nameprep(proplists:get_value(circle,Args)),
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Circle = jid:nodeprep(proplists:get_value(circle,Args)),
+  Host = extract_host(Args),
   Members =  proplists:get_value(members,Args),
   if
     is_list(Members) ->
@@ -967,13 +951,13 @@ circle_change_members(Action, Args)->
   end.
 
 get_circles(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   Circles = lists:sort(mod_shared_roster:list_groups(Host)),
   Result = {[{circles, Circles}]},
   {200, Result}.
 
 get_circle_info(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   Circle = jid:nodeprep(proplists:get_value(circle,Args)),
   case mod_shared_roster:get_group_opts(Host,Circle) of
     Os when is_list(Os) -> {200, {Os}};
@@ -981,7 +965,7 @@ get_circle_info(Args) ->
   end.
 
 get_circle_members(Args) ->
-  Host = jid:nodeprep(proplists:get_value(host,Args)),
+  Host = extract_host(Args),
   Circle = jid:nodeprep(proplists:get_value(circle,Args)),
   Members = mod_shared_roster:get_group_explicit_users(Host,Circle),
   Members2 = [jid:encode(jid:make(MUser, MServer)) || {MUser, MServer} <- Members],
@@ -1017,9 +1001,12 @@ check_token_old(Token) ->
   end.
 
 extract_user_host(PropList)->
-  Username = jid:nameprep(proplists:get_value(username,PropList)),
-  Host = jid:nodeprep(proplists:get_value(host,PropList)),
+  Username = jid:nodeprep(proplists:get_value(username,PropList)),
+  Host = jid:nameprep(proplists:get_value(host,PropList)),
   {Username, Host}.
+
+extract_host(PropList) ->
+  jid:nameprep(proplists:get_value(host,PropList)).
 
 -spec seconds_since_epoch(integer()) -> non_neg_integer().
 seconds_since_epoch(Diff) ->

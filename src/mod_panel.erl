@@ -794,7 +794,7 @@ add_group(Args) ->
   Membership = proplists:get_value(membership,Args),
   ChPrivacy = lists:member(Privacy,[<<"public">>, <<"incognito">>]),
   ChIndex = lists:member(Index,[<<"none">>, <<"local">>, <<"global">>]),
-  ChMembership = lists:member(Index,[<<"open">>, <<"member-only">>]),
+  ChMembership = lists:member(Membership,[<<"open">>, <<"member-only">>]),
   if
     ChPrivacy andalso ChIndex andalso ChMembership ->
       add_group(Owner, LocalPart,

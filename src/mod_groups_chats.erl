@@ -149,9 +149,12 @@ create_chat(_Acc, Server, CreatorLUser, CreatorLServer, SubEls)->
   Creator = jid:to_string(jid:make(CreatorLUser,CreatorLServer)),
   case create_chat(Server, Creator, SubEls) of
     exist -> {stop, exist};
+    error -> {stop, error};
     R -> R
   end.
 
+create_chat(Server, <<>>, SubEls) ->
+  error;
 create_chat(Server, Creator, SubEls) ->
   LocalPart = case get_value(xabbergroupchat_localpart,SubEls) of
                 undefined -> create_localpart();

@@ -785,8 +785,8 @@ get_online_count(Args) ->
   {200, {[{count, Count}]}}.
 
 add_group(Args) ->
-  Owner = proplists:get_value(owner,Args),
-  LocalPart = jid:nodeprep(proplists:get_value(localpart,Args)),
+  Owner = proplists:get_value(owner,Args, false),
+  LocalPart = jid:nodeprep(proplists:get_value(localpart,Args, false)),
   GroupHost = extract_host(Args),
   GroupName = proplists:get_value(name,Args),
   Privacy = proplists:get_value(privacy,Args),
@@ -795,12 +795,14 @@ add_group(Args) ->
   ChPrivacy = lists:member(Privacy,[<<"public">>, <<"incognito">>]),
   ChIndex = lists:member(Index,[<<"none">>, <<"local">>, <<"global">>]),
   ChMembership = lists:member(Membership,[<<"open">>, <<"member-only">>]),
+  AnyErrors = lists:member(false,[Owner, LocalPart, ChPrivacy,
+    ChIndex, ChMembership]),
   if
-    ChPrivacy andalso ChIndex andalso ChMembership ->
-      add_group(Owner, LocalPart,
-        GroupHost, GroupName, Privacy, Index, Membership);
+    AnyErrors ->
+      badrequest_response();
     true ->
-      badrequest_response()
+      add_group(Owner, LocalPart,
+        GroupHost, GroupName, Privacy, Index, Membership)
   end.
 
 add_group(Owner, LocalPart,GroupHost, GroupName,
@@ -824,7 +826,7 @@ add_group(Owner, LocalPart,GroupHost, GroupName,
 add_group(GroupHost, OwnerUsername, OwnerDomain, GroupName,
     LocalPart, Privacy, Index, Membership) ->
   OwnerJID = jid:make(OwnerUsername, OwnerDomain),
-  case OwnerJID#jid.luser of
+  case jid:to_string(OwnerJID) of
     <<>> ->
       error;
     _ ->

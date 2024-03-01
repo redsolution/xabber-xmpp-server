@@ -106,7 +106,9 @@ sql_check_key(LServer, _Key)->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @('true')b from registration_keys"
-    " where key=%(_Key)s  and not removed and expire > %(_Now)d and %(LServer)H")) of
+    " where key=%(_Key)s  and not removed "
+    " and (expire > %(_Now)d or expire = 0) "
+    " and %(LServer)H")) of
     {selected, [{_}]} -> ok;
     _ -> {error, db_failure}
   end.

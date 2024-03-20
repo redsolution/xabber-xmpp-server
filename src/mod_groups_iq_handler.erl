@@ -754,17 +754,12 @@ process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
   SubElD = xmpp:decode(SubEl),
-  IQDecoded = #iq{from = To, lang = Lang, to = From, meta = Meta, sub_els = [SubElD], type = Type, id = Id},
-  Query = get_query(SubElD,Lang),
-  With = proplists:is_defined(with, Query),
+  IQDecoded = #iq{from = To, lang = Lang, to = From, meta = Meta,
+    sub_els = [SubElD], type = Type, id = Id},
   case mod_groups_users:check_if_exist(Server,Chat,User) of
-    true when With =/= false ->
-      WithValue = jid:to_string(proplists:get_value(with, Query)),
-      M1 = change_id_to_jid(SubElD,Server,Chat,WithValue),
-      IQDecoded2 = #iq{from = To, lang = Lang, to = From, meta = Meta, sub_els = [M1], type = Type, id = Id},
-      mod_mam:process_iq_v0_3(IQDecoded2);
-    true when With == false ->
-      mod_mam:process_iq_v0_3(IQDecoded);
+    true ->
+      NewSubEls = change_query(SubElD, Server, Chat, Lang),
+      mod_mam:process_iq_v0_3(IQDecoded#iq{sub_els = NewSubEls});
     _ ->
       GlobalIndexes = mod_groups:get_option(Server, global_indexs),
       IsIndexed =  case lists:member(User,GlobalIndexes) of
@@ -781,21 +776,25 @@ process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type
       end
   end.
 
-get_query(SubEl,Lang)->
-  case mod_mam:parse_query(SubEl, Lang) of
+change_query(QueryEl, Server, Chat, Lang) ->
+  case mod_mam:parse_query(QueryEl, Lang) of
     {ok, Query} ->
-      Query;
+      Q1 = replace_id_to_jid(Query, Server, Chat),
+      %% Messages in archive are stored with "urn:xabber:chat" type.
+      Q2 = lists:keydelete('conversation-type', 1, Q1),
+      Fields = mam_query:encode(Q2),
+      [QueryEl#mam_query{xdata =
+      #xdata{type = 'submit', fields = Fields}}];
     {error, _Err} ->
       []
   end.
 
-
-change_id_to_jid(Query,Server,Chat,ID) ->
-  JID = mod_groups_users:get_user_by_id(Server,Chat,ID),
-  OldXData = Query#mam_query.xdata,
-  NewFields = [
-    #xdata_field{type = 'hidden', var = <<"FORM_TYPE">>, values = [Query#mam_query.xmlns]},
-    #xdata_field{var = <<"with">>, values = [JID]}
-  ],
-  NewXData = OldXData#xdata{fields = NewFields},
-  Query#mam_query{xdata = NewXData}.
+replace_id_to_jid(Query, Server, Chat) ->
+  case lists:keyfind('with', 1, Query) of
+    {_, Value} ->
+      ID = jid:to_string(Value),
+      JS = mod_groups_users:get_user_by_id(Server, Chat , ID),
+      lists:keyreplace('with', 1, Query,
+        {'with', jid:from_string(JS)});
+    _ -> Query
+  end.

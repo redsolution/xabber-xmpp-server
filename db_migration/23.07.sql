@@ -6,6 +6,7 @@ CREATE TABLE message_retract(
     version bigint,
     conversation text not null,
     type text not null default 'urn:xabber:chat',
+    created bigint not null default ((date_part('epoch'::text, now()) * (1000000)::double precision))::bigint,
     CONSTRAINT uc_retract_message_versions UNIQUE (username,server_host,version)
     );
 ALTER TABLE conversation_metadata ALTER COLUMN type SET DEFAULT 'urn:xabber:chat';

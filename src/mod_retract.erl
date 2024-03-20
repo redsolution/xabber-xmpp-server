@@ -261,12 +261,11 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
 process_iq(#iq{from = From, to = To, type = set, sub_els = [
   #xabber_retract_message{symmetric = true, id = StanzaID, type = CTRaw}]} = IQ) ->
   CType = check_type(CTRaw),
-  LUser = To#jid.luser,
-  LServer = To#jid.lserver,
-  IsToMyself = (jid:remove_resource(To) == jid:remove_resource(From)),
-  if
-    From#jid.lresource == <<>> andalso From#jid.lserver =/= LServer ->
+  {LUser, LServer, _} = jid:tolower(To),
+  case jid:tolower(From) of
+    {_, S, <<>>} when S /= LServer ->
       BarePeer = jid:to_string(jid:remove_resource(From)),
+      Result =
       case get_our_stanza_id(LServer, LUser, BarePeer, StanzaID) of
         not_found ->
           ?DEBUG("Not found ~p ~p~n iq~p",[BarePeer,StanzaID,IQ]),
@@ -286,8 +285,14 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [
           ?DEBUG("Delete message ~p in chat ~p by ~p~n Retract ~p",
             [StanzaID,jid:to_string(To),BarePeer,OurRetractAsk]),
           start_retract_message(LUser, LServer, OurStanzaID, IQ, OurRetractAsk, Version)
+      end,
+      case ejabberd_router:is_my_host(S) of
+        true ->
+          check_iq({Result, #{lserver => S}}),
+          ignore;
+        _ -> Result
       end;
-    IsToMyself ->
+    {LUser, LServer, _} ->
       PeerString = get_bare_peer(LServer,LUser,StanzaID),
       case PeerString of
         not_found ->
@@ -332,6 +337,7 @@ process_iq(#iq{from = From,to = To, type = set, sub_els = [
     {_, S, <<>>} when S /= LServer ->
       %% S2S query
       BarePeer = jid:to_string(From),
+      Result =
       case get_our_stanza_id(LServer, LUser, BarePeer, StanzaID) of
         not_found ->
           ?DEBUG("Not found ~p ~p~n iq~p",[BarePeer,StanzaID,IQ]),
@@ -349,17 +355,22 @@ process_iq(#iq{from = From,to = To, type = set, sub_els = [
             id = OurStanzaID, version = Version,
             xabber_replace_message = NewMessage},
           start_rewrite_message(LUser, LServer, OurStanzaID, IQ, OurReplaceAsk, Version)
+      end,
+      case ejabberd_router:is_my_host(S) of
+        true ->
+          check_iq({Result, #{lserver => S}}),
+          ignore;
+        _ -> Result
       end;
     {LUser, LServer, _} ->
       %% C2S query
       PeerString = get_bare_peer(LServer, LUser, StanzaID),
       PeerJID = jid:from_string(PeerString),
-      {PUser, PServer, _} = jid:tolower(PeerJID),
-      case PServer of
-        LServer when LUser == PUser ->
-          %% replace saved(message to yourself) message
-          replace_saved_msg(LUser,LServer,StanzaID,Message,IQ);
-        LServer ->
+      case jid:tolower(PeerJID) of
+        {LUser, LServer, _} ->
+          %% replace message to yourself
+          replace_msg_to_yourself(LUser,LServer,StanzaID,Message,IQ);
+        {PUser, LServer, _} ->
           start_local_replace(LUser,PUser,LServer,StanzaID,Message,IQ, CType);
         _ ->
           IQS = xmpp:set_from_to(IQ,To,PeerJID),
@@ -413,7 +424,7 @@ start_local_replace(User1,User2,LServer,StanzaID,Message,IQ,Type) ->
       end
   end.
 
-replace_saved_msg(LUser, LServer, StanzaID, Message, IQ) ->
+replace_msg_to_yourself(LUser, LServer, StanzaID, Message, IQ) ->
   Version = get_version(LServer, LUser) + 1,
   Replaced = #replaced{stamp = erlang:timestamp()},
   NewMessage = Message#xabber_replace_message{replaced = Replaced},
@@ -733,6 +744,7 @@ get_version(Server, Username) ->
   end.
 
 insert_event(LServer,Username,Txt,Version, Conv, Type) ->
+  TimeStamp = misc:now_to_usec(erlang:now()),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL_INSERT(
@@ -742,7 +754,8 @@ insert_event(LServer,Username,Txt,Version, Conv, Type) ->
         "xml=%(Txt)s",
         "conversation=%(Conv)s",
         "type=%(Type)s",
-        "version=%(Version)d"
+        "version=%(Version)d",
+        "created=%(TimeStamp)d"
       ])).
 
 delete_message(LServer, LUser, StanzaID) ->

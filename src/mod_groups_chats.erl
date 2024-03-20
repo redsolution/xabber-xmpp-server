@@ -153,7 +153,7 @@ create_chat(_Acc, Server, CreatorLUser, CreatorLServer, SubEls)->
     R -> R
   end.
 
-create_chat(Server, <<>>, SubEls) ->
+create_chat(_Server, <<>>, _SubEls) ->
   error;
 create_chat(Server, Creator, SubEls) ->
   LocalPart = case get_value(xabbergroupchat_localpart,SubEls) of
@@ -523,57 +523,52 @@ get_all_groups_info(LServer) ->
     LServer,
     ?SQL("select @(localpart)s, @(name)s, @(anonymous)s, @(searchable)s, "
     " @(model)s, @(description)s, @(message)d, @(contacts)s, "
-    " @(domains)s, @(parent_chat)s,@(status)s, "
-    " @((select count(*) from groupchat_users where chatgroup = t.jid and subscription = 'both'))s"
+    " @(domains)s, @(parent_chat)s,@(status)s, @(owner)s, "
+    " @((select count(*) from groupchat_users "
+    " where chatgroup = t.jid and subscription = 'both'))s"
     " from groupchats t where %(LServer)H")) of
     {selected, List} ->
       lists:map(fun(Item)->
         {LocalPart, Name, Privacy, Index, Membership, Desc, Message,
-          Contacts, Domains, Parent, Status, Count} = Item,
+          Contacts, Domains, Parent, Status, Owner, Count} = Item,
         {{LocalPart, LServer, <<"Group">>},
           #{name => Name, description => Desc, privacy => Privacy,
             membership => Membership, index => Index,
             message => Message, contacts => Contacts,
-            domains => Domains, parent => Parent,
+            domains => Domains, parent => Parent, owner => Owner,
             gstatus => Status, user_count => Count}
         }
                 end, List);
     _ -> error
   end.
 %%
-get_all_info(LServer,Limit,Page) ->
-  Offset = case Page of
-             _  when Page > 0 ->
-               Limit * (Page - 1)
+get_all_info(LServer, Limit, Page) ->
+  LimitB = integer_to_binary(Limit),
+  Offset = if
+             Page > 0 ->
+               integer_to_binary(Limit * (Page - 1));
+             true -> <<"0">>
            end,
-  Query = case ejabberd_sql:use_new_schema() of
-            true ->
-              [<<"select localpart,owner,(select count(*)
-              from groupchat_users where chatgroup = t.jid
-              and subscription = 'both') as count, anonymous
-              from groupchats t
-              where t.parent_chat = '0' and server_host = '">>,LServer,<<"'
-              order by localpart limit ">>,
-                integer_to_binary(Limit),<<" offset ">>,integer_to_binary(Offset),<<";">>];
-            _ ->
-              [<<"select localpart,owner,(select count(*)
-               from groupchat_users where chatgroup = t.jid
-               and subscription = 'both') as count, anonymous
-               from groupchats t
-               where t.parent_chat = '0'
-               order by localpart limit ">>,
-                integer_to_binary(Limit),<<" offset ">>,integer_to_binary(Offset),<<";">>]
-          end,
-  ChatInfo = case ejabberd_sql:sql_query(
-    LServer, Query
-    ) of
-    {selected,_Tab, Chats} ->
-      Chats;
-    _ -> []
-  end,
+  LimitQ = <<" order by localpart limit ",LimitB/binary>>,
+  OffsetQ = <<" offset ",Offset/binary>>,
+  SHQ = case ejabberd_sql:use_new_schema() of
+          true ->
+            <<" and server_host = '",LServer/binary,"'">>;
+          _ -> <<>>
+         end,
+  Query = [<<"select localpart,name,owner,(select count(*)
+  from groupchat_users where chatgroup = t.jid
+  and subscription = 'both') as count, anonymous
+  from groupchats t where t.parent_chat = '0'">>,
+    SHQ, LimitQ, OffsetQ, <<";">>],
+  ChatInfo = case ejabberd_sql:sql_query(LServer, Query) of
+               {selected,_Tab, Chats} -> Chats;
+               _ -> []
+             end,
   lists:map(
-    fun([Name,Owner,Number,Privacy]) ->
-      {Name,Owner,binary_to_integer(Number),Privacy}
+    fun([LocalPart, Name, Owner, Number, Privacy]) ->
+      {LocalPart, LServer, Name, Owner,
+       Privacy, binary_to_integer(Number)}
     end, ChatInfo).
 
 get_count_chats(LServer) ->

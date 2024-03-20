@@ -797,7 +797,10 @@ add_group(Args) ->
   ChMembership = lists:member(Membership,[<<"open">>, <<"member-only">>]),
   AnyErrors = lists:member(false,[Owner, LocalPart, ChPrivacy,
     ChIndex, ChMembership]),
+  IsExist = mod_xabber_entity:is_exist_anywhere(LocalPart, GroupHost),
   if
+    IsExist ->
+      {409, <<"JID already exists">> };
     AnyErrors ->
       badrequest_response();
     true ->
@@ -854,11 +857,12 @@ remove_group(Args) ->
 
 get_groups(Args) ->
   Host = extract_host(Args),
-  Limit = binary_to_integer(proplists:get_value(limit, Args, <<"250">>)),
-  Page = binary_to_integer(proplists:get_value(page, Args, <<"1">>)),
-  Groups = mod_groups_chats:get_all_info(Host, Limit, Page),
-  GroupArray = lists:map(fun({Name, Owner, Num, Privacy}) ->
-    {[{name,Name}, {owner,Owner}, {size,Num}, {privacy,Privacy}]} end, Groups),
+%%  Limit = binary_to_integer(proplists:get_value(limit, Args, <<"250">>)),
+%%  Page = binary_to_integer(proplists:get_value(page, Args, <<"1">>)),
+  Groups = mod_groups_chats:get_all_groups_info(Host),
+  GroupArray = lists:map(fun({{LocalPart, LServer, _}, InfoMap}) ->
+    InfoMap1 = InfoMap#{localpart => LocalPart, host => LServer},
+    {maps:to_list(InfoMap1)} end, Groups),
   {200, {[{groups,GroupArray}]}}.
 
 get_groups_count(Args) ->

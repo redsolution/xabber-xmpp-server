@@ -109,15 +109,11 @@ get_user_and_bare_peer({LUser, LHost}, Type, Peer) ->
 		   jid:remove_resource(Peer))),
     {SUser, BarePeer}.
 
-store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS) ->
+store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, ConvType, TS) ->
     {SUser, BarePeer} = get_user_and_bare_peer(
             {LUser, LHost}, Type, Peer),
     LPeer = jid:encode(
 	      jid:tolower(Peer)),
-    ConvType = case get_encrypted_type(Pkt) of
-                 false -> ?NS_XABBER_CHAT;
-                 V -> V
-               end,
     Tags = get_message_tags(Pkt),
     XML = fxml:element_to_binary(Pkt),
     Body = fxml:get_subtag_cdata(Pkt, <<"body">>),
@@ -153,40 +149,6 @@ is_encrypted(LServer, StanzaID) ->
     _ ->
       false
   end.
-
-get_encrypted_type({error, _}) ->
-  false;
-get_encrypted_type(Pkt) ->
-  find_encryption(xmpp:get_els(Pkt)).
-
-find_encryption(Els) ->
-  R = lists:foldl(fun(El, Acc0) ->
-    Name = xmpp:get_name(El),
-    NS = xmpp:get_ns(El),
-    case {Name, NS} of
-      {<<"encryption">>, <<"urn:xmpp:eme:0">>} ->
-        xmpp_codec:get_attr(<<"namespace">>,
-          El#xmlel.attrs, false);
-      _ ->
-        Acc0
-    end
-                  end, false, Els),
-  case R of
-    false -> find_encryption_fallback(Els);
-    _ -> R
-  end.
-
-find_encryption_fallback(Els) ->
-  SPACES = [<<"urn:xmpp:otr:0">>, <<"jabber:x:encrypted">>,
-    <<"urn:xmpp:openpgp:0">>, <<"eu.siacs.conversations.axolotl">>,
-    <<"urn:xmpp:omemo:1">>, <<"urn:xmpp:omemo:2">>],
-  lists:foldl(fun(El, Acc0) ->
-    NS = xmpp:get_ns(El),
-    case lists:member(NS, SPACES) of
-      true -> NS;
-      false -> Acc0
-    end
-              end, false, Els).
 
 get_all_references(Pkt) ->
   Els = xmpp:get_els(Pkt),

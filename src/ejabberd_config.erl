@@ -75,6 +75,8 @@ start() ->
 		  [named_table, public, {read_concurrency, true}]),
     catch ets:new(ejabberd_db_modules,
 		  [named_table, public, {read_concurrency, true}]),
+    catch ets:new(server_components,
+		  [named_table, public, {read_concurrency, true}]),
     State1 = load_file(ConfigFile),
     UnixTime = p1_time_compat:system_time(seconds),
     SharedKey = case erlang:get_cookie() of
@@ -110,6 +112,8 @@ start(Hosts, Opts) ->
     catch ets:new(ejabberd_options,
 		  [named_table, public, {read_concurrency, true}]),
     catch ets:new(ejabberd_db_modules,
+		  [named_table, public, {read_concurrency, true}]),
+    catch ets:new(server_components,
 		  [named_table, public, {read_concurrency, true}]),
     UnixTime = p1_time_compat:system_time(seconds),
     SharedKey = case erlang:get_cookie() of

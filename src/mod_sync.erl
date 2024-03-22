@@ -549,6 +549,30 @@ process_messages() ->
   end.
 
 -spec process_message(atom(), stanza()) -> any().
+process_message(in, #message{type = error}) ->
+  ok;
+process_message(in, #message{type = groupchat}) ->
+  ok;
+process_message(in, #message{meta = #{from_offline := true}}) ->
+  ok;
+process_message(in, #message{to = #jid{luser = LUser, lserver = LServer},
+  from = #jid{luser = <<>>, lresource = <<>>, lserver = PDomain},
+  body = Body, meta = #{stanza_id := TS}} = Pkt) ->
+  ShouldArchive = (xmpp:has_subtag(Pkt, #hint{type = 'store'}) orelse
+  xmpp:get_text(Body) /= <<>>),
+  if
+    ShouldArchive ->
+      CType = case xmpp:get_meta(Pkt, conversation_type, undefined) of
+                undefined -> not_encrypted;
+                T -> T
+              end,
+      maybe_push_notification(LUser, LServer, PDomain, CType,
+        <<"message">>, #stanza_id{id = integer_to_binary(TS),
+          by = jid:make(LUser, LServer)}),
+      update_metainfo(LServer, LUser, PDomain, CType);
+    true ->
+      ok
+  end;
 process_message(in, #message{type = Type, body = [], from = From, to = To,
   sub_els = SubEls} = Pkt) ->
   case check_voip_msg(in, Pkt) of
@@ -566,16 +590,11 @@ process_message(in, #message{type = chat, from = Peer, to = To,
   {PUser, PServer, _} = jid:tolower(Peer),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   Invite = xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}),
-  GroupSysMsg = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}),
-  GroupMsg = xmpp:get_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
-  Encryption = identify_encryption_type(Pkt),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
-  Type = if
-           Encryption /= false -> Encryption;
-           GroupSysMsg /= false orelse GroupMsg /= false ->
-             ?NS_GROUPCHAT;
-           true -> ?NS_XABBER_CHAT
-         end,
+  Type = case xmpp:get_meta(Pkt, conversation_type, undefined) of
+            undefined -> ?NS_XABBER_CHAT;
+            T -> T
+          end,
   if
     Invite  =/= false ->
       #xabbergroupchat_invite{jid = ChatJID} = Invite,
@@ -625,7 +644,18 @@ process_message(in, #message{type = chat, from = Peer, to = To,
 %%process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
 %%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
 %%  handle_sub_els(headline,DecSubEls,From,To);
-process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
+process_message(out, #message{from = #jid{luser =  LUser, lserver = LServer},
+  to = #jid{luser = <<>>, lserver = PDomain, lresource = <<>>},
+  meta = #{stanza_id := StanzaID, mam_archived := true} = Meta})->
+  CType = case maps:get(conversation_type, Meta, undefined) of
+            undefined -> not_encrypted;
+            T -> T
+          end,
+  update_metainfo(LServer, LUser, PDomain, CType, [{read, StanzaID}]),
+  maybe_push_notification(LUser,LServer,<<"outgoing">>,
+    #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LServer)}),
+  ok;
+process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
   to = To, meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
   %% Messages for groups should not get here,
   %% because the archive for them should be disabled.
@@ -634,10 +664,10 @@ process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = 
     true -> ok;
     _ ->
       Conversation = jid:to_string(jid:remove_resource(To)),
-      Type = case identify_encryption_type(Pkt) of
-               false -> not_encrypted;
-               NS -> NS
-             end,
+      Type = case xmpp:get_meta(Pkt, conversation_type, undefined) of
+                undefined -> not_encrypted;
+                T -> T
+              end,
       update_metainfo(LServer, LUser, Conversation, Type, [{read, StanzaID}]),
       maybe_push_notification(LUser,LServer,<<"outgoing">>,
         #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LServer)})
@@ -2122,6 +2152,8 @@ is_muted(LUser, LServer, Conversation) ->
     _ -> false
   end.
 
+is_muted(LUser,LServer, Conversation, not_encrypted) ->
+  is_muted(LUser, LServer, Conversation);
 is_muted(LUser,LServer, Conversation, Type) ->
   Now = time_now() div 1000000,
   case ejabberd_sql:sql_query(
@@ -2416,38 +2448,6 @@ lg_get_user_card(LUser, LServer, PUser, PServer) ->
   catch
     _:_ -> []
   end.
-
-identify_encryption_type(Pkt) ->
-  find_encryption(xmpp:get_els(Pkt)).
-
-find_encryption(Els) ->
-  R = lists:foldl(fun(El, Acc0) ->
-    Name = xmpp:get_name(El),
-    NS = xmpp:get_ns(El),
-    case {Name, NS} of
-      {<<"encryption">>, <<"urn:xmpp:eme:0">>} ->
-        xmpp_codec:get_attr(<<"namespace">>,
-          El#xmlel.attrs, false);
-      _ ->
-        Acc0
-    end
-                  end, false, Els),
-  case R of
-    false -> find_encryption_fallback(Els);
-    _ -> R
-  end.
-
-find_encryption_fallback(Els) ->
-  XEPS = [<<"urn:xmpp:otr:0">>, <<"jabber:x:encrypted">>,
-    <<"urn:xmpp:openpgp:0">>, <<"eu.siacs.conversations.axolotl">>,
-    <<"urn:xmpp:omemo:1">>, <<"urn:xmpp:omemo:2">>],
-  lists:foldl(fun(El, Acc0) ->
-    NS = xmpp:get_ns(El),
-    case lists:member(NS, XEPS) of
-      true -> NS;
-      false -> Acc0
-    end
-              end, false, Els).
 
 -spec update_mam_prefs(atom(), jid(), jid()) -> stanza() | error.
 update_mam_prefs(_Action, User, User) ->

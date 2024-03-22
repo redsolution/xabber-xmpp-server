@@ -51,6 +51,7 @@
 
 -define(DEF_PAGE_SIZE, 50).
 -define(MAX_PAGE_SIZE, 250).
+-define(NS_XABBER_CHAT, <<"urn:xabber:chat">>).
 
 -type c2s_state() :: ejabberd_c2s:state().
 
@@ -320,7 +321,8 @@ set_room_option(Acc, _Property, _Lang) ->
 
 -spec sm_receive_packet(stanza()) -> stanza().
 sm_receive_packet(#message{to = #jid{lserver = LServer}} = Pkt) ->
-	init_stanza_id_incoming(Pkt, LServer);
+	Pkt1 = identify_conversation_type(Pkt, recv),
+	init_stanza_id_incoming(Pkt1, LServer);
 sm_receive_packet(Acc) ->
     Acc.
 
@@ -352,12 +354,13 @@ user_receive_packet(Acc) ->
 
 -spec user_send_packet({stanza(), c2s_state()})
       -> {stanza(), c2s_state()}.
-user_send_packet({#message{to = Peer} = Pkt, #{jid := JID} = C2SState}) ->
+user_send_packet({#message{to = Peer} = OPkt, #{jid := JID} = C2SState}) ->
     LUser = JID#jid.luser,
     LServer = JID#jid.lserver,
-    Request = xmpp:get_subtag(Pkt, #delivery_retry{}),
-    Pkt0 = mod_unique:remove_request(Pkt, Request, undefined),
-    Pkt1 = init_stanza_id(Pkt0, LServer),
+    Request = xmpp:get_subtag(OPkt, #delivery_retry{}),
+    Pkt = mod_unique:remove_request(OPkt, Request, undefined),
+    Pkt0 = init_stanza_id(Pkt, LServer),
+    Pkt1 = identify_conversation_type(Pkt0, send),
     Pkt2 = case should_archive_out(Pkt1, LServer) of
 	       true ->
 		   case store_msg(Pkt1, xmpp:set_from_to(Pkt1, JID, Peer),
@@ -468,6 +471,66 @@ set_stanza_id(Pkt, JID, ID, TimeStamp) ->
 mark_stored_msg(#message{meta = #{stanza_id := ID, unique_time := TimeStamp}} = Pkt, JID) ->
     Pkt1 = set_stanza_id(Pkt, JID, integer_to_binary(ID), misc:usec_to_now(TimeStamp)),
     xmpp:put_meta(Pkt1, mam_archived, true).
+
+-spec identify_conversation_type(stanza(), atom()) -> stanza().
+identify_conversation_type(Pkt, Dir) ->
+  IsGroup = (Dir == recv andalso (xmpp:has_subtag(Pkt, #xabbergroupchat_x{
+    xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}) orelse
+    xmpp:has_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}))),
+  Peer  = case Dir of
+            recv -> xmpp:get_from(Pkt);
+            _ -> xmpp:get_to(Pkt)
+          end,
+  CType = case Peer of
+            #jid{luser = <<>>, lserver = Domain,
+              lresource = <<>>} ->
+              conversation_type_by_domain(Domain);
+            _ when IsGroup ->
+              ?NS_GROUPCHAT;
+            _ ->
+              get_encrypted_type(xmpp:get_els(Pkt))
+          end,
+  xmpp:put_meta(Pkt, conversation_type, CType).
+
+conversation_type_by_domain(Domain)->
+  try ejabberd_router:host_of_route(Domain) of
+    Domain -> ?NS_SERVER;
+    _ ->
+      try ets:lookup_element(server_components, Domain, 2)
+      catch _:badarg -> undefined
+      end
+  catch _:_ ->
+    undefined
+  end.
+
+get_encrypted_type(Els) ->
+  R = lists:foldl(fun(El, Acc0) ->
+    Name = xmpp:get_name(El),
+    NS = xmpp:get_ns(El),
+    case {Name, NS} of
+      {<<"encryption">>, <<"urn:xmpp:eme:0">>} ->
+        xmpp_codec:get_attr(<<"namespace">>,
+          El#xmlel.attrs, undefined);
+      _ ->
+        Acc0
+    end
+                  end, undefined, Els),
+  case R of
+    false -> get_encrypted_type_fallback(Els);
+    _ -> R
+  end.
+
+get_encrypted_type_fallback(Els) ->
+  SPACES = [<<"urn:xmpp:otr:0">>, <<"jabber:x:encrypted">>,
+    <<"urn:xmpp:openpgp:0">>, <<"eu.siacs.conversations.axolotl">>,
+    <<"urn:xmpp:omemo:1">>, <<"urn:xmpp:omemo:2">>],
+  lists:foldl(fun(El, Acc0) ->
+    NS = xmpp:get_ns(El),
+    case lists:member(NS, SPACES) of
+      true -> NS;
+      false -> Acc0
+    end
+              end, undefined, Els).
 
 pre_process_iq_v0_2(#iq{
 	to = #jid{luser = LUser, lserver = LServer},
@@ -941,6 +1004,7 @@ may_enter_room(From, MUCState) ->
 -spec store_msg(message(), message(), binary(), binary(),
         jid(), send | recv) -> {ok, message()} | pass | any().
 store_msg(OriginPkt, Pkt, LUser, LServer, Peer, Dir) ->
+    ConvType = xmpp:get_meta(Pkt, conversation_type, undefined),
     Prefs = case get_prefs(LUser, LServer) of
 							error -> get_default_prefs(LUser, LServer);
 							V -> V
@@ -955,7 +1019,7 @@ store_msg(OriginPkt, Pkt, LUser, LServer, Peer, Dir) ->
 		    pass;
 		Pkt1 ->
 		    store(OriginPkt, Pkt1, LServer,
-                          {LUser, LServer}, chat, Peer, <<"">>, Dir)
+                          {LUser, LServer}, chat, Peer, <<"">>, ConvType)
 	    end;
 	{false, _} ->
 	    pass
@@ -974,20 +1038,22 @@ store_muc(OriginPkt, MUCState, Pkt, RoomJID, Peer, Nick) ->
 		    pass;
 		Pkt1 ->
 		    store(OriginPkt, Pkt1, LServer,
-                          {U, S}, groupchat, Peer, Nick, recv)
+                          {U, S}, groupchat, Peer, Nick, ?NS_MUC)
 	    end;
 	false ->
 	    pass
     end.
 
 -spec store(message(), message(), binary(), {binary(), binary()},
-        chat | groupchat, jid(), binary(), recv | send)
+        chat | groupchat, jid(), binary(),  undefined | binary())
     -> {ok, message()} | any().
-store(OriginPkt, Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, Dir) ->
+store(OriginPkt, Pkt, LServer, User, Type, Peer, Nick, undefined) ->
+  store(OriginPkt, Pkt, LServer, User, Type, Peer, Nick, ?NS_XABBER_CHAT);
+store(OriginPkt, Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, CType) ->
     ID = get_stanza_id(Pkt),
     El = xmpp:encode(Pkt),
     Mod = gen_mod:db_mod(LServer, ?MODULE),
-    case Mod:store(El, LServer, {LUser, LHost}, Type, Peer, Nick, Dir, ID) of
+    case Mod:store(El, LServer, {LUser, LHost}, Type, Peer, Nick, CType, ID) of
       ok ->
         {ok, OriginPkt};
       Err ->

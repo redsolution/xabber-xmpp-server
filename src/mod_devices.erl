@@ -28,7 +28,8 @@
 -behavior(gen_mod).
 -compile([{parse_transform, ejabberd_sql_pt}]).
 %% API
--export([check_token/3, set_count/4]).
+-export([check_token/3, check_token/4,
+  set_count/4, select_secret/3, select_secrets/2]).
 
 %% gen_mod
 -export([
@@ -251,7 +252,7 @@ c2s_session_resumed(State) ->
 
 process_iq(#iq{type = set, from = #jid{lserver = S1}, to = #jid{lserver = S2}} = Iq) when S1 =/= S2 ->
   xmpp:make_error(Iq,xmpp:err_not_allowed());
-process_iq(#iq{type = set, from = From, to = To,
+process_iq(#iq{type = set, from = From, to = #jid{lserver = Server},
   sub_els = [#device_register{device = #devices_device{id = undefined,
     expire = TTLRaw, info = InfoRaw, client = ClientRaw, public_label = LabelRaw}}]} = Iq) ->
   UserBareJID = jid:remove_resource(From),
@@ -272,7 +273,8 @@ process_iq(#iq{type = set, from = From, to = To,
     {ok,Secret,ExpireTime} ->
       ejabberd_router:route(xmpp:make_iq_result(Iq,
         #devices_device{secret = Secret, id = ID, expire = integer_to_binary(ExpireTime)})),
-      ejabberd_router:route(To, UserBareJID, new_device_msg(Client,Info, ID,UserBareJID,IPs)),
+      Message = new_device_msg(Client, Info, ID, UserBareJID, IPs),
+      send_notification(Server, Message),
       ignore;
     _ ->
       xmpp:make_error(Iq,xmpp:err_bad_request())
@@ -412,14 +414,12 @@ revoke_device(LServer, LUser, DeviceID) ->
 %%%%
 
 check_token(User, Server, Token) ->
-  case ejabberd_auth:user_exists(User, Server) of
-    true ->
-      check_token_2(User, Server, Token);
-    _ ->
-      false
-  end.
+  UserExists = ejabberd_auth:user_exists(User, Server),
+  check_token(UserExists, User, Server, Token).
 
-check_token_2(User, Server, Token) ->
+check_token(false, _User, _Server, _Token) ->
+  false;
+check_token(true, User, Server, Token) ->
   SJID = jid:to_string(jid:make(User,Server,<<>>)),
   Secrets = select_secrets(Server, SJID),
   ResultList = lists:filtermap(fun({Secret, Count, ID, Expire})->
@@ -444,11 +444,11 @@ check_token_2(User, Server, Token) ->
 
 register_and_upgrade_to_hotp_session(Iq,User,Server,State,#device_register{device = #devices_device{
   id = undefined, expire = TTLRaw, info = InfoRaw, client = ClientRaw, public_label = LabelRaw}}) ->
-  SJIDNoRes = jid:make(User,Server),
+  BareJID = jid:make(User,Server),
   #{ip := IP} = State,
   {PAddr, _PPort} = IP,
   IPs = make_ip_string(State, PAddr),
-  SJID = jid:to_string(SJIDNoRes),
+  SJID = jid:to_string(BareJID),
   TTL = set_default_ttl(Server, TTLRaw),
   Info = set_default(InfoRaw),
   Client = set_default(ClientRaw),
@@ -458,7 +458,8 @@ register_and_upgrade_to_hotp_session(Iq,User,Server,State,#device_register{devic
     {ok,Secret,ExpireTime} ->
       xmpp_stream_in:send(State,xmpp:make_iq_result(Iq,
         #devices_device{secret = Secret, id = ID, expire = integer_to_binary(ExpireTime)})),
-      ejabberd_router:route(new_device_msg(Client,Info, ID,SJIDNoRes,IPs)),
+      Message = new_device_msg(Client, Info, ID, BareJID, IPs),
+      send_notification(Server, Message),
       ID;
     _ ->
       xmpp_stream_in:send(State,xmpp:make_error(Iq,xmpp:err_bad_request())),
@@ -487,8 +488,27 @@ set_count(User, Server, DeviceID, Count) ->
 %%  Internal functions
 %%%%
 
+send_notification(Server, Message) ->
+  case gen_mod:is_loaded(Server, mod_notify) of
+    true ->
+      mod_notify:send_notification(Server, Message#message.to,
+        jid:make(Server), Message,
+        xmpp:get_text(Message#message.body));
+    _ ->
+      ejabberd_router:route(Message)
+  end.
+
+select_secrets(LServer, JID) when is_tuple(JID)->
+  SJID = jid:to_string(jid:remove_resource(JID)),
+  select_secrets(LServer, SJID);
 select_secrets(LServer, SJID) ->
   sql_select_secrets(LServer, SJID).
+
+select_secret(LServer, JID, DevID) when is_tuple(JID)->
+  SJID = jid:to_string(jid:remove_resource(JID)),
+  select_secret(LServer, SJID, DevID);
+select_secret(LServer, SJID, DevID) ->
+  sql_select_secret(LServer, SJID, DevID).
 
 make_device_id(SJID) ->
   DevID = integer_to_binary(crypto:rand_uniform(1,16777216)),
@@ -524,9 +544,9 @@ uri(User) ->
   #xabber_groupchat_mention{cdata = XMPP}.
 
 new_device_msg(<<>>, Info, DeviceID, BareJID, IP) ->
-  new_device_msg(<<"Unknow client">>, Info, DeviceID, BareJID, IP);
+  new_device_msg(<<"Unknown client">>, Info, DeviceID, BareJID, IP);
 new_device_msg(Client, <<>>, DeviceID ,BareJID, IP) ->
-  new_device_msg(Client, <<"Unknow device">>, DeviceID, BareJID, IP);
+  new_device_msg(Client, <<"Unknown device">>, DeviceID, BareJID, IP);
 new_device_msg(Client, Info, DeviceID, BareJID, IP) ->
   User = jid:to_string(BareJID),
   Server = jid:make(BareJID#jid.lserver),
@@ -612,13 +632,8 @@ update_device_secret(User, Server, Device) ->
   #devices_device{id = DeviceID, secret = Secret,
     expire = TTLRaw, info = Info, client = Client, public_label = Label} = Device,
   SJID = jid:to_string(jid:make(User,Server)),
-  Secrets = select_secrets(Server, SJID),
-  CheckSecret = case lists:keyfind(DeviceID, 3, Secrets) of
-                  {Secret, _, _, _} -> true;
-                  _ -> false
-                  end,
-  case CheckSecret of
-    true ->
+  case select_secret(Server, SJID, DeviceID) of
+    {Secret, _, _} ->
       NewSecret = make_secret(),
       Expire = integer_to_binary(seconds_since_epoch(set_default_ttl(Server, TTLRaw))),
       Props = [{count, <<$0>>},{secret,NewSecret}, {info,Info},
@@ -737,7 +752,19 @@ sql_update_count(LUser, LServer, _DeviceID, _Count) ->
   _SJID = jid:to_string(jid:make(LUser,LServer)),
   ejabberd_sql:sql_query(
     LServer,
-    ?SQL("update devices set count=%(_Count)d where jid=%(_SJID)s and device_id = %(_DeviceID)s")).
+    ?SQL("update devices set count=%(_Count)d where "
+    " jid=%(_SJID)s and device_id = %(_DeviceID)s")).
+
+sql_select_secret(LServer, _SJID, _DevID) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(secret)s,@(count)d,@(expire)d"
+    " from devices where jid=%(_SJID)s "
+    " and device_id=%(_DevID)s")) of
+    {selected, [Val]} -> Val;
+    {selected, []} -> {error, not_found};
+    _ -> {error, db_error}
+  end.
 
 sql_select_secrets(LServer, _SJID) ->
  case ejabberd_sql:sql_query(
@@ -827,11 +854,12 @@ sql_select_user_devices(LServer, _SJID) ->
   end.
 
 sql_revoke_devices(LUser, LServer, IDs) ->
-  BareJID = jid:to_string(jid:make(LUser,LServer,<<>>)),
+  BareJID = <<LUser/binary,"@",LServer/binary>>,
   IDClause = device_id_clause(IDs),
  case ejabberd_sql:sql_query(
    LServer,
-   [<<"update devices set expire=0 where jid= '">>, BareJID,<<"' and ">>, IDClause]) of
+   [<<"update devices set expire=0 where jid= '">>, BareJID,
+     <<"' and ">>, IDClause]) of
    {updated, 0} ->
      not_found;
    {updated,_N} ->

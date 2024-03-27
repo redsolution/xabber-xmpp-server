@@ -192,26 +192,19 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 process(Path, #request{method = 'GET', data = Data, q = Q, headers = Headers} = Req) ->
   ?DEBUG("Request: ~p ~p ~p ~p~n",[Path,Data,Headers,Q]),
-  Host = get_host(Headers),
-  IsLoaded = gen_mod:is_loaded(Host, ?MODULE),
-  if
-    IsLoaded ->
-      case extract_auth(Req, Host) of
-        {error, unknown_host } ->
-          {400, [], [<<"unknown host">>]};
-        {error, Reason} ->
-          {401, [],[atom_to_binary(Reason, latin1)]};
-        Auth when is_map(Auth) ->
-          {User, Server, <<"">>} = maps:get(usr, Auth),
-          if
-            Server == Host ->
-              handle_reuest(Path, Req, User, Server);
-            true ->
-              {401, [],[<<"host mismatch">>]}
-          end
+  case extract_auth(Req) of
+    {error, Reason} ->
+      {401, [],[atom_to_binary(Reason, latin1)]};
+    Auth when is_map(Auth) ->
+      {User, Server, <<"">>} = maps:get(usr, Auth),
+      case check_host(Server) of
+        true ->
+          handle_reuest(Path, Req, User, Server);
+        _ ->
+          {400, [],[<<"unknown host">>]}
       end;
-    true ->
-      {500, [],[<<"unknown host">>]}
+    _ ->
+      {500, [],[<<"internal error">>]}
   end.
 
 handle_reuest([<<"archive">>], #request{q = Q}, User, Server) ->
@@ -246,23 +239,16 @@ handle_archive(LServer, LUser, StanzaID, To) ->
 %%% Internal functions
 %%%===================================================================
 
-extract_auth(_, undefined) ->
-  {error, unknown_host};
-extract_auth(#request{auth = HTTPAuth}, _Host) ->
+extract_auth(#request{auth = HTTPAuth}) ->
   case HTTPAuth of
     {SJID, Pass} ->
       try jid:decode(SJID) of
-        #jid{luser = User, lserver = Server} ->
+        #jid{luser = User, lserver = Server, lresource = Res} ->
           case ejabberd_auth:check_password(User, <<"">>, Server, Pass) of
             true->
               #{usr => {User, Server, <<"">>}, caller_server => Server};
             _ ->
-              case mod_devices:check_token(User, Server, Pass) of
-                {ok, {DeviceID, NewCount}} ->
-                  mod_devices:set_count(User, Server, DeviceID, NewCount),
-                  #{usr => {User, Server, <<"">>}, caller_server => Server};
-                _-> {error, invalid_auth}
-              end
+              check_token(User, Server, Res, Pass)
           end
       catch _:{bad_jid, _} ->
         {error, invalid_auth}
@@ -277,8 +263,41 @@ extract_auth(#request{auth = HTTPAuth}, _Host) ->
     _ ->
       {error, invalid_auth}
   end;
-extract_auth(_,_) ->
+extract_auth(_) ->
   {error, invalid_auth}.
+
+check_token(User, Server, Res, Token) ->
+  case ejabberd_auth:user_exists(User, Server) of
+    true ->
+      case check_totp(User, Server, Res, Token) of
+        {error, invalid_auth} ->
+          check_hotp(User, Server, Res, Token);
+        R -> R
+      end;
+    _ ->
+      {error, invalid_auth}
+  end.
+
+check_totp(User, Server, Res, Token) ->
+  Secrets = get_secrets(Server, jid:make(User,Server), Res),
+  Now = seconds_since_epoch(0),
+  lists:foldl(
+    fun({Secret, _, _, Expire}, Acc) when Expire > Now->
+    case hotp:valid_totp(Token, Secret) of
+      true ->
+        #{usr => {User, Server, <<"">>}, caller_server => Server};
+      _ -> Acc
+    end;
+      (_, Acc) -> Acc
+    end, {error, invalid_auth}, Secrets).
+
+check_hotp(User, Server, _Res, Token) ->
+  case mod_devices:check_token(true, User, Server, Token) of
+    {ok, {DeviceID, NewCount}} ->
+      mod_devices:set_count(User, Server, DeviceID, NewCount),
+      #{usr => {User, Server, <<"">>}, caller_server => Server};
+    _-> {error, invalid_auth}
+  end.
 
 make_session(User, Server, ReqID, Caller, Tab)->
   SID = {p1_time_compat:unique_timestamp(), self()},
@@ -320,12 +339,17 @@ process_messages(LServer, Packet) ->
   ejabberd_hooks:run_fold(offline_message_hook,
     LServer, {bounce, Packet}, []).
 
-get_host(Headers) ->
-  Host = proplists:get_value(<<"Xmpp-Domain">>, Headers),
-  try ejabberd_router:host_of_route(Host)
-  catch
-    _:_ -> undefined
+get_secrets(Server, JID, <<>>) ->
+  mod_devices:select_secrets(Server, JID);
+get_secrets(Server, JID, DevId) ->
+  case mod_devices:select_secret(Server, JID, DevId) of
+    {error, _} -> [];
+    {S, C, E} -> [{S, C, DevId, E}]
   end.
+
+check_host(Host) ->
+  ejabberd_router:is_my_host(Host) andalso
+    gen_mod:is_loaded(Host, ?MODULE).
 
 make_string(Values) ->
   list_to_binary(lists:map(fun(X) -> fxml:element_to_binary(xmpp:encode(X)) end, Values)).
@@ -333,6 +357,11 @@ make_string(Values) ->
 do_cast(LServer, Request) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
   gen_server:cast(Proc, Request).
+
+-spec seconds_since_epoch(integer()) -> non_neg_integer().
+seconds_since_epoch(Diff) ->
+  {Mega, Secs, _} = os:timestamp(),
+  Mega * 1000000 + Secs + Diff.
 
 %%%===================================================================
 %%% API

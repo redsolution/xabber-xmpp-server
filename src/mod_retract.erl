@@ -293,16 +293,14 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [
         _ -> Result
       end;
     {LUser, LServer, _} ->
-      PeerString = get_bare_peer(LServer,LUser,StanzaID),
-      case PeerString of
+      case get_bare_peer(LServer,LUser,StanzaID) of
         not_found ->
-          ?DEBUG("Not found ",[]),
           xmpp:make_error(IQ, xmpp:err_item_not_found());
-        _ ->
-          PeerJID = jid:from_string(PeerString),
-          case PeerJID#jid.lserver of
-            LServer ->
-              start_local_retract(LUser,PeerJID#jid.luser,LServer,StanzaID,IQ, CType);
+        PeerS ->
+          PeerJID = jid:from_string(PeerS),
+          case jid:tolower(PeerJID) of
+            {PUser, LServer,_} ->
+              start_local_retract(LUser,PUser,LServer,StanzaID,IQ, CType);
             _ ->
               IQS = xmpp:set_from_to(IQ,jid:remove_resource(From),PeerJID),
               Proc = gen_mod:get_module_proc(LServer, ?MODULE),
@@ -310,7 +308,7 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [
               ignore
           end
       end;
-    true ->
+    _ ->
       ?ERROR_MSG("Bad symmetric retract:~p",[IQ]),
       xmpp:make_error(IQ, xmpp:err_bad_request())
   end;
@@ -364,20 +362,24 @@ process_iq(#iq{from = From,to = To, type = set, sub_els = [
       end;
     {LUser, LServer, _} ->
       %% C2S query
-      PeerString = get_bare_peer(LServer, LUser, StanzaID),
-      PeerJID = jid:from_string(PeerString),
-      case jid:tolower(PeerJID) of
-        {LUser, LServer, _} ->
-          %% replace message to yourself
-          replace_msg_to_yourself(LUser,LServer,StanzaID,Message,IQ);
-        {PUser, LServer, _} ->
-          start_local_replace(LUser,PUser,LServer,StanzaID,Message,IQ, CType);
-        _ ->
-          IQS = xmpp:set_from_to(IQ,To,PeerJID),
-          Proc = gen_mod:get_module_proc(LServer, ?MODULE),
-          gen_server:cast(Proc, {From,IQS}),
-          ignore
-      end;
+      case get_bare_peer(LServer, LUser, StanzaID) of
+        not_found ->
+          xmpp:make_error(IQ, xmpp:err_item_not_found());
+        PeerS ->
+          PeerJID = jid:from_string(PeerS),
+          case jid:tolower(PeerJID) of
+            {LUser, LServer, _} ->
+              %% replace message to yourself
+              replace_msg_to_yourself(LUser,LServer,StanzaID,Message,IQ);
+            {PUser, LServer, _} ->
+              start_local_replace(LUser,PUser,LServer,StanzaID,Message,IQ, CType);
+            _ ->
+              IQS = xmpp:set_from_to(IQ,To,PeerJID),
+              Proc = gen_mod:get_module_proc(LServer, ?MODULE),
+              gen_server:cast(Proc, {From,IQS}),
+              ignore
+          end
+      end      ;
     _ ->
       xmpp:make_error(IQ, xmpp:err_not_allowed())
   end;

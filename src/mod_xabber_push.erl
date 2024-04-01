@@ -252,7 +252,7 @@ disco_sm_features(empty, From, To, Node, Lang) ->
 disco_sm_features({result, OtherFeatures},
 		  #jid{luser = U, lserver = S},
 		  #jid{luser = U, lserver = S}, <<"">>, _Lang) ->
-    {result, [?NS_XABBER_PUSH | OtherFeatures]};
+    {result, [?NS_XABBER_PUSH, ?NS_PUSH_0] ++ [OtherFeatures]};
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
     Acc.
 
@@ -261,12 +261,20 @@ disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
 %%--------------------------------------------------------------------
 -spec register_iq_handlers(binary()) -> ok.
 register_iq_handlers(Host) ->
-    gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PUSH,
-				  ?MODULE, process_iq).
+  gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PUSH,
+    ?MODULE, process_iq),
+  case gen_mod:is_loaded(Host, mod_push) of
+    false ->
+      gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_PUSH_0,
+        ?MODULE, process_iq);
+    _ ->
+      ok
+  end.
 
 -spec unregister_iq_handlers(binary()) -> ok.
 unregister_iq_handlers(Host) ->
-    gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PUSH).
+  gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PUSH),
+  gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_PUSH_0).
 
 -spec process_iq(iq()) -> iq().
 process_iq(#iq{type = get, lang = Lang} = IQ) ->
@@ -282,9 +290,12 @@ process_iq(#iq{from = #jid{lserver = LServer}, to = #jid{lserver = LServer},
       push_security = Security}]} = IQ,
   Result = case Security of
              #xabber_push_security{cipher = Cipher,
-               encryption_key = #xabber_encryption_key{data = Key}} ->
+               encryption_key = #xabber_encryption_key{data = Key}}
+               when Cipher /= <<>> orelse Key /=<<>> ->
                ?INFO_MSG("Push with encryption enabled for ~p",[jid:to_string(JID)]),
                enable(JID, PushJID, Node, XData, Cipher, Key);
+             #xabber_push_security{} ->
+               {error, bad_request};
              _ ->
                enable(JID, PushJID, Node, XData)
            end,
@@ -297,6 +308,8 @@ process_iq(#iq{from = #jid{lserver = LServer}, to = #jid{lserver = LServer},
              _:_ -> undefined
            end,
       xmpp:make_iq_result(IQ,El);
+    {error, bad_request} ->
+      xmpp:make_error(IQ, xmpp:err_bad_request());
     {error, db_failure} ->
       Txt = <<"Database failure">>,
       xmpp:make_error(IQ, xmpp:err_internal_server_error(Txt, Lang));
@@ -317,6 +330,13 @@ process_iq(#iq{from = #jid{lserver = LServer} = JID,
       Txt = <<"Push record not found">>,
       xmpp:make_error(IQ, xmpp:err_item_not_found(Txt, Lang))
   end;
+%% Legacy
+process_iq(#iq{sub_els = [#push_enable{jid = J,  node = N, xdata = X}]} = IQ) ->
+  XPE = #xabber_push_enable{jid = J, node = N, xdata = X},
+  process_iq(IQ#iq{sub_els = [XPE]});
+process_iq(#iq{sub_els = [#push_disable{jid = J, node = N}]} = IQ) ->
+  XPD = #xabber_push_disable{jid = J, node = N},
+  process_iq(IQ#iq{sub_els = [XPD]});
 process_iq(IQ) ->
   xmpp:make_error(IQ, xmpp:err_not_allowed()).
 

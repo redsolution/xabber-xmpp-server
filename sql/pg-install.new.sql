@@ -635,8 +635,8 @@ CREATE TABLE xabber_push_session (
     service text NOT NULL,
     node text NOT NULL,
     xml text NOT NULL,
-    cipher text NOT NULL,
-    key text NOT NULL,
+    cipher text,
+    key text,
     device_id text,
     PRIMARY KEY (server_host, username, timestamp)
 );

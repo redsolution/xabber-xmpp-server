@@ -252,7 +252,7 @@ disco_sm_features(empty, From, To, Node, Lang) ->
 disco_sm_features({result, OtherFeatures},
 		  #jid{luser = U, lserver = S},
 		  #jid{luser = U, lserver = S}, <<"">>, _Lang) ->
-    {result, [?NS_XABBER_PUSH, ?NS_PUSH_0] ++ [OtherFeatures]};
+    {result, [?NS_XABBER_PUSH, ?NS_PUSH_0] ++ OtherFeatures};
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
     Acc.
 

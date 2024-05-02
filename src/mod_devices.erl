@@ -539,7 +539,7 @@ bold() ->
     attrs = [{<<"xmlns">>, ?NS_XABBER_MARKUP}]
   }.
 
-uri(User) ->
+mention(User) ->
   XMPP = <<"xmpp:",User/binary>>,
   #xabber_groupchat_mention{cdata = XMPP}.
 
@@ -549,34 +549,43 @@ new_device_msg(Client, <<>>, DeviceID ,BareJID, IP) ->
   new_device_msg(Client, <<"Unknown device">>, DeviceID, BareJID, IP);
 new_device_msg(Client, Info, DeviceID, BareJID, IP) ->
   User = jid:to_string(BareJID),
-  Server = jid:make(BareJID#jid.lserver),
+  LServer = BareJID#jid.lserver,
   X = #devices_device{id = DeviceID},
   Time = get_time_now(),
-  RefBold = #xmppreference{type = <<"decoration">>, sub_els = [bold()]},
-  NewLogin = <<"New login">>,
-  Dear = <<". Dear ">>,
-  Detected = <<", we detected a new login into your account from a new device on ">>,
-  FL = <<NewLogin/binary, Dear/binary, User/binary, Detected/binary, Time/binary, "\n\n">>,
-  Device = <<Client/binary, "\n",Info/binary,"\n",IP/binary,"\n\n">>,
-  FiLStart = <<"If this wasn't you, go to ">>,
-  FilMiddle = <<"Settings > Devices">>,
-  FilEnd = <<" and terminate suspicious sessions.">>,
-  FiL = <<FiLStart/binary, FilMiddle/binary, FilEnd/binary>>,
-  TextStr = <<FL/binary,Device/binary,FiL/binary>>,
-  UserBegin = misc:escaped_text_len(<<NewLogin/binary,Dear/binary>>),
-  UserEnd = misc:escaped_text_len(<<NewLogin/binary,Dear/binary,User/binary>>),
-  SettingsBegin = misc:escaped_text_len(<<FL/binary,Device/binary,FiLStart/binary>>),
-  NLRef = RefBold#xmppreference{'begin' = 0, 'end' = misc:escaped_text_len(NewLogin)},
-  UserRef = RefBold#xmppreference{'begin' = UserBegin, 'end' = UserEnd, sub_els = [uri(User)]},
-  DeviceRef = RefBold#xmppreference{'begin' = misc:escaped_text_len(FL),
-    'end' = misc:escaped_text_len(<<FL/binary,Device/binary>>)},
-  SettingsRef = RefBold#xmppreference{'begin'= SettingsBegin,
-    'end' = SettingsBegin + misc:escaped_text_len(FilMiddle)},
+  Device = <<Client/binary, "\n", Info/binary,"\n", IP/binary>>,
+  Parts = [{bold, <<"New login">>}, <<" to server ">>, {bold, LServer},
+    <<":\nWe detected a new login into your account ">>, {mention, User},
+    <<" from a new device on ">>, Time, <<"\n\n">>, {bold, Device},
+    <<"\n\nIf it wasn't you, go to ">>, {bold, <<"Settings -> Devices">>},
+    <<" and terminate suspicious sessions.">>],
+  {TextStr, Refs} = make_text_with_refs(Parts),
   Text = [#text{lang = <<>>,data = TextStr}],
   ID = randoms:get_string(),
   OriginID = #origin_id{id = ID},
-  #message{type = chat, from = Server, to = BareJID, id =ID, body = Text,
-    sub_els = [X, NLRef, UserRef, DeviceRef, SettingsRef, OriginID]}.
+  #message{type = chat, from = jid:make(LServer), to = BareJID, id =ID, body = Text,
+    sub_els = [X, OriginID] ++ Refs}.
+
+make_text_with_refs(Parts) ->
+  make_text_with_refs(Parts, {<<>>, []}).
+
+make_text_with_refs([], Acc) -> Acc;
+make_text_with_refs([H | T], {BString, Refs}) ->
+  case H of
+    {RType, Text} ->
+      Begin = misc:escaped_text_len(BString),
+      End =  Begin + misc:escaped_text_len(Text),
+      Els = case RType of
+              bold -> [bold()];
+              mention -> [mention(Text)];
+              _ -> []
+            end,
+      NewRefs = Refs ++ [#xmppreference{type = <<"decoration">>,
+        'begin' = Begin, 'end' = End, sub_els = Els}],
+      make_text_with_refs(T, {<<BString/binary, Text/binary>>, NewRefs});
+    Text ->
+      make_text_with_refs(T, {<<BString/binary, Text/binary>>, Refs})
+  end.
+
 
 
 set_default_ttl(LServer, undefined) ->

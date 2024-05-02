@@ -51,7 +51,6 @@
 
 -define(DEF_PAGE_SIZE, 50).
 -define(MAX_PAGE_SIZE, 250).
--define(NS_XABBER_CHAT, <<"urn:xabber:chat">>).
 
 -type c2s_state() :: ejabberd_c2s:state().
 

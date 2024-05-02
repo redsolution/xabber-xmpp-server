@@ -40,7 +40,6 @@
 -include("logger.hrl").
 -include("ejabberd_sql_pt.hrl").
 
--define(NS_XABBER_CHAT, <<"urn:xabber:chat">>).
 
 %%%===================================================================
 %%% API

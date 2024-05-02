@@ -96,7 +96,6 @@
 ).
 
 -define(TABLE_SIZE_LIMIT, 2000000000). % A bit less than 2 GiB.
--define(NS_XABBER_CHAT, <<"urn:xabber:chat">>).
 -define(NS_OMEMO, <<"urn:xmpp:omemo:2">>).
 -define(AUTO_CLEAN_INTERVAL, 43200000). % 12 hours
 

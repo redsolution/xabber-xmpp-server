@@ -11,8 +11,6 @@
 -behaviour(gen_server).
 -behaviour(gen_mod).
 
--define(NS_FAVORITES, <<"urn:xabber:favorites:0">>).
-
 %% API
 -export([start/2, stop/1, reload/3]).
 

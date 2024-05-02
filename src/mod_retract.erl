@@ -68,7 +68,6 @@
 }).
 
 -define(RETRACT_DEPTH, 5184000000000). %% Two months
--define(NS_XABBER_CHAT, <<"urn:xabber:chat">>).
 -define(NS_OMEMO, <<"urn:xmpp:omemo:2">>).
 
 -type rewriteask() :: none | retract | retractall | rewrite.

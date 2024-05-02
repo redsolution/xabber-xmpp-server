@@ -223,12 +223,14 @@ send_rewrite_archive(Server, UserJID, Group, Ver, Less) ->
     ok ->
       {Less1, Ver1}= check_query_params(Less, Ver),
       Count = get_count_events(Server, Group, Ver1),
+      CurrentVer = get_version(Server, Group),
       if
         Count > Less1 ->
-          send_invalidate(UserJID, Group, Ver);
+          send_invalidate(UserJID, Group, CurrentVer);
         true ->
-          send_rewrite_archive(Server, UserJID, Group, Ver)
-      end;
+          send_rewrite_archive(Server, UserJID, Group, Ver1)
+      end,
+      {ok, CurrentVer};
     Err ->
       Err
   end.
@@ -401,6 +403,7 @@ delete_messages_from_archive(Group) ->
 check_query_params(Less, Ver) ->
   Less1 = if
             Less == undefined -> 50;
+            Less == 0 -> 50;
             Less > 50 -> 50;
             true -> Less
           end,

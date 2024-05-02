@@ -232,13 +232,14 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer} = From,
   to = #jid{luser = LUser, lserver = LServer}, type = get,
   sub_els = [#xabber_retract_query{version = Ver, 'less-than' = Less0}]} = IQ) ->
   Less = if
-           Less0 > 50 orelse Less0 == undefined -> 50;
+           Less0 == undefined -> 50;
+           Less0 == 0 -> 50;
+           Less0 > 50 -> 50;
            true -> Less0
          end,
   ChatList = get_count_events(LServer, LUser, Ver),
-  send_retract_query_messages(From, Ver, Less, ChatList),
-  LastVersion = get_version(LServer, LUser),
-  xmpp:make_iq_result(IQ, #xabber_retract_query{version = LastVersion});
+  CurrentVer = send_retract_query_messages(From, Ver, Less, ChatList),
+  xmpp:make_iq_result(IQ, #xabber_retract_query{version = CurrentVer});
 process_iq(#iq{type = set, sub_els = [#xabber_retract_message{id = undefined}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{type = set, sub_els = [#xabber_retract_message{type = <<>>}]} = IQ) ->
@@ -667,6 +668,7 @@ get_conv(Type, JID) ->
 send_retract_query_messages(User, Version, Less, ChatList) ->
   {LUser, LServer, _LResource} = jid:tolower(User),
   Msg = #message{from = jid:remove_resource(User), to = User, type = headline},
+  CurrentVer = get_version(LServer, LUser),
   DropArchiveChats = lists:filter(
     fun({_, _, Count}) -> Count > Less end, ChatList),
   NotifyChats = ChatList -- DropArchiveChats,
@@ -677,13 +679,13 @@ send_retract_query_messages(User, Version, Less, ChatList) ->
     Msg#message{id= randoms:get_string(), sub_els = [Event, Delay]}
                       end, RetractNotifications),
   Msgs2 = lists:map(fun({Conv, CType, _}) ->
-    Invalidate = #xabber_retract_invalidate{version = Version,
+    Invalidate = #xabber_retract_invalidate{version = CurrentVer,
       conversation = jid:from_string(Conv),
       type = CType},
     Msg#message{id= randoms:get_string(), sub_els = [Invalidate]}
                     end, DropArchiveChats),
-
-  lists:foreach(fun(M) -> ejabberd_router:route(M) end, Msgs1 ++ Msgs2).
+  lists:foreach(fun(M) -> ejabberd_router:route(M) end, Msgs1 ++ Msgs2),
+  CurrentVer.
 
 %% sql functions
 

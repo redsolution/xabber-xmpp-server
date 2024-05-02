@@ -411,8 +411,7 @@ process_groupchat_iq(#iq{from = From, to = To, type = get,
   Server = To#jid.lserver,
   case mod_groups_retract:send_rewrite_archive(Server, From,
     Group, Version, Less) of
-    ok ->
-      CurrentVer = mod_groups_retract:get_version(Server, Group),
+    {ok, CurrentVer} ->
       ejabberd_router:route(xmpp:make_iq_result(IQ,
         #xabber_retract_query{version=CurrentVer}));
     _ ->

@@ -555,10 +555,10 @@ notify(_, _, _, _, _, _, _, _) ->
 do_notify(PushType, LServer, PushLJID, Node, XData, PayloadList,
     Callback, Cipher, Key) ->
   From = jid:make(LServer),
-  SubEls = case PayloadList of
-             [undefined] -> [];
-             [] -> [];
-             _ ->
+  SubEls = if
+             PayloadList == [undefined] orelse PayloadList == [] -> [];
+             Cipher == <<>> orelse Key == <<>> -> [];
+             true ->
                [make_encryption(PayloadList, Cipher, Key),
                  make_new_form(PushType)]
            end,

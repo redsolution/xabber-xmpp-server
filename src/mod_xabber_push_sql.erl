@@ -92,14 +92,14 @@ lookup_session(LUser, LServer, PushJID, Node) ->
     Service = jid:encode(PushLJID),
     case ejabberd_sql:sql_query(
 	   LServer,
-	   ?SQL("select @(timestamp)d, @(xml)s, @(cipher)s, @(key)s from xabber_push_session "
-		"where username=%(LUser)s and %(LServer)H "
-                "and service=%(Service)s "
-		"and node=%(Node)s")) of
+	   ?SQL("select @(timestamp)d, @(xml)s, @(cipher)s, @(key)s "
+     " from xabber_push_session where username=%(LUser)s "
+     " and service=%(Service)s and node=%(Node)s and %(LServer)H")) of
 	{selected, [{TS, XML, Cipher, Key}]} ->
 	    NowTS = misc:usec_to_now(TS),
 	    XData = decode_xdata(XML, LUser, LServer),
-	    {ok, {NowTS, PushLJID, Node, XData, Cipher, Key}};
+	    {ok, {NowTS, PushLJID, Node, XData,
+        replace_null(Cipher), replace_null(Key)}};
 	{selected, []} ->
 	    {error, notfound};
 	_Err ->
@@ -116,7 +116,8 @@ lookup_session(LUser, LServer, NowTS) ->
 	{selected, [{Service, Node, XML, Cipher, Key}]} ->
 	    PushLJID = jid:tolower(jid:decode(Service)),
 	    XData = decode_xdata(XML, LUser, LServer),
-	    {ok, {NowTS, PushLJID, Node, XData, Cipher, Key}};
+	    {ok, {NowTS, PushLJID, Node, XData,
+        replace_null(Cipher), replace_null(Key)}};
 	{selected, []} ->
 	    {error, notfound};
 	_Err ->
@@ -128,15 +129,16 @@ lookup_sessions(LUser, LServer, PushJID) ->
     Service = jid:encode(PushLJID),
     case ejabberd_sql:sql_query(
 	   LServer,
-	   ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(cipher)s, @(key)s from xabber_push_session "
-		"where username=%(LUser)s and %(LServer)H "
-                "and service=%(Service)s")) of
+	   ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(cipher)s, @(key)s "
+     " from xabber_push_session where username=%(LUser)s "
+     " and service=%(Service)s and %(LServer)H")) of
 	{selected, Rows} ->
 	    {ok, lists:map(
 		   fun({TS, XML, Node, Cipher, Key}) ->
 			   NowTS = misc:usec_to_now(TS),
 			   XData = decode_xdata(XML, LUser, LServer),
-			   {NowTS, PushLJID, Node, XData, Cipher, Key}
+			   {NowTS, PushLJID, Node, XData,
+           replace_null(Cipher), replace_null(Key)}
 		   end, Rows)};
 	_Err ->
 	    {error, db_failure}
@@ -145,16 +147,16 @@ lookup_sessions(LUser, LServer, PushJID) ->
 lookup_sessions(LUser, LServer) ->
     case ejabberd_sql:sql_query(
 	   LServer,
-	   ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(service)s, @(cipher)s, @(key)s "
-		"from xabber_push_session "
-                "where username=%(LUser)s and %(LServer)H")) of
+	   ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(service)s, "
+     " @(cipher)s, @(key)s from xabber_push_session "
+     " where username=%(LUser)s and %(LServer)H")) of
 	{selected, Rows} ->
 	    {ok, lists:map(
 		   fun({TS, XML, Node, Service, Cipher, Key}) ->
 			   NowTS = misc:usec_to_now(TS),
 			   XData = decode_xdata(XML, LUser, LServer),
 			   PushLJID = jid:tolower(jid:decode(Service)),
-			   {NowTS, PushLJID,Node, XData, Cipher, Key}
+			   {NowTS, PushLJID,Node, XData, replace_null(Cipher), replace_null(Key)}
 		   end, Rows)};
 	_Err ->
 	    {error, db_failure}
@@ -181,9 +183,9 @@ lookup_sessions(LServer) ->
 lookup_device_sessions(LUser, LServer, Devices) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(service)s, @(cipher)s, @(key)s, @(device_id)s "
-    "from xabber_push_session "
-    "where username=%(LUser)s and %(LServer)H")) of
+    ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(service)s, "
+    " @(cipher)s, @(key)s, @(device_id)s from xabber_push_session "
+    " where username=%(LUser)s and %(LServer)H")) of
     {selected, Rows} ->
       {ok, lists:filtermap(
         fun({TS, XML, Node, Service, Cipher, Key, DevID}) ->
@@ -192,7 +194,8 @@ lookup_device_sessions(LUser, LServer, Devices) ->
               NowTS = misc:usec_to_now(TS),
               XData = decode_xdata(XML, LUser, LServer),
               PushLJID = jid:tolower(jid:decode(Service)),
-              {true, {NowTS, PushLJID,Node, XData, Cipher, Key}};
+              {true, {NowTS, PushLJID,Node, XData,
+                replace_null(Cipher), replace_null(Key)}};
             _ ->
               false
           end
@@ -279,3 +282,6 @@ encode_xdata(undefined) ->
     <<>>;
 encode_xdata(XData) ->
     fxml:element_to_binary(xmpp:encode(XData)).
+
+replace_null(null) -> <<>>;
+replace_null(Value) -> Value.

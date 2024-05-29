@@ -247,7 +247,8 @@ check_prefs(OFrom, To, Policy) ->
   end.
 
 check_subscription(LUser, LServer, JID) ->
-  {Sub, _, _} = mod_roster:get_jid_info(<<>>, LUser, LServer, JID),
+  {Sub, _, _} = ejabberd_hooks:run_fold(roster_get_jid_info, LServer,
+    {none, none, []}, [LUser, LServer, JID]),
   case Sub of
     both -> true;
     from -> true;

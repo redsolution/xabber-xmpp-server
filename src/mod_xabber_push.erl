@@ -410,7 +410,21 @@ disable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
 revoke_devices(LUser, LServer, DevIDList) ->
 	?INFO_MSG("Disabling push notifications for ~s@~s on devices:~p",[LUser, LServer, DevIDList]),
 	Mod = gen_mod:db_mod(LServer, ?MODULE),
-	LookupFun = fun() -> Mod:lookup_device_sessions(LUser, LServer, DevIDList) end,
+  LookupResult = Mod:lookup_device_sessions(LUser, LServer, DevIDList),
+  Sessions = case LookupResult of
+                {ok, Ss} -> Ss;
+                _ -> []
+              end,
+  Devices = [#devices_device{id = DeviceID} || DeviceID <- DevIDList],
+  lists:foreach(
+    fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
+      Callback = iq_callback(LUser, LServer, TS),
+      From =  jid:from_string(LServer),
+      Message = #message{type = headline, from = From,
+        sub_els = [#devices_revoke{devices = Devices}]},
+      do_notify(<<"message">>, LServer, PushLJID, Node, XData, [Message], Callback, Cipher, Key)
+    end, Sessions),
+	LookupFun = fun() -> LookupResult end,
 	delete_sessions(LUser, LServer, LookupFun, Mod).
 
 -spec c2s_stanza(c2s_state(), xmpp_element() | xmlel(), term()) -> c2s_state().

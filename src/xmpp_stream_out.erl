@@ -941,13 +941,15 @@ srv_lookup(Host, State, Timeout, Retries) ->
 srv_lookup(_SRVName, _Timeout, Retries) when Retries < 1 ->
     {error, timeout};
 srv_lookup(SRVName, Timeout, Retries) ->
-    case inet_res:getbyname(SRVName, srv, Timeout) of
+    try inet_res:getbyname(SRVName, srv, Timeout) of
 	{ok, HostEntry} ->
 	    {ok, HostEntry};
 	{error, timeout} ->
 	    srv_lookup(SRVName, Timeout, Retries - 1);
 	{error, _} = Err ->
 	    Err
+	catch _:_ -> % Workaround for https://github.com/erlang/otp/issues/4838 on older OTP
+		{error, nxdomain}
     end.
 
 -spec a_lookup([host_port()], state()) ->

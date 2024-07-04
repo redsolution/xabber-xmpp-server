@@ -214,8 +214,7 @@ process_iq(#iq{type = set, from = From,
 process_iq(#iq{type = set, sub_els = [#notify{}]} = IQ, _State) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{type = set, sub_els = [#xabber_retract_message{}]} = IQ, _State) ->
-  send_retract_result(IQ),
-  none;
+  xmpp:make_iq_result(IQ);
 process_iq(IQ,_) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).
 
@@ -253,15 +252,6 @@ check_subscription(LUser, LServer, JID) ->
     both -> true;
     from -> true;
     _ -> false
-  end.
-
-send_retract_result(#iq{from = #jid{lserver = LServer}} = IQ) ->
-  case ejabberd_router:is_my_host(LServer) of
-    true ->
-      Proc = gen_mod:get_module_proc(LServer, mod_retract),
-      gen_server:cast(Proc, xmpp:make_iq_result(IQ));
-    _ ->
-      ok
   end.
 
 get_prefs_result(IQ, Policy) ->

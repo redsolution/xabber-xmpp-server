@@ -62,7 +62,7 @@
 			      all | chat | groupchat) -> any().
 -callback extended_fields() -> [mam_query:property() | #xdata_field{}].
 -callback store(xmlel(), binary(), {binary(), binary()}, chat | groupchat,
-		jid(), binary(), recv | send, integer()) -> ok | any().
+		jid(), binary(), recv | send, integer(), binary(), binary(), binary()) -> ok | any().
 -callback write_prefs(binary(), binary(), #archive_prefs{}, binary()) -> ok | any().
 -callback get_prefs(binary(), binary()) -> {ok, #archive_prefs{}} | error.
 -callback select(binary(), jid(), jid(), mam_query:result(),
@@ -465,6 +465,34 @@ set_stanza_id(Pkt, JID, ID, TimeStamp) ->
     Time = #unique_time{by = BareJID, stamp = TimeStamp},
     NewEls = [Archived, StanzaID, Time|xmpp:get_els(Pkt)],
     xmpp:set_els(Pkt, NewEls).
+
+-spec get_origin_id(stanza()) -> binary().
+get_origin_id(Pkt) ->
+  case xmpp:get_subtag(Pkt, #origin_id{}) of
+    #origin_id{id = ID} ->
+      ID;
+    _ ->
+      xmpp:get_id(Pkt)
+  end.
+
+-spec get_foreign_stanza_id(binary(), binary(), atom(), stanza()) -> binary().
+get_foreign_stanza_id(LUser, LServer, recv, Pkt) ->
+  UserJID = jid:make(LUser, LServer),
+  lists:foldl(
+    fun(El, Acc) ->
+      case {xmpp:get_name(El), xmpp:get_ns(El)} of
+        {<<"stanza-id">>, ?NS_SID_0} ->
+          try xmpp:decode(El) of
+            #stanza_id{by = UserJID} -> Acc;
+            #stanza_id{id = ID} -> ID
+          catch _:{xmpp_codec, _} ->
+            Acc
+          end;
+        _ ->
+          Acc
+      end
+    end, xmpp:get_id(Pkt), xmpp:get_els(Pkt));
+get_foreign_stanza_id(_LUser, _LServer, _Dir, _Pkt) -> <<>>.
 
 -spec mark_stored_msg(message(), jid()) -> message().
 mark_stored_msg(#message{meta = #{stanza_id := ID, unique_time := TimeStamp}} = Pkt, JID) ->
@@ -1018,7 +1046,7 @@ store_msg(OriginPkt, Pkt, LUser, LServer, Peer, Dir) ->
 		    pass;
 		Pkt1 ->
 		    store(OriginPkt, Pkt1, LServer,
-                          {LUser, LServer}, chat, Peer, <<"">>, ConvType)
+                          {LUser, LServer}, chat, Peer, <<"">>, Dir, ConvType)
 	    end;
 	{false, _} ->
 	    pass
@@ -1037,27 +1065,30 @@ store_muc(OriginPkt, MUCState, Pkt, RoomJID, Peer, Nick) ->
 		    pass;
 		Pkt1 ->
 		    store(OriginPkt, Pkt1, LServer,
-                          {U, S}, groupchat, Peer, Nick, ?NS_MUC)
+                          {U, S}, groupchat, Peer, Nick, recv, ?NS_MUC)
 	    end;
 	false ->
 	    pass
     end.
 
 -spec store(message(), message(), binary(), {binary(), binary()},
-        chat | groupchat, jid(), binary(),  undefined | binary())
-    -> {ok, message()} | any().
-store(OriginPkt, Pkt, LServer, User, Type, Peer, Nick, undefined) ->
-  store(OriginPkt, Pkt, LServer, User, Type, Peer, Nick, ?NS_XABBER_CHAT);
-store(OriginPkt, Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, CType) ->
-    ID = get_stanza_id(Pkt),
-    El = xmpp:encode(Pkt),
-    Mod = gen_mod:db_mod(LServer, ?MODULE),
-    case Mod:store(El, LServer, {LUser, LHost}, Type, Peer, Nick, CType, ID) of
-      ok ->
-        {ok, OriginPkt};
-      Err ->
-        Err
-    end.
+        chat | groupchat, jid(), binary(), recv | send,
+    undefined | binary()) -> {ok, message()} | any().
+store(OriginPkt, Pkt, LServer, User, Type, Peer, Nick, Dir, undefined) ->
+  store(OriginPkt, Pkt, LServer, User, Type, Peer, Nick, Dir, ?NS_XABBER_CHAT);
+store(OriginPkt, Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, Dir, CType) ->
+  ID = get_stanza_id(Pkt),
+  OriginID = get_origin_id(Pkt),
+  ForeignID =get_foreign_stanza_id(LUser, LHost, Dir, Pkt),
+  El = xmpp:encode(Pkt),
+  Mod = gen_mod:db_mod(LServer, ?MODULE),
+  case Mod:store(El, LServer, {LUser, LHost}, Type, Peer, Nick, Dir, ID,
+    CType, OriginID, ForeignID) of
+    ok ->
+      {ok, OriginPkt};
+    Err ->
+      Err
+  end.
 
 write_prefs(LUser, LServer, Host, Default, Always, Never) ->
     Prefs = #archive_prefs{us = {LUser, LServer},

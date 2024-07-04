@@ -170,19 +170,9 @@ process_iq(#iq{type = get, sub_els = [#disco_info{}]} = IQ) ->
 process_iq(#iq{type = get, sub_els = [#disco_items{}]} = IQ) ->
   xmpp:make_iq_result(IQ, #disco_items{});
 process_iq(#iq{type = set, sub_els = [#xabber_replace{}]} = IQ) ->
-  send_retract_result(IQ),
-  none;
+  xmpp:make_iq_result(IQ);
 process_iq(#iq{type = set, sub_els = [#xabber_retract_message{}]} = IQ) ->
-  send_retract_result(IQ),
-  none;
+  xmpp:make_iq_result(IQ);
 process_iq(_) ->
   none.
 
-send_retract_result(#iq{from = #jid{lserver = LServer}} = IQ) ->
-  case ejabberd_router:is_my_host(LServer) of
-    true ->
-      Proc = gen_mod:get_module_proc(LServer, mod_retract),
-      gen_server:cast(Proc, xmpp:make_iq_result(IQ));
-    _ ->
-      ok
-  end.

@@ -28,7 +28,7 @@
 
 %% API
 -export([init/2, remove_user/2, remove_room/3, delete_old_messages/3,
-	 extended_fields/0, store/8, write_prefs/4, get_prefs/2, select/6, remove_from_archive/3]).
+	 extended_fields/0, store/11, write_prefs/4, get_prefs/2, select/6, remove_from_archive/3]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
 -include("xmpp.hrl").
@@ -121,7 +121,7 @@ delete_old_user_messages(User, TimeStamp, Type) ->
 extended_fields() ->
     [].
 
-store(Pkt, _, {LUser, LServer}, Type, Peer, Nick, _Dir, TS) ->
+store(Pkt, _, {LUser, LServer}, Type, Peer, Nick, _Dir, TS, _, _, _) ->
     case {mnesia:table_info(archive_msg, disc_only_copies),
 	  mnesia:table_info(archive_msg, memory)} of
 	{[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->

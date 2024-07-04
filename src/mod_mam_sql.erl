@@ -31,7 +31,7 @@
 %% API
 -export([init/2, remove_user/2, remove_room/3, delete_old_messages/3,
 	 get_columns_and_from/0, get_user_and_bare_peer/3, get_odbctype_and_escape/1, is_encrypted/2,
-	 extended_fields/0, store/8, write_prefs/4, get_prefs/2, select/6, export/1,
+	 extended_fields/0, store/11, write_prefs/4, get_prefs/2, select/6, export/1,
    remove_from_archive/3, make_archive_el/8]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
@@ -108,7 +108,8 @@ get_user_and_bare_peer({LUser, LHost}, Type, Peer) ->
 		   jid:remove_resource(Peer))),
     {SUser, BarePeer}.
 
-store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, ConvType, TS) ->
+store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS,
+    ConvType, OriginID, ForeignID) ->
     {SUser, BarePeer} = get_user_and_bare_peer(
             {LUser, LHost}, Type, Peer),
     LPeer = jid:encode(
@@ -131,7 +132,9 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, ConvType, TS) ->
                "kind=%(SType)s",
                "conversation_type=%(ConvType)s",
                "tags=%(Tags)as",
-               "nick=%(Nick)s"])) of
+               "nick=%(Nick)s",
+               "origin_id=%(OriginID)s",
+               "foreign_id=%(ForeignID)s"])) of
       {updated, _} ->
         ok;
       Err ->

@@ -91,6 +91,8 @@ CREATE TABLE archive (
     id SERIAL,
     kind text,
     nick text,
+    origin_id text,
+    foreign_id text,
     tags text[],
     conversation_type text DEFAULT 'urn:xabber:chat',
     created_at TIMESTAMP NOT NULL DEFAULT now()

@@ -56,8 +56,12 @@
   process_iq/1,
   pubsub_publish_item/6,
   user_send_packet/1,
-  get_device_info/1,
   c2s_session_resumed/1
+]).
+%% API
+-export([
+  get_device_info/1,
+  get_user_devices/2
 ]).
 
 -include("ejabberd.hrl").
@@ -181,9 +185,10 @@ c2s_handle_recv(#{stream_state := wait_for_bind} = State, _, #iq{type = set, sub
       end;
     RevokeAll =/= false ->
       case revoke_all(Server,User) of
-        ok ->
+        {ok, DevIDList} ->
+          Devices = [#devices_device{id = DeviceID} || DeviceID <- DevIDList],
           State1 = State#{stream_state => disconnected},
-          xmpp_stream_in:send(State1,xmpp:make_iq_result(IQ)),
+          xmpp_stream_in:send(State1,xmpp:make_iq_result(IQ,#devices_revoke{devices = Devices})),
           State1;
         _ ->
           State1 = State#{stream_state => disconnected},
@@ -307,13 +312,12 @@ process_iq(#iq{type = set, from = From,
       xmpp:make_error(Iq,xmpp:err_not_allowed())
   end;
 process_iq(#iq{type = get, from = From, to = To, sub_els = [#devices_query_items{}]} = Iq) ->
-  SJID = jid:to_string(jid:remove_resource(From)),
   LServer = To#jid.lserver,
-  case sql_select_user_devices(LServer, SJID) of
+  case get_user_devices(LServer, From) of
+    {ok, []} ->
+      xmpp:make_error(Iq,xmpp:err_item_not_found());
     {ok, Devices} ->
       xmpp:make_iq_result(Iq, #devices_query_items{devices = Devices});
-    not_found ->
-      xmpp:make_error(Iq,xmpp:err_item_not_found());
     _ ->
       xmpp:make_error(Iq,xmpp:err_bad_request())
   end;
@@ -361,8 +365,9 @@ process_iq(#iq{type = set, from = From, to = To, sub_els = [#devices_revoke_all{
   LUser = From#jid.luser,
   Resource = From#jid.lresource,
   case revoke_all_except(LServer, LUser, Resource) of
-    ok ->
-      xmpp:make_iq_result(Iq);
+    {ok, DevIDList} ->
+      Devices = [#devices_device{id = DeviceID} || DeviceID <- DevIDList],
+      xmpp:make_iq_result(Iq, #devices_revoke{devices = Devices});
     not_found ->
       xmpp:make_error(Iq,xmpp:err_item_not_found());
     _ ->
@@ -725,6 +730,13 @@ get_device_info(User, DeviceId) ->
     end,
   sql_select_user_device(LServer, SJID, DeviceId).
 
+-spec get_user_devices(binary(), binary() | jid()) -> {ok, list()} | error | not_found.
+get_user_devices(LServer, JID) when is_tuple(JID)->
+  SJID= jid:to_string(jid:remove_resource(JID)),
+  get_user_devices(LServer, SJID);
+get_user_devices(LServer, SJID)->
+  sql_select_user_devices(LServer, SJID).
+
 publish_omemo_devices(UserJID) ->
   LServer = UserJID#jid.lserver,
   SJID = jid:to_string(jid:remove_resource(UserJID)),
@@ -854,8 +866,6 @@ sql_select_user_devices(LServer, _SJID) ->
     ?SQL("select @(device_id)s, @(expire)s, @(info)s, @(client)s,"
     " @(ip)s, @(last_usage)s, @(public_label)s, @(omemo_id)s"
     " from devices where jid=%(_SJID)s and expire!=0 order by last_usage desc")) of
-    {selected, []} ->
-      not_found;
     {selected, Result} ->
       {ok, to_devices(Result)};
     _ ->
@@ -892,10 +902,8 @@ sql_revoke_all_devices(LServer,BareJID) ->
   case ejabberd_sql:sql_query(
     LServer,
     [<<"update devices set expire=0 where jid= '">>, BareJID,<<"'">>]) of
-    {updated,_N} ->
-      ok;
-    _ ->
-      error
+    {updated,_N} -> ok;
+    _ -> error
   end.
 
 sql_delete_all_devices(LServer,_SJID) ->
@@ -983,7 +991,10 @@ revoke_devices(LUser, LServer, IDs) ->
 revoke_all(Server,User) ->
   JID = jid:to_string(jid:make(User,Server)),
   Devices = sql_get_device_ids(Server,JID),
-  Result = sql_revoke_all_devices(Server,JID),
+  Result = case sql_revoke_all_devices(Server,JID) of
+             ok -> {ok, Devices};
+             R -> R
+           end,
   run_hook_revoke_devices(User, Server, Devices),
   lists:foreach(fun(ID) ->
     ReasonTXT = <<"Device was revoked">>,
@@ -1004,7 +1015,8 @@ revoke_all_except(Server, User, Resource) ->
   case revoke_devices(User, Server, Devices) of
     ok ->
       ReasonTXT = <<"Device was revoked">>,
-      lists:foreach(fun(N) -> kick_by_device_id(Server,User,N,ReasonTXT) end, Devices);
+      lists:foreach(fun(N) -> kick_by_device_id(Server,User,N,ReasonTXT) end, Devices),
+      {ok, Devices};
     V ->
      V
   end.

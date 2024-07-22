@@ -30,10 +30,10 @@
 
 -protocol({xep, 'RETRACT', '0.1.0'}).
 %% gen_mod callbacks.
--export([start/2,stop/1,reload/3,depends/2,mod_options/1]).
+-export([start/2,stop/1,reload/3,depends/2,mod_opt_type/1,mod_options/1]).
 
 %% ejabberd_hooks callbacks.
--export([disco_sm_features/5]).
+-export([disco_sm_features/5, remove_user/2]).
 
 %% gen_iq_handler callback.
 -export([process_iq/1, pre_process_iq/1]).
@@ -49,12 +49,21 @@
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
 
+-record(retract_autoclean, {
+  us = {<<>>, <<>>}  :: {binary(), binary()},
+  ts = 0             :: integer(),
+  last = {0, true}   :: {integer(), boolean()},
+  devices = []       :: list()
+  }).
 
 %%--------------------------------------------------------------------
 %% gen_mod callbacks.
 %%--------------------------------------------------------------------
 -spec start(binary(), gen_mod:opts()) -> ok.
 start(Host, _Opts) ->
+  ejabberd_mnesia:create(?MODULE, retract_autoclean,
+    [{ram_copies, [node()]},
+      {attributes, record_info(fields, retract_autoclean)}]),
   register_iq_handlers(Host),
   register_hooks(Host).
 
@@ -77,12 +86,18 @@ reload(Host, NewOpts, OldOpts) ->
 depends(_Host, _Opts) ->
   [].
 
+mod_opt_type(autoclean) ->
+  fun (B) when is_boolean(B) -> B end.
+
 mod_options(_Host) ->
-  [].
+  [
+  {autoclean, false}
+  ].
 
 %%--------------------------------------------------------------------
-%% Service discovery.
+%% Hooks.
 %%--------------------------------------------------------------------
+%% Service discovery.
 -spec disco_sm_features(empty | {result, [binary()]} | {error, stanza_error()},
     jid(), jid(), binary(), binary())
       -> {result, [binary()]} | {error, stanza_error()}.
@@ -93,11 +108,16 @@ disco_sm_features({result, OtherFeatures}, _From, _To, <<"">>, _Lang) ->
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
   Acc.
 
+%% Remove user.
+remove_user(User, Server) ->
+  sql_delete_all_events(User, Server).
+
 %%--------------------------------------------------------------------
 %% Register/unregister hooks.
 %%--------------------------------------------------------------------
 -spec register_hooks(binary()) -> ok.
 register_hooks(Host) ->
+  ejabberd_hooks:add(remove_user, Host, ?MODULE, remove_user, 60),
   ejabberd_hooks:add(disco_local_features, Host, ?MODULE,
     disco_sm_features, 50),
   ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
@@ -105,7 +125,8 @@ register_hooks(Host) ->
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
-   ejabberd_hooks:delete(disco_local_features, Host, ?MODULE,
+  ejabberd_hooks:delete(remove_user, Host, ?MODULE, remove_user, 60),
+  ejabberd_hooks:delete(disco_local_features, Host, ?MODULE,
     disco_sm_features, 50),
   ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
     disco_sm_features, 50).
@@ -152,6 +173,7 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer} = From,
          end,
   ChatList = get_count_events(LServer, LUser, Ver),
   CurrentVer = send_retract_query_messages(From, Ver, Less, ChatList),
+  spawn(auto_clean(From, CurrentVer)),
   xmpp:make_iq_result(IQ, #xabber_retract_query{version = CurrentVer});
 process_iq(#iq{type = set, sub_els = [#xabber_retract_message{id = undefined}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
@@ -659,7 +681,7 @@ get_version(Server, Username) ->
   end.
 
 insert_event(LServer,Username,Txt,Version, Conv, Type) ->
-  TimeStamp = misc:now_to_usec(erlang:now()),
+  TimeStamp = erlang:system_time(microsecond),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL_INSERT(
@@ -672,6 +694,17 @@ insert_event(LServer,Username,Txt,Version, Conv, Type) ->
         "version=%(Version)d",
         "created=%(TimeStamp)d"
       ])).
+
+sql_delete_old_events(User, Server, Version) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("delete from message_retract where version < %(Version)d "
+    " and username = %(User)s and %(Server)H")).
+
+sql_delete_all_events(User, Server) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("delete from message_retract where username = %(User)s and %(Server)H")).
 
 delete_message(LServer, LUser, StanzaID) ->
   case ejabberd_sql:sql_query(
@@ -707,7 +740,7 @@ get_our_stanza_id(LServer, LUser, ForeignSJID, FID) ->
 
 get_our_stanza_id_fallback(LServer, LUser, ForeignSJID, FID) ->
   %% todo: delete it
-  Depth = misc:now_to_usec(erlang:now()) - 5184000000000, %% Two months
+  Depth = erlang:system_time(microsecond) - 5184000000000, %% Two months
   ForeignIDLike = <<"%<stanza-id %",
     (ejabberd_sql:escape(ejabberd_sql:escape_like_arg_circumflex(FID)))/binary,
     "%/>%">>,
@@ -776,3 +809,72 @@ set_stanza_id(SubELS, JID, ID) ->
 
 check_type(<<>>) -> ?NS_XABBER_CHAT;
 check_type(Value) -> Value.
+
+auto_clean(JID, CurrentVer) ->
+  fun() ->
+    {U, S, R} = jid:tolower(JID),
+    case gen_mod:get_module_opt(S, ?MODULE, autoclean) of
+      true ->
+        case ejabberd_sm:get_user_info(U, S, R) of
+          offline -> ok;
+          Info ->
+            DevID = proplists:get_value(device_id, Info),
+            auto_clean(U, S, DevID, CurrentVer)
+        end;
+      _ ->
+        ok
+    end
+  end.
+
+auto_clean(_User, _Server, undefined, _CurrentVer) ->
+  ok;
+auto_clean(User, Server, DevID, CurrentVer) ->
+  Now = erlang:system_time(second),
+  case mnesia:dirty_read(retract_autoclean, {User, Server}) of
+    [#retract_autoclean{ts =TS, devices = Devices} = R] ->
+      NewDevices = lists:keystore(DevID, 1, Devices,
+        {DevID, CurrentVer}),
+      NewR = R#retract_autoclean{devices = NewDevices},
+      if
+        (Now - TS) > 86400 -> %% once a day
+          auto_clean(NewR);
+        true ->
+          mnesia:dirty_write(NewR)
+      end;
+    _ ->
+      mnesia:dirty_write(#retract_autoclean{us = {User, Server},
+        last = {CurrentVer, true}, ts= Now,
+        devices = [{DevID, CurrentVer}]})
+  end.
+
+auto_clean(#retract_autoclean{us={User, Server}, last={MinVer, Deleted},
+  devices = ReadUntil} = R) ->
+  {ok, Devices} = mod_devices:get_user_devices(Server, jid:make(User, Server)),
+  IDs = [ID || #devices_device{id = ID} <- Devices],
+  ReadIDs = [ID || {ID, _} <- ReadUntil],
+  NewMinVer = lists:min([V || {_, V} <- ReadUntil]),
+  Now = erlang:system_time(second),
+  case IDs -- ReadIDs of
+    [] ->
+      if
+        MinVer == NewMinVer andalso Deleted ->
+          ok;
+        true ->
+          delete_old_events(User, Server, NewMinVer),
+          ?INFO_MSG("Retraction events for user ~s@~s have been removed up to version ~p",
+            [User, Server, NewMinVer])
+      end,
+      mnesia:dirty_write(R#retract_autoclean{ts = Now,
+        last = {NewMinVer, true}, devices = []});
+    _ ->
+      Last = if
+               NewMinVer > MinVer -> {NewMinVer, false};
+               true -> {MinVer, Deleted}
+             end,
+      mnesia:dirty_write(R#retract_autoclean{ts = Now, last = Last})
+  end.
+
+delete_old_events(_User, _Server, 0) ->
+  ok;
+delete_old_events(User, Server, Version) ->
+  sql_delete_old_events(User, Server, Version).

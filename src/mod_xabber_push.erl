@@ -34,8 +34,8 @@
 
 %% ejabberd_hooks callbacks.
 -export([disco_sm_features/5, c2s_session_pending/1, c2s_copy_session/2,
-	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1, encrypt/3,
-	 decrypt/2, xabber_push_notification/4, make_encryption/3, remove_user/2, revoke_devices/3]).
+	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1,
+  xabber_push_notification/4, remove_user/2, revoke_devices/3]).
 
 %% gen_iq_handler callback.
 -export([process_iq/1]).
@@ -43,8 +43,8 @@
 %% ejabberd command.
 -export([get_commands_spec/0, delete_old_sessions/1]).
 
-%% API (used by mod_push_keepalive).
--export([notify/2, notify/4, notify/8, is_message_with_body/1]).
+%% API.
+-export([get_jwk/3]).
 
 %% For IQ callbacks
 -export([delete_session/3]).
@@ -300,12 +300,12 @@ process_iq(#iq{from = #jid{lserver = LServer}, to = #jid{lserver = LServer},
                enable(JID, PushJID, Node, XData)
            end,
   case Result of
-    ok ->
-      El = try mod_http_iq:get_url(LServer) of
+    {ok, TS, DeviceID, EKey} ->
+      El = case mod_http_iq:get_url(LServer) of
              undefined -> undefined;
-             URL -> #oob_x{url = URL}
-           catch
-             _:_ -> undefined
+             URL ->
+               JWT = make_jwt(LServer, JID, TS, EKey, DeviceID),
+               make_enable_result(URL,JWT)
            end,
       xmpp:make_iq_result(IQ,El);
     {error, bad_request} ->
@@ -374,7 +374,8 @@ enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
 				{ok, _} ->
 					?INFO_MSG("Enabling push notifications for ~s",
 						[jid:encode(JID)]),
-					ejabberd_c2s:cast(PID, push_enable);
+					ejabberd_c2s:cast(PID, push_enable),
+					{ok, TS, DeviceID, EncryptionKey};
 				{error, _} = Err ->
 					?ERROR_MSG("Cannot enable push for ~s: database error",
 						[jid:encode(JID)]),
@@ -492,6 +493,18 @@ remove_user(LUser, LServer) ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
     LookupFun = fun() -> Mod:lookup_sessions(LUser, LServer) end,
     delete_sessions(LUser, LServer, LookupFun, Mod).
+
+%%--------------------------------------------------------------------
+%% API.
+%%--------------------------------------------------------------------
+get_jwk(LUser, LServer, DeviceID) ->
+  Mod = gen_mod:db_mod(LServer, ?MODULE),
+  LookupResult = Mod:lookup_device_sessions(LUser, LServer, [DeviceID]),
+  case LookupResult of
+    {ok, [{TS, _, _, _, _, EKey}]} ->
+      make_jwk(TS, base64:decode(EKey), DeviceID);
+    _ -> undefined
+  end.
 
 %%--------------------------------------------------------------------
 %% Generate push notifications.
@@ -807,29 +820,17 @@ make_encryption(Values, Cipher, KeyBase) ->
 												end,
 	#encrypted{'iv-length' = Length, data = Encrypted}.
 
-encrypt(blowfish_cbc, Key, Value) ->
-	Length = 8,
-	Mode = blowfish_cbc,
-	Padding = size(Value) rem 16,
-	Bits = (16-Padding)*8,
-	IV = crypto:strong_rand_bytes(Length),
-	Ciphertext = crypto:block_encrypt(Mode,Key,IV,<<Value/binary,0:Bits>>),
-	Secret = <<IV/binary, Ciphertext/binary>>,
-	{Length, Secret};
-encrypt(aes_cbc256, Key, Value) ->
-	Length = 16,
-	Mode = aes_cbc256,
-	Padding = size(Value) rem 16,
-	Bits = (16-Padding)*8,
-	IV = crypto:strong_rand_bytes(Length),
-	Ciphertext = crypto:block_encrypt(Mode,Key,IV,<<Value/binary,0:Bits>>),
-	Secret = <<IV/binary, Ciphertext/binary>>,
-	{Length, Secret}.
-
-decrypt(Key,Encrypted) ->
-	<<IV:16/binary, Text/binary>> = Encrypted,
-	Mode = aes_cbc256,
-	crypto:block_decrypt(Mode, Key, IV, Text).
+encrypt(Mode, Key, Value) ->
+  Length = case Mode of
+             blowfish_cbc -> 8;
+             aes_cbc256 -> 16
+           end,
+  Padding = size(Value) rem 16,
+  Bits = (16-Padding)*8,
+  IV = crypto:strong_rand_bytes(Length),
+  CipherText = crypto:block_encrypt(Mode,Key,IV,<<Value/binary,0:Bits>>),
+  Secret = <<IV/binary, CipherText/binary>>,
+  {Length, Secret}.
 
 make_string(Values) ->
 	list_to_binary(lists:map(fun(X) -> fxml:element_to_binary(xmpp:encode(X)) end, Values)).
@@ -876,6 +877,14 @@ make_new_form(PType, ExtraFields) ->
     ] ++ ExtraFields,
   #xdata{type = result, fields = Fields}.
 
+make_enable_result(URL, JWT) ->
+  Fields = [
+    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_XABBER_PUSH]},
+    #xdata_field{var = <<"url">>, values = [URL]},
+    #xdata_field{var = <<"jwt">>, values = [JWT]}
+    ],
+  #xdata{type = result, fields = Fields}.
+
 is_muted(LUser, LServer, Pkt) ->
   From = xmpp:get_from(Pkt),
   Conversation = jid:to_string(jid:remove_resource(From)),
@@ -904,3 +913,20 @@ format_stanza_error(#stanza_error{reason = Reason, text = Txt}) ->
     Data ->
       <<Data/binary, " (", Slogan/binary, ")">>
   end.
+
+make_jwt(Server, JID, TS, EKey, DeviceID)->
+  Sub = jid:to_string(jid:replace_resource(JID, DeviceID)),
+  Exp = erlang:system_time(second) + (30*24*60*60) + randoms:uniform(24*60*60),
+  JWK = make_jwk(TS, EKey, DeviceID),
+  JWS = #{<<"alg">> => <<"HS256">>},
+  JWT = #{<<"iss">> => Server, <<"sub">> => Sub, <<"exp">> => Exp},
+  Signed = jose_jwt:sign(JWK, JWS, JWT),
+  {_ , Compact} = jose_jws:compact(Signed),
+  Compact.
+
+make_jwk(TS, EKey, DeviceID)->
+  BTS = integer_to_binary(misc:now_to_usec(TS)),
+  Data = <<BTS/binary,EKey/binary,DeviceID/binary>>,
+  Secret = crypto:hash(sha256, Data),
+  #{<<"kty">> => <<"oct">>,
+    <<"k">> => base64url:encode(Secret)}.

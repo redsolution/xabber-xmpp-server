@@ -62,7 +62,7 @@ mech_step(State, ClientIn) ->
           mod_devices:set_count(User, Server, DeviceID, NewCount),
           {ok,
             [{username, User}, {authzid, AuthzId}, {device_id, DeviceID}, {auth_module, mod_devices}]};
-        expared ->
+        expired ->
           {error, expired, User};
         _ ->
           {error, not_authorized, User}

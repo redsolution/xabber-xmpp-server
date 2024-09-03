@@ -97,8 +97,6 @@ init([Host, Opts]) ->
 
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
-handle_call(get_url, _From, State) ->
-  {reply, State#state.url, State};
 handle_call(get_presence, _From, State) ->
   {reply,#presence{type = unavailable}, State};
 handle_call(Req, From, State) ->
@@ -248,17 +246,25 @@ extract_auth(#request{auth = HTTPAuth}) ->
             true->
               #{usr => {User, Server, <<"">>}, caller_server => Server};
             _ ->
+              %%{error, invalid_auth}
+              %%To support legacy clients.
+              %%todo: Remove it.
               check_token(User, Server, Res, Pass)
           end
       catch _:{bad_jid, _} ->
         {error, invalid_auth}
       end;
     {oauth, Token, _} ->
-      case ejabberd_oauth:check_token(Token) of
-        {ok, {U, S}, Scope} ->
-          #{usr => {U, S, <<"">>}, oauth_scope => Scope, caller_server => S};
-        {false, Reason} ->
-          {error, Reason}
+      case check_jwt(Token) of
+        {error, not_jwt} ->
+          case ejabberd_oauth:check_token(Token) of
+            {ok, {U, S}, Scope} ->
+              #{usr => {U, S, <<"">>}, oauth_scope => Scope, caller_server => S};
+            {false, Reason} ->
+              {error, Reason}
+          end;
+        Result ->
+          Result
       end;
     _ ->
       {error, invalid_auth}
@@ -276,6 +282,43 @@ check_token(User, Server, Res, Token) ->
       end;
     _ ->
       {error, invalid_auth}
+  end.
+
+check_jwt(Token) ->
+  case binary:split(Token, <<".">>, [global]) of
+    [_, P, _] ->
+      Payload = try jiffy:decode(base64url:decode(P)) of
+                  {V} -> V
+                catch _:_ -> []
+                end,
+      UserDevID = proplists:get_value(<<"sub">>, Payload),
+      Exp =  proplists:get_value(<<"exp">>, Payload),
+      Now = erlang:system_time(second),
+      try jid:decode(UserDevID) of
+        #jid{luser = LUser, lserver = LServer, lresource = DevID} ->
+          check_jwt(LUser, LServer, DevID, Token, Exp, Now)
+      catch _:{bad_jid, _} ->
+        {error, invalid_auth}
+      end;
+    _ ->
+      {error, not_jwt}
+  end.
+
+check_jwt(_LUser, _LServer, _DevID, _Token, Exp, Now) when Exp < Now ->
+  {error, invalid_auth};
+check_jwt(LUser, LServer, DevID, Token, _, _) ->
+  check_jwt(LUser, LServer, DevID, Token).
+
+check_jwt(LUser, LServer, DevID, Token) ->
+  case mod_xabber_push:get_jwk(LUser, LServer, DevID) of
+    undefined -> {error, invalid_auth};
+    JWK ->
+      case  jose_jwt:verify(JWK, Token) of
+        {true, _, _} ->
+          #{usr => {LUser, LServer, <<"">>}, caller_server => LServer};
+        _ ->
+          {error, invalid_auth}
+      end
   end.
 
 check_totp(User, Server, Res, Token) ->
@@ -344,7 +387,7 @@ get_secrets(Server, JID, <<>>) ->
 get_secrets(Server, JID, DevId) ->
   case mod_devices:select_secret(Server, JID, DevId) of
     {error, _} -> [];
-    {S, C, E} -> [{S, C, DevId, E}]
+    {S, C, E, _} -> [{S, C, DevId, E}]
   end.
 
 check_host(Host) ->
@@ -368,5 +411,9 @@ seconds_since_epoch(Diff) ->
 %%%===================================================================
 
 get_url(Host)->
-  Proc = gen_mod:get_module_proc(Host, ?MODULE),
-  gen_server:call(Proc, get_url).
+  case gen_mod:get_module_opt(Host, ?MODULE, url) of
+    O when is_binary(O) ->
+      misc:expand_keyword(<<"@HOST@">>, O, Host);
+    _ ->
+      undefined
+  end.

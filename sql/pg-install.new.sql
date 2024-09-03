@@ -553,10 +553,12 @@ CREATE TABLE message_retract(
 CREATE TABLE devices (
     jid text NOT NULL,
     device_id text NOT NULL,
-    secret text NOT NULL,
+    esecret text NOT NULL,
+    validator text NOT NULL,
     count bigint NOT NULL DEFAULT 0,
     info text  DEFAULT ''::text,
     client text DEFAULT ''::text,
+    device_type text DEFAULT ''::text,
     omemo_id text DEFAULT ''::text,
     public_label text DEFAULT ''::text,
     expire bigint NOT NULL,

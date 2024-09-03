@@ -99,6 +99,7 @@ init([]) ->
     cyrsasl_anonymous:start([]),
     cyrsasl_oauth:start([]),
     cyrsasl_hotp:start([]),
+    cyrsasl_devices_ocra:start([]),
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
@@ -117,7 +118,8 @@ terminate(_Reason, _State) ->
     cyrsasl_scram:stop(),
     cyrsasl_anonymous:stop(),
     cyrsasl_oauth:stop(),
-    cyrsasl_hotp:stop().
+    cyrsasl_hotp:stop(),
+    cyrsasl_devices_ocra:stop().
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.

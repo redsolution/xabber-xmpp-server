@@ -43,6 +43,8 @@ start(_Opts) ->
 stop() -> ok.
 
 -spec format_error(error_reason()) -> {atom(), binary()}.
+format_error(device_revoked) ->
+  {'account-disabled', <<"Device access revoked">>};
 format_error(expired) ->
   {'credentials-expired', <<"Device token expired">>};
 format_error(parser_failed) ->
@@ -69,9 +71,9 @@ mech_step(#state{step = 1, host = Host}, ClientIn) ->
         parser_failed ->
           {error, parser_failed};
         expired ->
-          SJID = jid:to_string(jid:make(Username,Host)),
-          mod_devices:delete_device(Host, SJID, DeviceID),
           {error, expired, Username};
+        device_revoked ->
+          {error, device_revoked, Username};
         _ ->
           {error, not_authorized, Username}
       end;
@@ -118,6 +120,8 @@ process_initial_resp(true, Username, Server, DevID, Suite, CQ, ValidationKey) ->
             Err ->
               Err
           end;
+        {error, not_found} ->
+          device_revoked;
         _ ->
           not_authorized
       end;
@@ -141,8 +145,9 @@ check_suite(Suite)->
     _ -> false
   end.
 
-make_challenge_resp(ESecret, Validator,Expire, Suite,
-    CQ, ValidationKey) ->
+make_challenge_resp(_ESecret, _Validator, _Expire, _Suite, _CQ, <<>>) ->
+  parser_failed;
+make_challenge_resp(ESecret, Validator, Expire, Suite, CQ, ValidationKey) ->
   case mod_devices:validate_device(ESecret, Validator,
     ValidationKey, Expire) of
     {ok, Secret} ->

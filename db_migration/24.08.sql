@@ -6,3 +6,4 @@ UPDATE devices SET validator = encode(md5(random()::text)::bytea,'base64') WHERE
 ALTER TABLE devices ALTER esecret SET NOT NULL;
 ALTER TABLE devices ALTER validator SET NOT NULL;
 ALTER TABLE devices DROP COLUMN secret;
+DELETE FROM devices WHERE expire = 0;

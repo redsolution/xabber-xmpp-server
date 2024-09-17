@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : nick_generator.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : mod_nick_avatar.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%% Purpose : Generate random nickname
-%%% Created : 17 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% Created : 17 Sept. 2024 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2024   Redsolution OÜ
 %%%
 %%% This program is free software: you can redistribute it and/or
 %%% modify it under the terms of the GNU Affero General Public License as
@@ -23,69 +23,207 @@
 %%%
 %%%-------------------------------------------------------------------
 
--module(nick_generator).
--author('andrey.gagarin@redsolution.com').
-%% API
--export([random_nick/3,get_avatar_file/1, init/1, handle_call/3, handle_cast/2]).
--export([start/2, stop/1, mod_options/1, depends/2, reload/3, mod_opt_type/1]).
--export([merge_avatar/3, random_adjective/0]).
-%%-export([delete_previous_block/3]).
+-module(mod_nick_avatar).
+-author('ilya.kalashnikov@redsolution.com').
 -behavior(gen_mod).
--behavior(gen_server).
+
+%% gen_mod callbacks
+-export([start/2, stop/1, mod_options/1,
+  depends/2, reload/3, mod_opt_type/1]).
+
+%% API
+-export([random_nick_and_avatar/1, get_avatar_file/1,
+  merge_avatar/2, random_adjective/0]).
+
 -include("logger.hrl").
--include("xmpp.hrl").
 
-%% records
--record(state, {host = <<"">> :: binary()}).
-
-
+%%----------------------
+%% gen_mod callbacks.
+%%----------------------
 -spec start(binary(), gen_mod:opts()) -> ok.
 start(Host, Opts) ->
-  gen_mod:start_child(?MODULE, Host, Opts).
+  Path =  get_store_path(Host, Opts),
+  Amount =  gen_mod:get_opt(amount, Opts),
+  pre_generation(Path, Amount),
+  ok.
 
 -spec stop(binary()) -> ok.
-stop(Host) ->
-  gen_mod:stop_child(?MODULE, Host).
+stop(_Host) ->
+  ok.
 
 -spec reload(binary(), gen_mod:opts(), gen_mod:opts()) -> ok.
 reload(Host, NewOpts, OldOpts) ->
-  NewMod = gen_mod:db_mod(Host, NewOpts, ?MODULE),
-  OldMod = gen_mod:db_mod(Host, OldOpts, ?MODULE),
-  if NewMod /= OldMod ->
-    NewMod:init(Host, NewOpts);
+  NewPath = get_store_path(Host, NewOpts),
+  OldPath = get_store_path(Host, OldOpts),
+  if NewPath /= OldPath ->
+    Amount =  gen_mod:get_opt(amount, NewOpts),
+    pre_generation(NewPath, Amount);
     true ->
       ok
   end.
 
-%%mod_options(_) ->
-%%  [].
-
-mod_opt_type(pre_generated_images) ->
+mod_opt_type(store_path) ->
   fun iolist_to_binary/1;
-mod_opt_type(pre_generated_images_count) ->
+mod_opt_type(amount) ->
   fun (I) when is_integer(I), I > 0 -> I end.
 
 mod_options(_Host) ->
   [
-    %% Required option
-    pre_generated_images,
-    pre_generated_images_count
+    {store_path, <<"@HOME@/pre_avatars">>},
+    {amount, 10}
   ].
 
 depends(_, _) -> [].
 
-init([Host, _Opts]) ->
-  pre_generation(Host),
-  {ok, #state{host = Host}}.
+%%----------------------
+%% API.
+%%----------------------
 
-handle_call(_Request, _From, _State) ->
-  erlang:error(not_implemented).
+random_nick_and_avatar(Host) ->
+  case get_avatar_file(Host) of
+    {ok,FileName,Bin} ->
+      {hd(binary:split(FileName,<<".">>)),{FileName, Bin}};
+    _ ->
+      {random_nick(), error}
+  end.
 
-handle_cast({update,Server,File}, State) ->
-  ?INFO_MSG("Delete old file ~p and generate new",[File]),
-  file:delete(File),
-  generate_image(Server,1),
-  {noreply, State}.
+random_adjective() ->
+  random_list_item(new_adjectives()).
+
+merge_avatar(Avatar1, Avatar2) ->
+  eavatartools:merge_avatars(Avatar1, Avatar2).
+
+get_avatar_file(Server) ->
+  IsEnabled = gen_mod:is_loaded(Server, ?MODULE),
+  get_avatar_file(IsEnabled, Server).
+
+
+%%----------------------
+%% Internal functions.
+%%----------------------
+
+get_avatar_file(true, Server) ->
+  PreImages = get_store_path(Server),
+  case file:list_dir(PreImages) of
+    {ok, []} ->
+      Amount = gen_mod:get_module_opt(Server, ?MODULE,amount),
+      generate_files(PreImages, Amount, 0),
+      error;
+    {ok, Files} ->
+      Nth =  rand:uniform(length(Files)),
+      FileName= list_to_binary(lists:nth(Nth, Files)),
+      File = <<PreImages/binary,"/", FileName/binary>>,
+      case file:read_file(File) of
+        {ok, Bin} ->
+          spawn(replace_with_new(PreImages, File)),
+          {ok, FileName, Bin};
+        _ ->
+          error
+      end;
+    _ ->
+      error
+  end;
+get_avatar_file(_, _) ->
+  error.
+
+random_list_item(L) ->
+  case lists:nth(rand:uniform(length(L)), L) of
+    Item when is_list(Item) ->
+      list_to_binary(Item);
+    Item -> Item
+  end.
+
+random_nick() ->
+  Animal = random_list_item(animals()),
+  Adjective = random_list_item(adjectives()),
+  Num = integer_to_binary(rand:uniform(99)),
+  <<Adjective/binary," ",Animal/binary," ",Num/binary>>.
+
+pre_generation(ImagePath, Amount) ->
+  case file:list_dir(ImagePath) of
+    {ok, Files} ->
+      generate_files(ImagePath, Amount, length(Files));
+    {error, enoent} ->
+      case file:make_dir(ImagePath) of
+        ok ->
+          generate_files(ImagePath, Amount, 0);
+        Err ->
+          ?ERROR_MSG("make dir ~p; error: ~p",[ImagePath, Err])
+      end;
+    Err ->
+      ?ERROR_MSG("list dir ~p; error: ~p",[ImagePath, Err])
+  end.
+
+generate_files(Path, Amount, CurrentAmount) ->
+  NeedToGenerate = Amount - CurrentAmount,
+  do_generate_files(Path, NeedToGenerate).
+
+replace_with_new(StorePath, OldFile) ->
+  ?DEBUG("Delete old file ~p and generate new",[OldFile]),
+  fun() ->
+    file:delete(OldFile),
+    make_image(StorePath)
+  end.
+
+do_generate_files(_Path, 0) ->
+  ok;
+do_generate_files(Path, Count) when Count > 0 ->
+  make_image(Path),
+  do_generate_files(Path, Count - 1);
+do_generate_files(_Path,_Count) ->
+  ok.
+
+make_image(Path) ->
+  case eavatartools:make_avatar() of
+    {ok, FileName, Data} ->
+      do_store_file(filename:join(Path,FileName),
+        Data, undefined, undefined);
+    _ ->
+      ?ERROR_MSG("Problem to generate image",[])
+  end.
+
+-spec do_store_file(file:filename_all(), binary(),
+    integer() | undefined,
+    integer() | undefined)
+      -> ok | {error, term()}.
+do_store_file(Path, Data, FileMode, DirMode) ->
+  try
+    ok = filelib:ensure_dir(Path),
+    {ok, Io} = file:open(Path, [write, exclusive, raw]),
+    Ok = file:write(Io, Data),
+    ok = file:close(Io),
+    if is_integer(FileMode) ->
+      ok = file:change_mode(Path, FileMode);
+      FileMode == undefined ->
+        ok
+    end,
+    if is_integer(DirMode) ->
+      RandDir = filename:dirname(Path),
+      UserDir = filename:dirname(RandDir),
+      ok = file:change_mode(RandDir, DirMode),
+      ok = file:change_mode(UserDir, DirMode);
+      DirMode == undefined ->
+        ok
+    end,
+    ok = Ok % Raise an exception if file:write/2 failed.
+  catch
+    _:{badmatch, {error, Error}} ->
+      {error, Error};
+    _:Error ->
+      {error, Error}
+  end.
+
+get_store_path(Host) ->
+  Path = gen_mod:get_module_opt(Host, ?MODULE, store_path),
+  get_store_path(Host,[{store_path, Path}]).
+
+get_store_path(Host, Opts) ->
+  Path = gen_mod:get_opt(store_path, Opts),
+  Path1 = str:strip(Path, right, $/),
+  {ok, [[Home]]} = init:get_argument(home),
+  Path2 = misc:expand_keyword(<<"@HOME@">>, Path1, Home),
+  Path3 = misc:expand_keyword(<<"@HOST@">>, Path2, Host),
+  filename:absname(Path3).
 
 new_adjectives() ->
   [
@@ -302,60 +440,60 @@ new_adjectives() ->
     "Wonderful"
   ].
 
-  adjectives() ->
-[
-"Adorable",
-"Amazing",
-"Brave",
-"Calm",
-"Careful",
-"Classical",
-"Clean",
-"Confident",
-"Delightful",
-"Eager",
-"Efficient",
-"Electronic",
-"Elegant",
-"Famous",
-"Fancy",
-"Fresh",
-"Futuristic",
-"Gentle",
-"Glamorous",
-"Handsome",
-"Happy",
-"Helpful",
-"Hungry",
-"Impressive",
-"Jolly",
-"Kind",
-"Lively",
-"Logical",
-"Magnificent",
-"Nice",
-"Ordinary",
-"Perfect",
-"Pleasant",
-"Practical",
-"Pragmatic",
-"Proud",
-"Rare",
-"Reasonable",
-"Rich",
-"Silly",
-"Snowy",
-"Sparkling",
-"Sunny",
-"Suspicious",
-"Technical",
-"Thankful",
-"Unusual",
-"Valuable",
-"Wicked",
-"Witty",
-"Wonderful",
-"Zealous"].
+adjectives() ->
+  [
+    "Adorable",
+    "Amazing",
+    "Brave",
+    "Calm",
+    "Careful",
+    "Classical",
+    "Clean",
+    "Confident",
+    "Delightful",
+    "Eager",
+    "Efficient",
+    "Electronic",
+    "Elegant",
+    "Famous",
+    "Fancy",
+    "Fresh",
+    "Futuristic",
+    "Gentle",
+    "Glamorous",
+    "Handsome",
+    "Happy",
+    "Helpful",
+    "Hungry",
+    "Impressive",
+    "Jolly",
+    "Kind",
+    "Lively",
+    "Logical",
+    "Magnificent",
+    "Nice",
+    "Ordinary",
+    "Perfect",
+    "Pleasant",
+    "Practical",
+    "Pragmatic",
+    "Proud",
+    "Rare",
+    "Reasonable",
+    "Rich",
+    "Silly",
+    "Snowy",
+    "Sparkling",
+    "Sunny",
+    "Suspicious",
+    "Technical",
+    "Thankful",
+    "Unusual",
+    "Valuable",
+    "Wicked",
+    "Witty",
+    "Wonderful",
+    "Zealous"].
 
 animals()->
   ["Abyssinian",
@@ -663,137 +801,3 @@ animals()->
     "Zebu",
     "Zonkey",
     "Zorse"].
-
-random_nick(LServer, _User, _Chat) ->
-  generate_nick_and_avatar(LServer).
-
-random_adjective() ->
-  A = new_adjectives(),
-  list_to_binary(lists:nth(rand:uniform(length(A)),A)).
-
-old_random_nick() ->
-  Animals = animals(),
-  Adjectives = adjectives(),
-  LengthAnimals = length(Animals),
-  LengthAdjectives = length(Adjectives),
-  RandomAnimalPosition = rand:uniform(LengthAnimals),
-  RandomAdjectivePosition = rand:uniform(LengthAdjectives),
-  RandomAnimal = list_to_binary(lists:nth(RandomAnimalPosition,Animals)),
-  RandomAdjective = list_to_binary(lists:nth(RandomAdjectivePosition,Adjectives)),
-  RandomNum = integer_to_binary(rand:uniform(99)),
-  Nick = <<RandomAdjective/binary," ",RandomAnimal/binary," ",
-    RandomNum/binary>>,
-  Nick.
-
-generate_nick_and_avatar(Server) ->
-  case get_avatar_file(Server) of
-    {ok,FileName,Bin} ->
-      {hd(binary:split(FileName,<<".">>)),{FileName, Bin}};
-    _ ->
-      old_random_nick()
-  end.
-
-get_avatar_file(Server) ->
-  PreImages = gen_mod:get_module_opt(Server,?MODULE,pre_generated_images),
-  case file:list_dir(PreImages) of
-    {ok,[]} ->
-      generate_files(Server,[]),
-      error;
-    {ok,Files} ->
-      FilesLength = length(Files),
-      RandomPicturePosition =  rand:uniform(FilesLength),
-      FileName= list_to_binary(lists:nth(RandomPicturePosition,Files)),
-      FullPath = <<PreImages/binary, "/">>,
-      File = <<FullPath/binary, FileName/binary>>,
-      case file:read_file(File) of
-        {ok,Bin} ->
-          Proc = gen_mod:get_module_proc(Server, ?MODULE),
-          gen_server:cast(Proc, {update,Server,File}),
-          {ok,FileName,Bin};
-        _ ->
-          error
-      end;
-    _ ->
-      error
-  end.
-
-pre_generation(Host) ->
-  ImagePath = gen_mod:get_module_opt(Host,?MODULE,pre_generated_images),
-  case file:list_dir(ImagePath) of
-    {ok,Files} ->
-      generate_files(Host,Files);
-    {error,_Err} ->
-      case file:make_dir(ImagePath) of
-        ok ->
-          case file:list_dir(ImagePath) of
-            {ok,Files} ->
-              generate_files(Host,Files);
-            _ ->
-              ?ERROR_MSG("Internal error in nick_generator",[])
-          end;
-        _ ->
-          ?ERROR_MSG("Internal error in nick_generator",[])
-      end
-  end.
-
-generate_files(Host,Files) ->
-  ImagesCount = gen_mod:get_module_opt(Host,?MODULE,pre_generated_images_count),
-  CurrentAmount = length(Files),
-  NeedToGenerate = ImagesCount - CurrentAmount,
-  generate_image(Host,NeedToGenerate).
-
-
-generate_image(_Host,0) ->
-  ok;
-generate_image(Host,Count) when Count > 0 ->
-  generate_image(Host),
-  generate_image(Host, Count - 1);
-generate_image(_Host,_Count) ->
-  ok.
-
-generate_image(Host) ->
-  Path = filename:absname(gen_mod:get_module_opt(Host,?MODULE,pre_generated_images)),
-  case eavatartools:make_avatar() of
-    {ok, FileName, Data} ->
-      do_store_file(filename:join(Path,FileName), Data, undefined, undefined);
-    _ ->
-      ?ERROR_MSG("Problem to generate image",[])
-  end.
-
-
-%% Merge avatars
-
-merge_avatar(Avatar1, Avatar2, _Host) ->
- eavatartools:merge_avatars(Avatar1,Avatar2).
-
-
--spec do_store_file(file:filename_all(), binary(),
-    integer() | undefined,
-    integer() | undefined)
-      -> ok | {error, term()}.
-do_store_file(Path, Data, FileMode, DirMode) ->
-  try
-    ok = filelib:ensure_dir(Path),
-    {ok, Io} = file:open(Path, [write, exclusive, raw]),
-    Ok = file:write(Io, Data),
-    ok = file:close(Io),
-    if is_integer(FileMode) ->
-      ok = file:change_mode(Path, FileMode);
-      FileMode == undefined ->
-        ok
-    end,
-    if is_integer(DirMode) ->
-      RandDir = filename:dirname(Path),
-      UserDir = filename:dirname(RandDir),
-      ok = file:change_mode(RandDir, DirMode),
-      ok = file:change_mode(UserDir, DirMode);
-      DirMode == undefined ->
-        ok
-    end,
-    ok = Ok % Raise an exception if file:write/2 failed.
-  catch
-    _:{badmatch, {error, Error}} ->
-      {error, Error};
-    _:Error ->
-      {error, Error}
-  end.

@@ -727,7 +727,7 @@ sql_update_nickname_badge(LServer, User, Group, Nickname, Badge) ->
 
 make_incognito_nickname(LServer, User, Group, UserID)->
   RandomNick =
-    case nick_generator:random_nick(LServer,User, Group) of
+    case mod_nick_avatar:random_nick_and_avatar(LServer) of
       {Nick,{_FileName, Bin}} ->
         %% todo: make a function for this in vcard module
         case mod_groups_vcard:store_user_avatar_file(LServer, Bin, UserID) of
@@ -736,7 +736,10 @@ make_incognito_nickname(LServer, User, Group, UserID)->
           _ -> ok
         end,
         Nick;
-      Nick -> Nick
+      {Nick, _} -> Nick;
+      _ ->
+        Tail = integer_to_binary(erlang:system_time(second)),
+        <<"Nick",Tail/binary>>
     end,
   sql_update_incognito_nickname(LServer, User, Group, RandomNick).
 
@@ -748,7 +751,7 @@ sql_update_incognito_nickname(LServer, User, Group, Nickname) ->
       {selected,[]} ->
         sql_update_auto_nickname_t(User, Group, Nickname);
       {selected, _} ->
-        Ad = nick_generator:random_adjective(),
+        Ad = mod_nick_avatar:random_adjective(),
         Nickname1 = <<Ad/binary," ", Nickname/binary>>,
         sql_update_auto_nickname_t(User, Group, Nickname1);
       _ ->

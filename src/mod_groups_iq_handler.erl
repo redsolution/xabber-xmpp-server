@@ -78,7 +78,7 @@ handle_call(_Request, _From, _State) ->
   erlang:error(not_implemented).
 
 handle_cast({groupchat_created,Server,User,Chat,Lang}, State) ->
-  case nick_generator:get_avatar_file(Server) of
+  case mod_nick_avatar:get_avatar_file(Server) of
     {ok, FileName, Bin} ->
       mod_groups_vcard:publish_avatar(Chat, Bin, FileName);
     _ ->

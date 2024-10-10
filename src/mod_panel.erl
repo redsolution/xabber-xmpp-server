@@ -194,6 +194,9 @@ handle_request('POST',[<<"revoke_token">>], #request{data = Data}, _Perms, User,
     Args ->
       revoke_token(User, Server, proplists:get_value(token, Args))
   end;
+handle_request('POST',[<<"config">>,<<"reload">>], _Req, {true, _}, _User, _Server) ->
+  ejabberd_admin:reload_config(),
+  {200, <<>>};
 handle_request('GET',[<<"registration">>,<<"keys">>], #request{q = Q}, {true, _}, _User, _Server) ->
   Args = check_args(Q, [host]),
   case check_args(Q, [host]) of

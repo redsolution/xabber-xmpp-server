@@ -858,7 +858,7 @@ modules:
     ## servers:
       ## - "xmpp.other-domain.com"
   mod_devices: {}
-    ## hotp_only: false
+    ## device_ocra_only: false
     ## device_expiration_time: 31536000
   mod_groups: {}
     ## global_indexs:

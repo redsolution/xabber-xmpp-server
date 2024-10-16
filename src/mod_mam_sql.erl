@@ -207,7 +207,7 @@ get_message_tags(Pkt) ->
   Invite = {<<"invite">>, xmpp:has_subtag(Message, #xabbergroupchat_invite{})},
   VoIP = lists:filtermap(fun(SubTag) ->
     case xmpp:has_subtag(Message,SubTag) of
-      true -> {true, {<<"<voip>">>, true}};
+      true -> {true, {<<"voip">>, true}};
       _ -> false
     end end,
     [#jingle_reject{}, #jingle_accept{}, #jingle_propose{}]),

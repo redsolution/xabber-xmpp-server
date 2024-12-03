@@ -747,33 +747,36 @@ query_disco_info(Items) ->
   {xmlel,<<"query">>,[{<<"xmlns">>,?NS_DISCO_INFO}],
     Items}.
 
-process_mam_iq(#iq{from = From, lang = Lang, id = Id, to = To, meta = Meta, type = Type,
-  sub_els = [SubEl]} = Iq) ->
+process_mam_iq(#iq{from = From, to = To, lang = Lang,
+  sub_els = [Query]} = Iq) ->
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(To)),
-  SubElD = xmpp:decode(SubEl),
-  IQDecoded = #iq{from = To, lang = Lang, to = From, meta = Meta,
-    sub_els = [SubElD], type = Type, id = Id},
-  case mod_groups_users:check_if_exist(Server,Chat,User) of
+  IsAllowed =  case mod_groups_users:check_if_exist(Server,Chat,User) of
+                 false ->
+                   Indexes = mod_groups:get_option(Server, global_indexs),
+                   case lists:member(User, Indexes) of
+                      true ->
+                        mod_groups_chats:is_global_indexed(Server, Chat);
+                     _ -> false
+                   end;
+                 _ -> true
+               end,
+  case IsAllowed of
     true ->
-      NewSubEls = change_query(SubElD, Server, Chat, Lang),
-      mod_mam:process_iq_v0_3(IQDecoded#iq{sub_els = NewSubEls});
+      QueryD = xmpp:decode(Query),
+      case change_query(QueryD, Server, Chat, Lang) of
+        {error, Err} ->
+          ejabberd_router:route(xmpp:make_error(Iq, Err));
+        SubEls ->
+          mod_mam:process_iq_v0_3(Iq#iq{from = To, to = From,
+            sub_els = SubEls})
+      end;
     _ ->
-      GlobalIndexes = mod_groups:get_option(Server, global_indexs),
-      IsIndexed =  case lists:member(User,GlobalIndexes) of
-                   true ->
-                     mod_groups_chats:is_global_indexed(Server,Chat);
-                   _ -> false
-                 end,
-      if
-        IsIndexed ->
-          mod_mam:process_iq_v0_3(IQDecoded);
-        true ->
-          ?DEBUG("not allowed",[]),
-          xmpp:make_error(Iq, xmpp:err_not_allowed())
-      end
-  end.
+      ejabberd_router:route(
+        xmpp:make_error(Iq, xmpp:err_not_allowed()))
+  end,
+  ignore.
 
 change_query(QueryEl, Server, Chat, Lang) ->
   case mod_mam:parse_query(QueryEl, Lang) of
@@ -784,8 +787,8 @@ change_query(QueryEl, Server, Chat, Lang) ->
       Fields = mam_query:encode(Q2),
       [QueryEl#mam_query{xdata =
       #xdata{type = 'submit', fields = Fields}}];
-    {error, _Err} ->
-      []
+    Err ->
+      Err
   end.
 
 replace_id_to_jid(Query, Server, Chat) ->

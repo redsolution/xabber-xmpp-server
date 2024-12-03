@@ -575,6 +575,8 @@ pre_process_iq_v0_3(#iq{
 	type = set, sub_els = [#mam_query{}]} = IQ) ->
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
 		group ->
+      ?CRITICAL_MSG("Query of group archive with the bare jid: ~s@~s; "
+       "from user: ~p",[LUser, LServer, IQ#iq.from]),
 			mod_groups_iq_handler:make_action(IQ);
 		channel -> mod_channels_iq_handler:process_iq(IQ);
 		_ -> process_iq_v0_3(IQ)
@@ -756,7 +758,20 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}} = IQ) ->
 		_ -> xmpp:make_error(IQ, xmpp:err_not_allowed())
 	end.
 
-process_iq(LServer, #iq{from = #jid{luser = LUser}, lang = Lang,
+process_iq(LServer, IQ, MsgType) ->
+  spawn(async_process_iq(LServer, IQ, MsgType)),
+  ignore.
+
+async_process_iq(LServer, IQ, MsgType) ->
+  fun() ->
+    case do_process_iq(LServer, IQ, MsgType) of
+      ignore -> ok;
+      Result ->
+        ejabberd_router:route(Result)
+    end
+  end.
+
+do_process_iq(LServer, #iq{from = #jid{luser = LUser}, lang = Lang,
 			sub_els = [SubEl]} = IQ, MsgType) ->
     case MsgType of
 	chat ->

@@ -284,6 +284,12 @@ select(LServer, JidRequestor, #jid{luser = LUser} = JidArchive,
 		   true ->
 			{Res, true}
 		end,
+      %% Due to the fact that the COUNT(*) function in PostgreSQL can be slow,
+      %% we return a fake value if the actual value is not necessary.
+	    Count1 = case proplists:get_value('rsm-counter', MAMQuery) of
+                 true -> binary_to_integer(Count);
+                 _ -> length(Res)
+               end,
 	    {lists:flatmap(
 	       fun([TS, XML, PeerBin, Kind, Nick]) ->
 		       case make_archive_el(TS, XML, PeerBin, Kind, Nick,
@@ -293,7 +299,7 @@ select(LServer, JidRequestor, #jid{luser = LUser} = JidArchive,
 			   error ->
 			       []
 		       end
-	       end, Res1), IsComplete, binary_to_integer(Count)};
+	       end, Res1), IsComplete, Count1};
 	_ ->
 	    {[], false, 0}
     end.
@@ -503,20 +509,24 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
           [Query, <<" ORDER BY timestamp ASC ">>,
             LimitClause, <<";">>]
       end,
+    WithCount = proplists:get_value('rsm-counter', MAMQuery, false),
     case ejabberd_sql:use_new_schema() of
-        true ->
+        true when WithCount ->
             {QueryPage,
              [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
               SUser, <<"' and server_host='">>,
               SServer, <<"'">>, WithClause, WithTextClause,
                StartClause, EndClause, IDsClause, AfterIDClause,
                BeforeIDClause, TagsClause, ConvClause, <<";">>]};
-        false ->
+        false when WithCount ->
             {QueryPage,
              [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
               SUser, <<"'">>, WithClause, WithTextClause,
               StartClause, EndClause, IDsClause, AfterIDClause,
-               BeforeIDClause, TagsClause, ConvClause, <<";">>]}
+               BeforeIDClause, TagsClause, ConvClause, <<";">>]};
+        _ ->
+            %% count(*) is slow in PostgreSQL.
+            {QueryPage,[<<"SELECT 0;">>]}
     end.
 
 -spec get_max_direction_id(rsm_set() | undefined) ->

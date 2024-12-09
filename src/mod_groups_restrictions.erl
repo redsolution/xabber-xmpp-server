@@ -145,14 +145,17 @@ get_rules(Server,User,Chat,Action) ->
     ?SQL("select @(valid_until)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
     and right_name=%(Action)s and (valid_until = 0 or valid_until > %(TS)d)")).
 
-check_if_permitted(Server,User,Chat,Action) ->
+check_if_permitted(Server, User, Chat, Action) ->
   TS = now_to_timestamp(now()),
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(right_name)s from groupchat_policy where chatgroup=%(Chat)s and username=%(User)s
-    and (valid_until = 0 or valid_until > %(TS)d)")) of
-    {selected, RightsRaw} when length(RightsRaw) > 0 ->
-      Rights = [R || {R} <- RightsRaw],
+    ?SQL("select @(right_name)s from groupchat_policy where chatgroup=%(Chat)s "
+    " and username=%(User)s and (valid_until = 0 or valid_until > %(TS)d) and "
+    " (select subscription from groupchat_users where chatgroup=%(Chat)s "
+    " and username=%(User)s)='both'")) of
+    {selected, []} -> false;
+    {selected, Result} ->
+      Rights = [R || {R} <- Result],
       check_permission_level(Action, Rights);
     _ ->
       false

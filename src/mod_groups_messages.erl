@@ -160,10 +160,8 @@ check_permission_write(User,Chat) ->
         _ -> allowed
       end;
     _ ->
-      UserJID =  jid:from_string(User),
-      Domain = UserJID#jid.lserver,
-      case mod_groups_block:check_block(Server,Chat,User,Domain) of
-        {stop,not_ok} -> blocked;
+      case mod_groups_block:is_blocked(Server, Chat, User) of
+        true -> blocked;
         _-> notexist
       end
   end.

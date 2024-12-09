@@ -123,9 +123,8 @@ invite_right(_Acc, {Admin, Chat, _Server, _Invite}) ->
   end.
 
 check_user(_Acc, {_A, Chat, Server, #xabbergroupchat_invite{invite_jid = User}}) ->
-  {_,Domain,_} = jid:tolower(jid:from_string(User)),
-  case mod_groups_block:check_block(Server, Chat , User, Domain) of
-    ok ->
+  case mod_groups_block:is_blocked(Server, Chat , User) of
+    false ->
       Subs = mod_groups_users:check_user_if_exist(Server,User,Chat),
       if
         Subs == <<"both">> orelse  Subs == <<"wait">> ->
@@ -133,8 +132,8 @@ check_user(_Acc, {_A, Chat, Server, #xabbergroupchat_invite{invite_jid = User}})
         true ->
           ok
       end;
-    Stop ->
-      Stop
+    _ ->
+      {stop, blocked}
   end.
 
 add_user_in_chat(_Acc, {Admin,Chat,Server,

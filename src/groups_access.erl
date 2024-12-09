@@ -69,14 +69,16 @@ check_access(_Acc, #presence{to = To, from = From}) ->
 %% Internal functions
 
 check_access(UserJID, Group, Membership, Domains) ->
-  Domain = UserJID#jid.lserver,
-  case check_domain(Domain, Domains) of
-    true ->
-      {_, GServer, _} = jid:tolower(jid:from_string(Group)),
-      case mod_groups_block:check_block(GServer, Group,
-        jid:to_string(UserJID), Domain) of
-        ok ->
-          check_membership(UserJID, Group, Membership);
+  case check_membership(UserJID, Group, Membership) of
+    ok ->
+      case check_domain(UserJID#jid.lserver, Domains) of
+        true ->
+          {_, GServer, _} = jid:tolower(jid:from_string(Group)),
+          case mod_groups_block:is_blocked(GServer, Group,
+            jid:to_string(UserJID)) of
+            true -> not_allowed;
+            _ -> ok
+          end;
         _ ->
           not_allowed
       end;
@@ -104,5 +106,5 @@ check_if_user_invited(UserJID, Group) ->
   UserB = jid:to_string(UserJID),
   case mod_groups_users:check_user_if_exist(Server, UserB, Group) of
     not_exist -> not_allowed;
-    _ -> ok %% todo: is the user with subscription "none" invited?
+    _ -> ok
   end.

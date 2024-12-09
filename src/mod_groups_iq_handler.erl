@@ -34,6 +34,8 @@
   init/1, handle_call/3, handle_cast/2, terminate/2]).
 -export([process_groupchat/1,make_action/1]).
 
+-define(NS_GROUP_BLOCK, <<"https://xabber.com/protocol/groups#block">>).
+
 %% records
 -record(state, {host = <<"">> :: binary()}).
 
@@ -100,9 +102,12 @@ handle_cast(_Request, State) ->
 %%process_iq({selected,[_Name]},Iq) ->
 %%  make_action(Iq).
 
-process_groupchat(#iq{type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE, sub_els = []}]} = IQ) ->
+process_groupchat(#iq{type = set,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE, sub_els = []}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
-process_groupchat(#iq{type = set, lang = Lang, to = To, from = From, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE, sub_els = SubEls} = Create]} = IQ) ->
+process_groupchat(#iq{type = set, lang = Lang, to = To, from = From,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE,
+    sub_els = SubEls} = Create]} = IQ) ->
   Creator = From#jid.luser,
   Server = To#jid.lserver,
   Host = From#jid.lserver,
@@ -141,13 +146,15 @@ process_groupchat(#iq{type = set, lang = Lang, to = To, from = From, sub_els = [
       xmpp:make_error(IQ, xmpp:serr_internal_server_error(<<"Internal server error">>,<<"en">>))
   end;
 process_groupchat(#iq{type=get, to= To, from = From,
-  sub_els = [#xabbergroupchat_search{name = Name, anonymous = Anon, description = Desc, model = Model}]} = Iq) ->
+  sub_els = [#xabbergroupchat_search{name = Name, anonymous = Anon,
+    description = Desc, model = Model}]} = Iq) ->
   Server = To#jid.lserver,
   UserHost = From#jid.lserver,
   UserJid = jid:to_string(jid:remove_resource(From)),
   Query = mod_groups_chats:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
   xmpp:make_iq_result(Iq,Query);
-process_groupchat(#iq{from = From, to = To, type = set, sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DELETE, cdata = Localpart}]} = IQ) ->
+process_groupchat(#iq{from = From, to = To, type = set,
+  sub_els = [#xabbergroupchat{xmlns = ?NS_GROUPCHAT_DELETE, cdata = Localpart}]} = IQ) ->
   Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:make(Localpart,Server)),
@@ -163,36 +170,32 @@ process_groupchat(#iq{from = From, to = To, type = set, sub_els = [#xabbergroupc
 process_groupchat(IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).
 
-make_action(#iq{lang = Lang, to = To, from = From, type = get, sub_els = [#xmlel{name = <<"query">>,
-  attrs = [{<<"xmlns">>,<<"https://xabber.com/protocol/groups#block">>}],
-  children = []}]} = Iq) ->
-  Server = To#jid.lserver,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  User = jid:to_string(jid:remove_resource(From)),
-  RightToBlock = mod_groups_restrictions:is_permitted(<<"set-restrictions">>,User,Chat),
-  case mod_groups_users:check_if_exist(Server,Chat,User) of
-    true when RightToBlock == true ->
-      ejabberd_router:route(xmpp:make_iq_result(Iq, mod_groups_block:query(To)));
-    _ ->
-      ejabberd_router:route(xmpp:make_error(Iq, xmpp:err_not_allowed("You do not have permission to see the list of blocked users.",Lang)))
+make_action(#iq{to = To, from = From, type = get,
+  sub_els = [#xmlel{name = <<"query">>,
+    attrs = [{<<"xmlns">>,?NS_GROUP_BLOCK}]}]} = Iq) ->
+  case  mod_groups_block:block_list(From, To) of
+    {error, Error} ->
+      ejabberd_router:route(xmpp:make_error(Iq,Error));
+    Result ->
+      ejabberd_router:route(xmpp:make_iq_result(Iq, Result))
   end;
 make_action(#iq{to = To, type = set, sub_els = [#xmlel{name = <<"unblock">>,
-  attrs = [{<<"xmlns">>,<<"https://xabber.com/protocol/groups#block">>}]}]} = Iq) ->
+  attrs = [{<<"xmlns">>,?NS_GROUP_BLOCK}]}]} = Iq) ->
   Server = To#jid.lserver,
   Result = ejabberd_hooks:run_fold(groupchat_unblock_hook, Server, [], [Iq]),
   case Result of
-    not_ok ->
-      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed()));
-    ok ->
+    {error, Error} ->
+      ejabberd_router:route(xmpp:make_error(Iq, Error));
+    _ ->
       ejabberd_router:route(xmpp:make_iq_result(Iq))
   end;
 make_action(#iq{to = To, type = set, sub_els = [#xmlel{name = <<"block">>,
-  attrs = [{<<"xmlns">>,<<"https://xabber.com/protocol/groups#block">>}]}]} = Iq) ->
+  attrs = [{<<"xmlns">>,?NS_GROUP_BLOCK}]}]} = Iq) ->
   Server = To#jid.lserver,
   Result = ejabberd_hooks:run_fold(groupchat_block_hook, Server, [], [Iq]),
   case Result of
-    not_ok ->
-      ejabberd_router:route(xmpp:make_error(Iq,xmpp:err_not_allowed()));
+    {error, Error} ->
+      ejabberd_router:route(xmpp:make_error(Iq, Error));
     _ ->
       ejabberd_router:route(xmpp:make_iq_result(Iq))
   end;
@@ -258,7 +261,7 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"invite">>,
                   xmpp:make_error(Iq,xmpp:err_conflict(<<"User ",User/binary," was already invited">>,<<>>))
               end,
       ejabberd_router:route(ResIq);
-    not_ok ->
+    blocked ->
       ResIq = case User of
                 undefined ->
                   xmpp:make_error(Iq,xmpp:err_not_allowed(<<"User is in ban list">>,<<>>));
@@ -329,18 +332,18 @@ make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
   Els = [Identity]++Features++[X],
   Q = query_disco_info(Els),
   ejabberd_router:route(xmpp:make_iq_result(Iq,Q));
-make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
-  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:2">>},{<<"queryid">>,_QID}]}]} = Iq) ->
-  process_mam_iq(Iq);
-make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
-  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:1">>},{<<"queryid">>,_QID}]}]} = Iq) ->
-  process_mam_iq(Iq);
-make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
-  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:2">>}]}]} = Iq) ->
-  process_mam_iq(Iq);
-make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
-  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:1">>}]}]} = Iq) ->
-  process_mam_iq(Iq);
+%%make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
+%%  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:2">>},{<<"queryid">>,_QID}]}]} = Iq) ->
+%%  process_mam_iq(Iq);
+%%make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
+%%  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:1">>},{<<"queryid">>,_QID}]}]} = Iq) ->
+%%  process_mam_iq(Iq);
+%%make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
+%%  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:2">>}]}]} = Iq) ->
+%%  process_mam_iq(Iq);
+%%make_action(#iq{type = set, sub_els = [#xmlel{name = <<"query">>,
+%%  attrs = [{<<"xmlns">>,<<"urn:xmpp:mam:1">>}]}]} = Iq) ->
+%%  process_mam_iq(Iq);
 %%make_action(#iq{from = From, to = To, type = get,
 %%  sub_els = [#xmlel{name = <<"query">>,
 %%    attrs = [{<<"xmlns">>,?NS_XABBER_SYNCHRONIZATION},
@@ -482,7 +485,7 @@ process_groupchat_iq(#iq{lang = Lang, from = From, to = To, type = set,
 process_groupchat_iq(#iq{to = To, type = get, sub_els = [#vcard_temp{}]} = IQ) ->
   LUser = To#jid.luser,
   Server = To#jid.lserver,
-  Vcard = mod_groups_vcard:get_vcard(LUser,Server),
+  [Vcard] = mod_groups_vcard:get_vcard(LUser,Server),
   ejabberd_router:route(xmpp:make_iq_result(IQ,Vcard));
 process_groupchat_iq(#iq{lang = Lang, type = get, from = From, to = To,
   sub_els = [#xabbergroupchat_query_rights{

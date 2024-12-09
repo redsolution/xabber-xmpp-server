@@ -212,6 +212,7 @@ kick_user_from_chat(LServer,Chat,User) ->
          username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
     {updated,1} ->
       mod_groups_presence:delete_all_user_sessions(User,Chat),
+      mod_groups_restrictions:delete_permissions(LServer, Chat, User),
       update_last_seen(LServer,User,Chat),
       UserJID = jid:from_string(User),
       ChatJID = jid:from_string(Chat),

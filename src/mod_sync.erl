@@ -30,7 +30,7 @@
 -behavior(gen_server).
 -compile([{parse_transform, ejabberd_sql_pt}]).
 
--protocol({xep, '0CCC', '0.9.0'}).
+-protocol({xep, 'SYNC', '0.10.0'}).
 
 -include("ejabberd.hrl").
 -include("logger.hrl").
@@ -373,126 +373,25 @@ remove_user(User, Server) ->
 %%--------------------------------------------------------------------
 -spec register_iq_handlers(binary()) -> ok.
 register_iq_handlers(Host) ->
-  gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_ARCHIVED,
-    ?MODULE, process_iq),
-  gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PINNED,
-    ?MODULE, process_iq),
   gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_XABBER_SYNCHRONIZATION,
     ?MODULE, process_iq).
 
 -spec unregister_iq_handlers(binary()) -> ok.
 unregister_iq_handlers(Host) ->
-  gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_ARCHIVED),
-  gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_PINNED),
   gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_XABBER_SYNCHRONIZATION).
 
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get,
-  sub_els = [#xabber_synchronization_query{stamp = undefined, rsm = undefined}  = Query],
-  lang = Lang} = IQ) ->
-  SyncQuery = parse_query(Query,Lang),
-  case SyncQuery of
-    {ok,Form} ->
-      Sync = make_result(LServer, LUser, <<"0">>, undefined, Form),
-      xmpp:make_iq_result(IQ,Sync);
-    {error,Err} ->
-      xmpp:make_error(IQ, Err);
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_bad_request())
+process_iq(#iq{type = get, sub_els = [#xabber_synchronization_query{}]} = IQ) ->
+  spawn(async_make_result(IQ)),
+  ignore;
+process_iq(#iq{sub_els = [SyncQuery]} = IQ) ->
+  case xmpp:get_subtag(SyncQuery, #xabber_conversation{}) of
+    false ->
+      xmpp:make_error(IQ, xmpp:err_bad_request());
+    Conversation ->
+      {LUser, LServer, _} = jid:tolower(IQ#iq.from),
+      R = change_conversation(LUser, LServer, Conversation),
+      iq_result(IQ, R)
   end;
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get,
-  sub_els = [#xabber_synchronization_query{stamp = <<>>, rsm = undefined} = Query],
-  lang = Lang} = IQ) ->
-  SyncQuery = parse_query(Query,Lang),
-  case SyncQuery of
-    {ok,Form} ->
-      Sync = make_result(LServer, LUser, <<"0">>, undefined, Form),
-      xmpp:make_iq_result(IQ,Sync);
-    {error,Err} ->
-      xmpp:make_error(IQ, Err);
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_bad_request())
-  end;
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get,
-  sub_els = [#xabber_synchronization_query{stamp = Stamp, rsm = undefined}  = Query],
-  lang = Lang} = IQ) ->
-  SyncQuery = parse_query(Query,Lang),
-  case SyncQuery of
-    {ok,Form} ->
-      Sync = make_result(LServer, LUser, Stamp, undefined, Form),
-      xmpp:make_iq_result(IQ,Sync);
-    {error,Err} ->
-      xmpp:make_error(IQ, Err);
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_bad_request())
-  end;
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get,
-  sub_els = [#xabber_synchronization_query{stamp = undefined, rsm = RSM} = Query],
-  lang = Lang} = IQ) ->
-  SyncQuery = parse_query(Query,Lang),
-  case SyncQuery of
-    {ok,Form} ->
-      Sync = make_result(LServer, LUser, <<"0">>, RSM, Form),
-      xmpp:make_iq_result(IQ,Sync);
-    {error,Err} ->
-      xmpp:make_error(IQ, Err);
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_bad_request())
-  end;
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get,
-  sub_els = [#xabber_synchronization_query{stamp = <<>>, rsm = RSM} = Query],
-  lang = Lang} = IQ) ->
-  SyncQuery = parse_query(Query,Lang),
-  case SyncQuery of
-    {ok,Form} ->
-      Sync = make_result(LServer, LUser, <<"0">>, RSM, Form),
-      xmpp:make_iq_result(IQ,Sync);
-    {error,Err} ->
-      xmpp:make_error(IQ, Err);
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_bad_request())
-  end;
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = get,
-  sub_els = [#xabber_synchronization_query{stamp = Stamp, rsm = RSM} = Query],
-  lang = Lang} = IQ) ->
-  SyncQuery = parse_query(Query, Lang),
-  case SyncQuery of
-    {ok,Form} ->
-      Sync = make_result(LServer, LUser, Stamp, RSM, Form),
-      xmpp:make_iq_result(IQ,Sync);
-    {error,Err} ->
-      xmpp:make_error(IQ, Err);
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_bad_request())
-  end;
-process_iq(#iq{type = set, sub_els = [#xabber_synchronization_query{
-  sub_els = [#xabber_conversation{status = undefined,
-    mute = undefined, pinned = undefined} ]}]} = IQ) ->
-  xmpp:make_error(IQ, xmpp:err_bad_request());
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = set,
-  sub_els = [#xabber_synchronization_query{
-    sub_els = [#xabber_conversation{status = Status,
-      mute = undefined, pinned = undefined} = Conversation]}]} = IQ) ->
-  Result = case Status of
-             deleted ->
-               deactivate_conversation(LServer, LUser,Conversation);
-             archived ->
-               archive_conversation(LServer, LUser, Conversation);
-             active ->
-               activate_conversation(LServer, LUser, Conversation);
-             _ ->
-               {error, xmpp:err_bad_request()}
-           end,
-  iq_result(IQ,Result);
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = set,
-  sub_els = [#xabber_synchronization_query{
-    sub_els =[#xabber_conversation{
-      mute = undefined, pinned = Order} = Conversation]}]} = IQ) when Order /= undefined ->
-  iq_result(IQ, pin_conversation(LServer, LUser, Conversation));
-process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}, type = set,
-  sub_els = [#xabber_synchronization_query{
-    sub_els =[#xabber_conversation{
-      mute = Period, pinned = undefined} = Conversation]}]} = IQ) when Period /= undefined->
-  iq_result(IQ, mute_conversation(LServer, LUser, Conversation));
 process_iq(IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).
 
@@ -503,21 +402,21 @@ iq_result(IQ,{error, Err}) ->
 iq_result(IQ,_Result) ->
   xmpp:make_error(IQ, xmpp:err_internal_server_error()).
 
-parse_query(#xabber_synchronization_query{xdata = undefined}, _Lang) ->
-  {ok, []};
-parse_query(#xabber_synchronization_query{xdata = #xdata{}} = Query, Lang) ->
-  X = xmpp_util:set_xdata_field(
-    #xdata_field{var = <<"FORM_TYPE">>,
-      type = hidden, values = [?NS_XABBER_SYNCHRONIZATION]},
-    Query#xabber_synchronization_query.xdata),
-  try	sync_query:decode(X#xdata.fields) of
-    Form -> {ok, Form}
-  catch _:{sync_query, Why} ->
-    Txt = sync_query:format_error(Why),
-    {error, xmpp:err_bad_request(Txt, Lang)}
-  end;
-parse_query(#xabber_synchronization_query{}, _Lang) ->
-  {ok, []}.
+%%parse_query(#xabber_synchronization_query{xdata = undefined}, _Lang) ->
+%%  {ok, []};
+%%parse_query(#xabber_synchronization_query{xdata = #xdata{}} = Query, Lang) ->
+%%  X = xmpp_util:set_xdata_field(
+%%    #xdata_field{var = <<"FORM_TYPE">>,
+%%      type = hidden, values = [?NS_XABBER_SYNCHRONIZATION]},
+%%    Query#xabber_synchronization_query.xdata),
+%%  try	sync_query:decode(X#xdata.fields) of
+%%    Form -> {ok, Form}
+%%  catch _:{sync_query, Why} ->
+%%    Txt = sync_query:format_error(Why),
+%%    {error, xmpp:err_bad_request(Txt, Lang)}
+%%  end;
+%%parse_query(#xabber_synchronization_query{}, _Lang) ->
+%%  {ok, []}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%--------------------------------------------------------------------
@@ -754,33 +653,58 @@ get_conversation_info(LServer, LUser, Conversation, Type) ->
       {error, internal}
   end.
 
-make_result(LServer, LUser, Stamp, RSM, Form) ->
-  {QueryChats, QueryCount} = make_sql_query(LServer, LUser, Stamp, RSM, Form),
-  {selected, _, Res} = ejabberd_sql:sql_query(LServer, QueryChats),
-  {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(LServer, QueryCount),
+async_make_result(#iq{from = UserJID, sub_els = [
+  #xabber_synchronization_query{stamp = Stamp, rsm = RSM}]} = IQ) ->
+  Stamp1 = case Stamp of
+             undefined -> <<"0">>;
+             <<>> -> <<"0">>;
+             _ -> Stamp
+           end,
+  fun() ->
+    {LUser, LServer, _} = jid:tolower(UserJID),
+    Sync = make_result(LUser, LServer, Stamp1, RSM, []),
+    ejabberd_router:route(xmpp:make_iq_result(IQ, Sync))
+  end.
+
+make_result(User, Server, Stamp, RSM, Form) ->
+  LastStamp = get_last_stamp(Server, User),
+  make_result(User, Server, LastStamp, Stamp, RSM, Form).
+
+make_result(_User, _Server, LastStamp, LastStamp, RSM, _) ->
+  ResRSM = case RSM of
+             undefined -> undefined;
+             _ ->
+               #rsm_set{count = 0}
+           end,
+  #xabber_synchronization_query{stamp = LastStamp, rsm = ResRSM};
+make_result(User, Server, LastStamp, Stamp, RSM, Form) ->
+  {QueryChats, QueryCount} = make_sql_query(Server, User, Stamp, RSM, Form),
+  {selected, _, Res} = ejabberd_sql:sql_query(Server, QueryChats),
+  {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(Server, QueryCount),
   Count = binary_to_integer(CountBinary),
   ConvRes = convert_result(Res),
-  Presences = get_pending_subscriptions(LUser,LServer),
-  ReplacedConv = lists:map(fun(El) ->
-    C = make_result_el(LServer, LUser, El),
-    case lists:keyfind(C#xabber_conversation.jid, #presence.from, Presences) of
-      false -> C;
-      Presence -> xmpp_codec:set_els(C, [Presence | C#xabber_conversation.sub_els])
-    end
-
-                   end, ConvRes
-  ),
-  LastStamp = get_last_stamp(LServer, LUser),
-  ResRSM = case ReplacedConv of
-             [_|_] when RSM /= undefined ->
+  Presences = get_pending_subscriptions(User, Server),
+  ReplacedConv = lists:map(
+    fun(El) ->
+      C = make_result_el(Server, User, El),
+      case lists:keyfind(C#xabber_conversation.jid,
+        #presence.from, Presences) of
+        false -> C;
+        Presence ->
+          xmpp_codec:set_els(C,
+            [Presence | C#xabber_conversation.sub_els])
+      end
+    end, ConvRes),
+  ResRSM = if
+             ReplacedConv /= [] andalso RSM /= undefined ->
                #xabber_conversation{stamp = First} = hd(ReplacedConv),
                #xabber_conversation{stamp = Last} = lists:last(ReplacedConv),
                #rsm_set{first = #rsm_first{data = First},
                  last = Last,
                  count = Count};
-             [] when RSM /= undefined ->
+             ReplacedConv == [] andalso RSM /= undefined ->
                #rsm_set{count = Count};
-             _ ->
+             true ->
                undefined
            end,
   #xabber_synchronization_query{sub_els = ReplacedConv,
@@ -1898,42 +1822,45 @@ check_voip_msg(_, _) ->
 
 make_sql_query(LServer, User, 0, RSM, Form)->
   make_sql_query(LServer, User, <<"0">>, RSM, Form);
-make_sql_query(LServer, User, TS, RSM, Form) ->
+make_sql_query(LServer, User, TS, RSM, _Form) ->
   {Max, Direction, Chat} = get_max_direction_chat(RSM),
   SServer = ejabberd_sql:escape(LServer),
   SUser = ejabberd_sql:escape(User),
   Timestamp = ejabberd_sql:escape(TS),
-  Pinned =  proplists:get_value(filter_pinned, Form),
-  PinnedFirst = proplists:get_value(pinned_first, Form),
-  Archived = proplists:get_value(filter_archived, Form),
+%%  Pinned =  proplists:get_value(filter_pinned, Form),
+%%  PinnedFirst = proplists:get_value(pinned_first, Form),
+%%  Archived = proplists:get_value(filter_archived, Form),
   DeleteClause = case TS of
                    <<"0">> -> [<<"and status != 'deleted' ">>];
                    _ -> []
                  end,
-  PinnedClause = case Pinned of
-                   false ->
-                     [<<"and pinned is null ">>];
-                   true ->
-                     [<<"and pinned >= 0 ">>];
-                   _ ->
-                     []
-                 end,
-  ArchivedClause = case Archived of
-                     false ->
-                       [<<"and status != 'archived' ">>];
-                     true ->
-                       [<<"and status = 'archived' ">>];
-                     _ ->
-                       []
-                   end,
-  PinnedFirstClause = case PinnedFirst of
-                        false ->
-                          [];
-                        true ->
-                          [<<" pinned desc ">>];
-                        _ ->
-                          []
-                      end,
+%%  PinnedClause = case Pinned of
+%%                   false ->
+%%                     [<<"and pinned is null ">>];
+%%                   true ->
+%%                     [<<"and pinned >= 0 ">>];
+%%                   _ ->
+%%                     []
+%%                 end,
+%%  ArchivedClause = case Archived of
+%%                     false ->
+%%                       [<<"and status != 'archived' ">>];
+%%                     true ->
+%%                       [<<"and status = 'archived' ">>];
+%%                     _ ->
+%%                       []
+%%                   end,
+%%  PinnedFirstClause = case PinnedFirst of
+%%                        false ->
+%%                          [];
+%%                        true ->
+%%                          [<<" pinned desc ">>];
+%%                        _ ->
+%%                          []
+%%                      end,
+  PinnedClause = [],
+  ArchivedClause =[],
+  PinnedFirstClause = [<<" pinned desc, ">>],
   LimitClause = if is_integer(Max), Max >= 0 ->
     [<<" limit ">>, integer_to_binary(Max)];
                   true ->
@@ -2008,7 +1935,24 @@ get_max_direction_chat(RSM) ->
       {undefined, undefined, undefined}
   end.
 
-pin_conversation(LServer, LUser, #xabber_conversation{type = Type, jid = ConvJID, thread = Thread, pinned = Pinned}) ->
+change_conversation(LUser, LServer, Conversation) ->
+  #xabber_conversation{status = Status, pinned = Pinned,
+    mute = Mute} = Conversation,
+  case {Status, Pinned, Mute} of
+    {undefined, undefined, undefined} ->
+      {error, xmpp:err_bad_request()};
+    {Status, undefined, undefined} ->
+      change_conversation_status(Status, LServer, LUser, Conversation);
+    {undefined, _Binary, undefined} ->
+      pin_conversation(LServer, LUser, Conversation);
+    {undefined, undefined, _Binary} ->
+      mute_conversation(LServer, LUser, Conversation);
+    _ ->
+      {error, xmpp:err_bad_request()}
+  end.
+
+pin_conversation(LServer, LUser, #xabber_conversation{type = Type,
+  jid = ConvJID, thread = Thread, pinned = Pinned}) ->
   Num = binary_to_integer(Pinned),
   TS = time_now(),
   Conversation = jid:to_string(ConvJID),
@@ -2030,8 +1974,8 @@ pin_conversation(LServer, LUser, #xabber_conversation{type = Type, jid = ConvJID
 pin_conversation(_, _, _) ->
   {error,xmpp:err_bad_request()}.
 
-mute_conversation(LServer, LUser,
-    #xabber_conversation{type = Type, jid = ConvJID, thread = Thread, mute = Mute}) ->
+mute_conversation(LServer, LUser, #xabber_conversation{type = Type,
+  jid = ConvJID, thread = Thread, mute = Mute}) ->
   TS = time_now(),
   Conversation = jid:to_string(ConvJID),
   SetMute = case Mute of
@@ -2062,6 +2006,15 @@ mute_conversation(LServer, LUser,
 mute_conversation(_, _, _) ->
   {error,xmpp:err_bad_request()}.
 
+change_conversation_status(active, LServer, LUser, Conversation) ->
+  activate_conversation(LServer, LUser, Conversation);
+change_conversation_status(archived, LServer, LUser, Conversation) ->
+  archive_conversation(LServer, LUser, Conversation);
+change_conversation_status(deleted, LServer, LUser, Conversation) ->
+  deactivate_conversation(LServer, LUser, Conversation);
+change_conversation_status(_, _, _, _) ->
+  {error, xmpp:err_bad_request()}.
+
 archive_conversation(LServer, LUser,
     #xabber_conversation{type = Type, jid = ConvJID, thread = Thread}) ->
   TS = time_now(),
@@ -2084,7 +2037,8 @@ archive_conversation(LServer, LUser,
 archive_conversation(_, _, _) ->
   {error,xmpp:err_bad_request()}.
 
-activate_conversation(LServer, LUser, #xabber_conversation{type = Type, jid = ConvJID, thread = Thread}) ->
+activate_conversation(LServer, LUser, #xabber_conversation{type = Type,
+  jid = ConvJID, thread = Thread}) ->
   TS = time_now(),
   Conversation = jid:to_string(ConvJID),
   case ejabberd_sql:sql_query(

@@ -77,24 +77,24 @@ get_local_items(Acc, _From, #jid{lserver = LServer} = To,
                 empty -> []
               end,
       DI = #disco_item{jid = To,
-        node = ?NS_GROUPCHAT,
+        node = ?NS_GROUPS,
         name = <<"Group Service">>},
       {result,Items ++ [DI]}
       end;
 get_local_items(Acc, _From, _To, _Node, _Lang) ->
   Acc.
 
-get_local_features(Acc, _From, _To, ?NS_GROUPCHAT, _Lang) ->
+get_local_features(Acc, _From, _To, ?NS_GROUPS, _Lang) ->
   Items = case Acc of
             {result, Its} -> Its;
             empty -> []
           end,
-  {result, Items ++[?NS_GROUPCHAT,?NS_DISCO_INFO,?NS_DISCO_ITEMS]};
+  {result, Items ++[?NS_GROUPS,?NS_DISCO_INFO,?NS_DISCO_ITEMS]};
 get_local_features(Acc, _From, _To, _Node, _Lang) ->
   Acc.
 
 -spec get_local_identity(disco_acc(), jid(), jid(), binary(), binary()) -> disco_acc().
-get_local_identity(_Acc, _From, _To, ?NS_GROUPCHAT, _Lang) ->
+get_local_identity(_Acc, _From, _To, ?NS_GROUPS, _Lang) ->
   [#identity{category = <<"conference">>,
     type = <<"server">>,
     name = <<"Group Service">>}];
@@ -107,9 +107,9 @@ process_disco_info(#iq{type = set, lang = Lang} = IQ) ->
   Txt = <<"Value 'set' of 'type' attribute is not allowed">>,
   xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
 process_disco_info(#iq{type = get, to = To, lang = _Lang,
-  sub_els = [#disco_info{node = ?NS_GROUPCHAT}]} = IQ) ->
+  sub_els = [#disco_info{node = ?NS_GROUPS}]} = IQ) ->
   ServerHost = ejabberd_router:host_of_route(To#jid.lserver),
-  Features = [?NS_GROUPCHAT],
+  Features = [?NS_GROUPS],
   Name = gen_mod:get_module_opt(ServerHost, ?MODULE, name),
   Identity = #identity{category = <<"conference">>,
     type = <<"server">>,
@@ -129,7 +129,7 @@ process_disco_items(#iq{type = set, lang = Lang} = IQ) ->
   Txt = <<"Value 'set' of 'type' attribute is not allowed">>,
   xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
 process_disco_items(#iq{type = get, from = From, to = To, lang = _Lang,
-  sub_els = [#disco_items{node = ?NS_GROUPCHAT, rsm = RSM}]} = IQ) ->
+  sub_els = [#disco_items{node = ?NS_GROUPS, rsm = RSM}]} = IQ) ->
   {User,Host,_} = jid:tolower(From),
   ServerHost = ejabberd_router:host_of_route(To#jid.lserver),
   BareJID = jid:to_string(jid:make(User,Host)),
@@ -157,7 +157,7 @@ process_disco_items(#iq{type = get, from = From, to = To, lang = _Lang,
              _ ->
                undefined
            end,
-  Q = #disco_items{node = ?NS_GROUPCHAT, items = Items, rsm = ResRSM},
+  Q = #disco_items{node = ?NS_GROUPS, items = Items, rsm = ResRSM},
   xmpp:make_iq_result(IQ,Q);
 process_disco_items(#iq{lang = Lang} = IQ) ->
   Txt = <<"No module is handling this query">>,
@@ -184,7 +184,7 @@ disco_local_items(Acc, _From, #jid{lserver = LServer} = _To, <<"">>, _Lang) ->
       D = #disco_item{jid = jid:make(<<"groupchat.", ServerHost/binary>>)},
       ItemsNew = Items -- [D],
       Nodes = [#disco_item{jid = jid:make(<<"groupchat.", ServerHost/binary>>),
-        node = ?NS_GROUPCHAT,
+        node = ?NS_GROUPS,
         name = Name}],
       {result, ItemsNew ++ Nodes}
   end;

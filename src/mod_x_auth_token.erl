@@ -341,7 +341,7 @@ bold() ->
 
 uri(User) ->
   XMPP = <<"xmpp:",User/binary>>,
-  #xabber_groupchat_mention{cdata = XMPP}.
+  #markup_mention{cdata = XMPP}.
 
 bin_len(Bin) ->
   misc:escaped_text_len(Bin).

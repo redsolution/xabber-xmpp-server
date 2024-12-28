@@ -120,7 +120,7 @@ shift_references(Pkt, Length) ->
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
+      if (Name == <<"reference">> andalso NS == ?NS_REFERENCES) ->
         try xmpp:decode(El) of
           #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub} ->
             {true, #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub}};
@@ -145,7 +145,7 @@ strip_reference_elements(Pkt) ->
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
+      if (Name == <<"reference">> andalso NS == ?NS_REFERENCES) ->
         try xmpp:decode(El) of
           #xmppreference{type = <<"groupchat">>} ->
             false;
@@ -167,9 +167,9 @@ strip_x_elements(Pkt) ->
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"x">> andalso NS == ?NS_GROUPCHAT) ->
+      if (Name == <<"x">> andalso NS == ?NS_GROUPS) ->
         try xmpp:decode(El) of
-          #xabbergroupchat_x{} ->
+          #groups_x{} ->
             false
         catch _:{xmpp_codec, _} ->
           false
@@ -193,7 +193,7 @@ strip_stanza_id(Pkt, LServer) ->
         try xmpp:decode(El) of
           #mam_archived{by = By} ->
             By#jid.lserver == LServer;
-          #unique_time{by = By} ->
+          #delivery_time{by = By} ->
             By#jid.lserver == LServer;
           #stanza_id{by = By} ->
             By#jid.lserver == LServer

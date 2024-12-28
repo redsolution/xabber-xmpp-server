@@ -194,12 +194,12 @@ process_iq(#iq{type = get, from = From, sub_els = [#xen_prefs{}]} = IQ, State) -
     _ ->
       xmpp:make_error(IQ, xmpp:err_not_allowed())
   end;
-process_iq(#iq{lang = Lang, type = set, sub_els = [#notify{
+process_iq(#iq{lang = Lang, type = set, sub_els = [#xen_notify{
   notification = #xen_notification{sub_els = []}}]} = IQ, _State) ->
   Txt = <<"Missing notification payload">>,
   xmpp:make_error(IQ, xmpp:err_bad_request(Txt, Lang));
 process_iq(#iq{type = set, from = From,
-  sub_els = [#notify{notification = Notification, fallback = Fallback,
+  sub_els = [#xen_notify{notification = Notification, fallback = Fallback,
     addresses = #addresses{list = [#address{type = to, jid = To}]}}]} = IQ, State) ->
   Policy = State#state.policy,
   OFrom = jid:remove_resource(From),
@@ -211,9 +211,9 @@ process_iq(#iq{type = set, from = From,
     _ ->
       xmpp:make_error(IQ, xmpp:err_not_allowed())
   end;
-process_iq(#iq{type = set, sub_els = [#notify{}]} = IQ, _State) ->
+process_iq(#iq{type = set, sub_els = [#xen_notify{}]} = IQ, _State) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
-process_iq(#iq{type = set, sub_els = [#xabber_retract_message{}]} = IQ, _State) ->
+process_iq(#iq{type = set, sub_els = [#retract_message{}]} = IQ, _State) ->
   xmpp:make_iq_result(IQ);
 process_iq(IQ,_) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).

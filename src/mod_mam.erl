@@ -438,7 +438,7 @@ get_stanza_id(#message{meta = #{stanza_id := ID}}) ->
 init_stanza_id(Pkt, LServer) ->
 	ID = misc:now_to_usec(erlang:now()),
 	Pkt1 = strip_my_stanza_id(Pkt, LServer),
-	Pkt2 = xmpp:put_meta(Pkt1, unique_time, ID),
+	Pkt2 = xmpp:put_meta(Pkt1, delivery_time, ID),
 	xmpp:put_meta(Pkt2, stanza_id, ID).
 
 -spec init_stanza_id_incoming(stanza(), binary()) -> stanza().
@@ -450,10 +450,10 @@ init_stanza_id_incoming(Pkt, _LServer) ->
 		false ->
 			Receiver = jid:remove_resource(xmpp:get_to(Pkt)),
 			Pkt1 = strip_my_stanza_id_new_incoming(Pkt, Receiver),
-			Pkt2 = xmpp:put_meta(Pkt1, unique_time, TimeStamp),
+			Pkt2 = xmpp:put_meta(Pkt1, delivery_time, TimeStamp),
 			xmpp:put_meta(Pkt2, stanza_id, ID);
 		_ ->
-			Pkt2 = xmpp:put_meta(Pkt, unique_time, TimeStamp),
+			Pkt2 = xmpp:put_meta(Pkt, delivery_time, TimeStamp),
 			xmpp:put_meta(Pkt2, stanza_id, ID)
 	end.
 
@@ -462,7 +462,7 @@ set_stanza_id(Pkt, JID, ID, TimeStamp) ->
     BareJID = jid:remove_resource(JID),
     Archived = #mam_archived{by = BareJID, id = ID},
     StanzaID = #stanza_id{by = BareJID, id = ID},
-    Time = #unique_time{by = BareJID, stamp = TimeStamp},
+    Time = #delivery_time{by = BareJID, stamp = TimeStamp},
     NewEls = [Archived, StanzaID, Time|xmpp:get_els(Pkt)],
     xmpp:set_els(Pkt, NewEls).
 
@@ -495,15 +495,15 @@ get_foreign_stanza_id(LUser, LServer, recv, Pkt) ->
 get_foreign_stanza_id(_LUser, _LServer, _Dir, _Pkt) -> <<>>.
 
 -spec mark_stored_msg(message(), jid()) -> message().
-mark_stored_msg(#message{meta = #{stanza_id := ID, unique_time := TimeStamp}} = Pkt, JID) ->
+mark_stored_msg(#message{meta = #{stanza_id := ID, delivery_time := TimeStamp}} = Pkt, JID) ->
     Pkt1 = set_stanza_id(Pkt, JID, integer_to_binary(ID), misc:usec_to_now(TimeStamp)),
     xmpp:put_meta(Pkt1, mam_archived, true).
 
 -spec identify_conversation_type(stanza(), atom()) -> stanza().
 identify_conversation_type(Pkt, Dir) ->
-  IsGroup = (Dir == recv andalso (xmpp:has_subtag(Pkt, #xabbergroupchat_x{
-    xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}) orelse
-    xmpp:has_subtag(Pkt, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}))),
+  IsGroup = (Dir == recv andalso (xmpp:has_subtag(Pkt, #groups_x{
+    xmlns = ?NS_GROUPS_SYSTEM_MESSAGE}) orelse
+    xmpp:has_subtag(Pkt, #groups_x{xmlns = ?NS_GROUPS}))),
   Peer  = case Dir of
             recv -> xmpp:get_from(Pkt);
             _ -> xmpp:get_to(Pkt)
@@ -513,7 +513,7 @@ identify_conversation_type(Pkt, Dir) ->
               lresource = <<>>} ->
               conversation_type_by_domain(Domain);
             _ when IsGroup ->
-              ?NS_GROUPCHAT;
+              ?NS_GROUPS;
             _ ->
               get_encrypted_type(xmpp:get_els(Pkt))
           end,
@@ -650,8 +650,8 @@ disco_sm_features(empty, From, To, Node, Lang) ->
 disco_sm_features({result, OtherFeatures},
 		  #jid{luser = U, lserver = S},
 		  #jid{luser = U, lserver = S}, <<"">>, _Lang) ->
-    {result, [?NS_MAM_TMP, ?NS_MAM_0, ?NS_MAM_1, ?NS_MAM_2, ?NS_MAM_2_E, ?NS_SID_0 |
-	      OtherFeatures]};
+    {result, [?NS_MAM_TMP, ?NS_MAM_0, ?NS_MAM_1, ?NS_MAM_2, ?NS_MAM_2_E, ?NS_SID_0,
+      ?NS_XABBER_ARCHIVE | OtherFeatures]};
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
     Acc.
 
@@ -816,7 +816,7 @@ should_archive_out(#message{from = From, body = Body, subject = Subject,
 					(xmpp:get_text(Body) /= <<>> orelse
 						xmpp:get_text(Subject) /= <<>>) andalso
 					%% do not store sent invitations
-						xmpp:get_subtag(Pkt, #xabbergroupchat_invite{}) == false
+						xmpp:get_subtag(Pkt, #groups_invite{}) == false
 			end
 	end;
 should_archive_out(_, _LServer) ->
@@ -867,7 +867,7 @@ strip_my_stanza_id(Pkt, LServer) ->
 			       try xmpp:decode(El) of
 				   #mam_archived{by = By} ->
 				       By#jid.lserver /= LServer;
-				   #unique_time{by = By} ->
+				   #delivery_time{by = By} ->
 				       By#jid.lserver /= LServer;
 				   #stanza_id{by = By} ->
 				       By#jid.lserver /= LServer
@@ -894,7 +894,7 @@ strip_my_stanza_id_new_incoming(Pkt, ByJID) ->
 				try xmpp:decode(El) of
 					#mam_archived{by = By} ->
 						By#jid.lserver /= LServer ;
-					#unique_time{by = By} ->
+					#delivery_time{by = By} ->
 						By#jid.lserver /= LServer ;
 					#stanza_id{by = By} ->
 						By /= ByJID

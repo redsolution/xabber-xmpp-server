@@ -547,7 +547,7 @@ notify(LServer, PushSrv, Node, XData, #message{sub_els = [#carbons_received{} = 
   notify(LServer, PushSrv, Node, XData, hd(SubEls), Callback, Cipher, Key);
 notify(LServer, PushSrv, Node, XData, #message{body = []} = Pkt,
     Callback, Cipher, Key) ->
-  case xmpp:get_subtag(Pkt, #message_displayed{}) of
+  case xmpp:get_subtag(Pkt, #mark_displayed{}) of
     false ->
       case xmpp:get_subtag(Pkt, #jingle_propose{}) of
         false -> ok;

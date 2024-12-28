@@ -185,8 +185,8 @@ process_presence(<<"inactive">>, _Packet) ->
 process_presence(_,Packet) ->
   answer_presence(Packet).
 
-is_chat(Sub) ->
-  case lists:keyfind(xabbergroupchat_x,1,Sub) of
+is_group(Sub) ->
+  case lists:keyfind(groups_x,1,Sub) of
      false ->
        false;
     _ ->
@@ -199,10 +199,10 @@ answer_presence(#presence{to = To, from = From, type = available} = Presence) ->
   User = jid:to_string(jid:remove_resource(From)),
   DecodedPresence = xmpp:decode_els(Presence),
   Decoded = DecodedPresence#presence.sub_els,
-  case is_chat(Decoded) of
+  case is_group(Decoded) of
     true ->
       Result = ejabberd_hooks:run_fold(groupchat_presence_unsubscribed_hook,
-        Server, [], [{Server,User,Chat,#xabbergroupchat_user_card{},<<"en">>}]),
+        Server, [], [{Server,User,Chat,#groups_user{},<<"en">>}]),
       case Result of
         ok ->
           delete_all_user_sessions(User,Chat),
@@ -228,23 +228,22 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
         #presence{type = error, sub_els = xmpp:err_internal_server_error()});
     _ ->
       UserBare = jid:remove_resource(From),
-      ChatJid = jid:to_string(jid:remove_resource(To)),
-      ejabberd_router:route(FromChat, UserBare, form_presence(ChatJid, subscribed, [])),
-      ejabberd_router:route(FromChat, UserBare, form_presence(ChatJid, subscribe, [])),
-      ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta()),
-      User = jid:to_string(jid:remove_resource(From)),
+      GroupS = jid:to_string(jid:remove_resource(To)),
+      ejabberd_router:route(FromChat, UserBare, form_presence(GroupS, subscribed, [])),
+      ejabberd_router:route(FromChat, UserBare, form_presence(GroupS, subscribe, [])),
       Decoded = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
-      case lists:keyfind(collect,1,Decoded) of
-        {collect, <<"false">>} ->
-          mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"no">>);
-        {collect, <<"true">>} ->
-          mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"yes">>);
+      case mod_groups_chats:is_anonim(Server, GroupS) of
+        false ->
+          ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta());
         _ -> ok
       end,
+      %% Deprecated
+      %% todo: implement it in another way.
       case lists:keyfind(xabbergroup_peer, 1, Decoded) of
         {xabbergroup_peer,_JID,_ID, PeerState} ->
+          User = jid:to_string(jid:remove_resource(From)),
           mod_groups_users:change_peer_to_peer_invitation_state(
-            Server, User, ChatJid, PeerState);
+            Server, User, GroupS, PeerState);
         _ -> ok
       end
   end;
@@ -313,13 +312,6 @@ answer_presence(From, To, SubEls)->
   ChatJid = jid:to_string(jid:make(To#jid.luser,To#jid.lserver,<<>>)),
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
-  case lists:keyfind(collect, 1, SubEls) of
-    {collect, <<"false">>} ->
-      mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"no">>);
-    {collect, <<"true">>} ->
-      mod_groups_vcard:update_parse_avatar_option(Server, User, ChatJid,<<"yes">>);
-    _ -> ok
-  end,
   NewHash = case lists:keyfind(vcard_xupdate,1, SubEls) of
               false -> undefined;
               Hash -> Hash#vcard_xupdate.hash
@@ -336,24 +328,18 @@ answer_presence(From, To, SubEls)->
     _ ->
       ok
   end,
-  case lists:keyfind(xabbergroup_peer,1, SubEls) of
-    {xabbergroup_peer, _JID, _ID, PeerState} ->
+  case lists:keyfind(groups_ptp,1, SubEls) of
+    {groups_ptp, _JID, _ID, PeerState} ->
       mod_groups_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
     _ -> ok
   end,
   FromChat = jid:replace_resource(To,<<"Group">>),
-  Present = lists:keyfind(x_present,1, SubEls),
-  NotPresent = lists:keyfind(x_not_present,1, SubEls),
-  if
-    Present == false andalso NotPresent == false ->
-      mod_groups_vcard:make_chat_notification_message(Server,ChatJid,From),
-      ejabberd_router:route(FromChat,From,form_presence(ChatJid)),
-      if
-        not IsAnon ->
-          mod_groups_vcard:maybe_update_avatar(From,To,Server);
-        true -> ok
-      end;
-    true ->
+  mod_groups_vcard:make_chat_notification_message(Server,ChatJid,From),
+  ejabberd_router:route(FromChat,From,form_presence(ChatJid)),
+  case IsAnon of
+    false ->
+      mod_groups_vcard:maybe_update_avatar(From,To,Server);
+    _ ->
       ok
   end.
 
@@ -428,7 +414,7 @@ info_about_chat(ChatJid, Opts) ->
   case mod_groups_chats:get_info(ChatJid,Server) of
     error ->
       %% Happens when deleting a group
-      {#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}, [],undefined};
+      {#groups_x{xmlns = ?NS_GROUPS}, [],undefined};
     Info ->
       info_about_chat(Server, ChatJid, Info, Opts)
   end.
@@ -450,19 +436,19 @@ info_about_chat(Server, ChatJid,  {Name, Anonymous, Search, Model,
           [#text{data = <<"Private chat">>}], undefined}
     end,
   SubEls = [
-    #xabbergroupchat_name{cdata = Name},
-    #xabbergroupchat_privacy{cdata = Anonymous},
-    #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)}
+    #groups_name{cdata = Name},
+    #groups_privacy{cdata = Anonymous},
+    #groups_pinned_message{cdata = integer_to_binary(Message)}
   ],
   SubElsFull = case  proplists:get_value(full, Opts) of
               true ->
-                [#xabbergroupchat_index{cdata = Search},
-                  #xabbergroupchat_membership{cdata = Model},
-                  #xabbergroupchat_description{cdata = Desc}];
+                [#groups_index{cdata = Search},
+                  #groups_membership{cdata = Model},
+                  #groups_description{cdata = Desc}];
               _ -> []
             end,
-  X = #xabbergroupchat_x{
-    xmlns = ?NS_GROUPCHAT,
+  X = #groups_x{
+    xmlns = ?NS_GROUPS,
     members = mod_groups_chats:count_users(Server,ChatJid),
     present = Present,
     parent = Parent,

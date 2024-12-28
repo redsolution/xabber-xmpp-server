@@ -162,9 +162,9 @@ get_all_references(Pkt) ->
 
 search_in_references(References, othe) ->
   L = lists:filtermap(fun(Reference) ->
-    File = xmpp:get_subtag(Reference, #xabber_file_sharing{}),
+    File = xmpp:get_subtag(Reference, #files_file_sharing{}),
     case File of
-      #xabber_file_sharing{file = #xabber_file{type = MediaType}}
+      #files_file_sharing{file = #files_file{type = MediaType}}
         when MediaType =/= undefined ->
         {true, hd(binary:split(MediaType,<<"/">>,[global]))};
       _ ->
@@ -174,8 +174,8 @@ search_in_references(References, othe) ->
   RL /= [];
 search_in_references(References, SearchType) ->
   lists:foldl(fun(Reference, Acc) ->
-    case xmpp:get_subtag(Reference, #xabber_file_sharing{}) of
-      #xabber_file_sharing{file = #xabber_file{type = MediaType}}
+    case xmpp:get_subtag(Reference, #files_file_sharing{}) of
+      #files_file_sharing{file = #files_file{type = MediaType}}
         when MediaType =/= undefined ->
         T = hd(binary:split(MediaType,<<"/">>,[global])),
         case T of
@@ -204,7 +204,7 @@ get_message_tags(Pkt) ->
   Voice = {<<"voice">>, search_element_in_references(References, #voice_message{})},
   Geo = {<<"geo">>, search_element_in_references(References, #geoloc{})},
   Sticker = {<<"sticker">>, search_element_in_references(References, #sticker{})},
-  Invite = {<<"invite">>, xmpp:has_subtag(Message, #xabbergroupchat_invite{})},
+  Invite = {<<"invite">>, xmpp:has_subtag(Message, #groups_invite{})},
   VoIP = lists:filtermap(fun(SubTag) ->
     case xmpp:has_subtag(Message,SubTag) of
       true -> {true, {<<"voip">>, true}};

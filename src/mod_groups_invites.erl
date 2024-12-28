@@ -73,24 +73,24 @@ revoke(Server, User, Chat, Admin) ->
   end.
 
 
--spec get_invited_users(binary(),binary()) -> xabbergroupchat_invite_query().
+-spec get_invited_users(binary(),binary()) -> groups_query_invites().
 get_invited_users(Server,Chat) ->
   List = sql_get_invited(Server,Chat),
   make_invite_query(List).
 
--spec get_invited_users(binary(),binary(),binary()) -> xabbergroupchat_invite_query().
+-spec get_invited_users(binary(),binary(),binary()) -> groups_query_invites().
 get_invited_users(Server, Chat, User) ->
   List = sql_get_invited(Server, Chat, User),
   make_invite_query(List).
 
--spec make_invite_query(list()) -> xabbergroupchat_invite_query().
+-spec make_invite_query(list()) -> groups_query_invites().
 make_invite_query([]) ->
-  #xabbergroupchat_invite_query{};
+  #groups_query_invites{};
 make_invite_query(List) ->
   UserList = lists:map(fun({User})->
-    #xabbergroup_invite_user{jid = User}
+    #groups_invite_user{jid = User}
                        end, List),
-  #xabbergroupchat_invite_query{user = UserList}.
+  #groups_query_invites{users = UserList}.
 
 sql_get_invited(Server,Chat) ->
   case ejabberd_sql:sql_query(
@@ -122,7 +122,7 @@ invite_right(_Acc, {Admin, Chat, _Server, _Invite}) ->
     _ -> ok
   end.
 
-check_user(_Acc, {_A, Chat, Server, #xabbergroupchat_invite{invite_jid = User}}) ->
+check_user(_Acc, {_A, Chat, Server, #groups_invite{invite_jid = User}}) ->
   case mod_groups_block:is_blocked(Server, Chat , User) of
     false ->
       Subs = mod_groups_users:check_user_if_exist(Server,User,Chat),
@@ -137,7 +137,7 @@ check_user(_Acc, {_A, Chat, Server, #xabbergroupchat_invite{invite_jid = User}})
   end.
 
 add_user_in_chat(_Acc, {Admin,Chat,Server,
-  #xabbergroupchat_invite{invite_jid =  User, reason = _Reason, send = _Send}}) ->
+  #groups_invite{invite_jid =  User, reason = _Reason, send = _Send}}) ->
   Role = <<"member">>,
   Subscription = <<"wait">>,
   case ejabberd_sql:sql_query(
@@ -151,7 +151,7 @@ add_user_in_chat(_Acc, {Admin,Chat,Server,
   end.
 
 send_invite(_Acc, {Admin, Chat, _Server,
-  #xabbergroupchat_invite{invite_jid = User, reason = Reason, send = Send}}) ->
+  #groups_invite{invite_jid = User, reason = Reason, send = Send}}) ->
   if
     Send == <<"1">> orelse Send == <<"true">> ->
       ejabberd_router:route(message_invite(User, Chat, Admin, Reason)),
@@ -162,14 +162,14 @@ send_invite(_Acc, {Admin, Chat, _Server,
 
 
 message_invite(User,Chat,Admin,Reason) ->
-  U = #xabbergroup_invite_user{jid = Admin},
+  U = #groups_invite_user{jid = Admin},
   ChatJID = jid:from_string(Chat),
   LServer = ChatJID#jid.lserver,
   {ok, Anonymous, _} = mod_groups_chats:get_type_and_parent(LServer,Chat),
   Text = <<"Add ",Chat/binary," to the contacts to join a group chat">>,
     #message{type = chat,to = jid:from_string(User), from = jid:from_string(Chat), id = randoms:get_string(),
-      sub_els = [#xabbergroupchat_invite{user = U, reason = Reason, jid = ChatJID},
-        #xabbergroupchat_x{sub_els = [#xabbergroupchat_privacy{cdata = Anonymous}]}],
+      sub_els = [#groups_invite{user = U, reason = Reason, jid = ChatJID},
+        #groups_x{sub_els = [#groups_privacy{cdata = Anonymous}]}],
       body = [#text{lang = <<>>,data = Text}], meta = #{}}.
 
 %% internal functions

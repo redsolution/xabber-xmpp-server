@@ -516,7 +516,7 @@ bold() ->
 
 mention(User) ->
   XMPP = <<"xmpp:",User/binary>>,
-  #xabber_groupchat_mention{cdata = XMPP}.
+  #markup_mention{cdata = XMPP}.
 
 new_device_msg(<<>>, Info, DeviceID, BareJID, IP) ->
   new_device_msg(<<"Unknown client">>, Info, DeviceID, BareJID, IP);

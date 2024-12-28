@@ -84,16 +84,16 @@ groupchat_avatar_changed(LServer, Chat, User) ->
   Version = mod_groups_users:current_chat_version(LServer,Chat),
   ByUserCard = mod_groups_users:form_user_card(User,Chat),
   UserID = case anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
+             public when ByUserCard#groups_user.nickname =/= undefined andalso ByUserCard#groups_user.nickname =/= <<" ">> andalso ByUserCard#groups_user.nickname =/= <<"">> andalso ByUserCard#groups_user.nickname =/= <<>> andalso bit_size(ByUserCard#groups_user.nickname) > 1 ->
+               ByUserCard#groups_user.nickname;
              public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
+               jid:to_string(ByUserCard#groups_user.jid);
              anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
+               ByUserCard#groups_user.nickname
            end,
   MsgTxt = <<UserID/binary, " changed group avatar">>,
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
+  X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls =  [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -121,7 +121,7 @@ groupchat_changed(LServer, Chat, User, ChatProperties1, Status) ->
       ByUserCard = mod_groups_users:form_user_card(User,Chat),
       {Name, Anonymous, _Search, _Model, _Desc, Message, _Contacts,
         _Domains, _Parent, _Status} = mod_groups_chats:get_info(Chat, LServer),
-      UserID = ByUserCard#xabbergroupchat_user_card.nickname,
+      UserID = ByUserCard#groups_user.nickname,
       Txt = if
               IsNameChanged andalso not IsOtherChanged andalso not IsDescChanged
                 andalso not IsStatusChanged andalso not IsPinnedChanged ->
@@ -150,16 +150,16 @@ groupchat_changed(LServer, Chat, User, ChatProperties1, Status) ->
                end,
       MsgTxt = <<UserID/binary, Txt/binary>>,
       Body = [#text{lang = <<>>,data = MsgTxt}],
-      X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
+      X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, type = <<"update">>},
       By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
-      Group_X = #xabbergroupchat_x{
-        xmlns = ?NS_GROUPCHAT,
+      Group_X = #groups_x{
+        xmlns = ?NS_GROUPS,
         members = mod_groups_chats:count_users(LServer,Chat),
         sub_els =
         [
-          #xabbergroupchat_name{cdata = Name},
-          #xabbergroupchat_privacy{cdata = Anonymous},
-          #xabbergroupchat_pinned_message{cdata = integer_to_binary(Message)}
+          #groups_name{cdata = Name},
+          #groups_privacy{cdata = Anonymous},
+          #groups_pinned_message{cdata = integer_to_binary(Message)}
         ]},
       SubEls =  [X,By,Group_X],
       M = form_message(ChatJID,Body,SubEls),
@@ -172,25 +172,25 @@ user_change_avatar(User, Server, Chat, OtherUser) ->
   ByUserCard = mod_groups_users:form_user_card(User,Chat),
   UpdatedUser = mod_groups_users:form_user_card(OtherUser,Chat),
   UpdatedUserID = case anon(UpdatedUser) of
-                    public when UpdatedUser#xabbergroupchat_user_card.nickname =/= undefined andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<" ">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<"">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(UpdatedUser#xabbergroupchat_user_card.nickname) > 1 ->
-                      UpdatedUser#xabbergroupchat_user_card.nickname;
+                    public when UpdatedUser#groups_user.nickname =/= undefined andalso UpdatedUser#groups_user.nickname =/= <<" ">> andalso UpdatedUser#groups_user.nickname =/= <<"">> andalso UpdatedUser#groups_user.nickname =/= <<>> andalso bit_size(UpdatedUser#groups_user.nickname) > 1 ->
+                      UpdatedUser#groups_user.nickname;
                     public ->
-                      jid:to_string(UpdatedUser#xabbergroupchat_user_card.jid);
+                      jid:to_string(UpdatedUser#groups_user.jid);
                     anonim ->
-                      UpdatedUser#xabbergroupchat_user_card.nickname
+                      UpdatedUser#groups_user.nickname
                   end,
   UserID = case anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
+             public when ByUserCard#groups_user.nickname =/= undefined andalso ByUserCard#groups_user.nickname =/= <<" ">> andalso ByUserCard#groups_user.nickname =/= <<"">> andalso ByUserCard#groups_user.nickname =/= <<>> andalso bit_size(ByUserCard#groups_user.nickname) > 1 ->
+               ByUserCard#groups_user.nickname;
              public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
+               jid:to_string(ByUserCard#groups_user.jid);
              anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
+               ByUserCard#groups_user.nickname
            end,
   Version = mod_groups_users:current_chat_version(Server,Chat),
   MsgTxt = <<UserID/binary, " updated avatar of ", UpdatedUserID/binary>>,
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
+  X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls =  [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -201,17 +201,17 @@ user_change_own_avatar(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   ByUserCard = mod_groups_users:form_user_card(User,Chat),
   UserID = case anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
+             public when ByUserCard#groups_user.nickname =/= undefined andalso ByUserCard#groups_user.nickname =/= <<" ">> andalso ByUserCard#groups_user.nickname =/= <<"">> andalso ByUserCard#groups_user.nickname =/= <<>> andalso bit_size(ByUserCard#groups_user.nickname) > 1 ->
+               ByUserCard#groups_user.nickname;
              public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
+               jid:to_string(ByUserCard#groups_user.jid);
              anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
+               ByUserCard#groups_user.nickname
            end,
   Version = mod_groups_users:current_chat_version(Server,Chat),
   MsgTxt = <<UserID/binary, " updated avatar">>,
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard], type = <<"update">>},
+  X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard], type = <<"update">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -222,25 +222,25 @@ user_change_own_avatar(User, Server, Chat) ->
 chat_created(LServer,User,Chat,Lang) ->
   X = mod_groups_users:form_user_card(User,Chat),
   UserID = case anon(X) of
-             public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
-               X#xabbergroupchat_user_card.nickname;
+             public when X#groups_user.nickname =/= undefined andalso X#groups_user.nickname =/= <<" ">> andalso X#groups_user.nickname =/= <<"">> andalso X#groups_user.nickname =/= <<>> andalso bit_size(X#groups_user.nickname) > 1 ->
+               X#groups_user.nickname;
              public ->
-               jid:to_string(X#xabbergroupchat_user_card.jid);
+               jid:to_string(X#groups_user.jid);
              anonim ->
-               X#xabbergroupchat_user_card.nickname
+               X#groups_user.nickname
            end,
   {Name, Anonymous, Search, Model, Desc, _ChatMessage, _Contacts,
     _Domains, _Parent, _Status} = mod_groups_chats:get_info(Chat, LServer),
   Txt =  <<"created ",Anonymous/binary," group">>,
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  Privacy = #xabbergroupchat_privacy{cdata = Anonymous},
-  Membership = #xabbergroupchat_membership{cdata = Model},
-  Description = #xabbergroupchat_description{cdata = Desc},
-  Index = #xabbergroupchat_index{cdata = Search},
-  NameEl = #xabbergroupchat_name{cdata = Name},
-  XEl = #xabbergroupchat_x{
-    xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE,
+  Privacy = #groups_privacy{cdata = Anonymous},
+  Membership = #groups_membership{cdata = Model},
+  Description = #groups_description{cdata = Desc},
+  Index = #groups_index{cdata = Search},
+  NameEl = #groups_name{cdata = Name},
+  XEl = #groups_x{
+    xmlns = ?NS_GROUPS_SYSTEM_MESSAGE,
     type = <<"create">>,
     version = <<"0">>,
     sub_els = [NameEl,Privacy,Membership,Description,Index]
@@ -256,21 +256,21 @@ users_blocked(Acc, #iq{lang = Lang,to = To, from = From}) ->
   Admin = jid:to_string(jid:remove_resource(From)),
   X = mod_groups_users:form_user_card(Admin,Chat),
   UserID = case anon(X) of
-             public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
-               X#xabbergroupchat_user_card.nickname;
+             public when X#groups_user.nickname =/= undefined andalso X#groups_user.nickname =/= <<" ">> andalso X#groups_user.nickname =/= <<"">> andalso X#groups_user.nickname =/= <<>> andalso bit_size(X#groups_user.nickname) > 1 ->
+               X#groups_user.nickname;
              public ->
-               jid:to_string(X#xabbergroupchat_user_card.jid);
+               jid:to_string(X#groups_user.jid);
              anonim ->
-               X#xabbergroupchat_user_card.nickname
+               X#groups_user.nickname
            end,
   KickedUsers = lists:map(fun(Card) ->
     case anon(Card) of
-      public when Card#xabbergroupchat_user_card.nickname =/= undefined andalso Card#xabbergroupchat_user_card.nickname =/= <<" ">> andalso Card#xabbergroupchat_user_card.nickname =/= <<"">> andalso Card#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(Card#xabbergroupchat_user_card.nickname) > 1 ->
-        [Card#xabbergroupchat_user_card.nickname, <<" ">>];
+      public when Card#groups_user.nickname =/= undefined andalso Card#groups_user.nickname =/= <<" ">> andalso Card#groups_user.nickname =/= <<"">> andalso Card#groups_user.nickname =/= <<>> andalso bit_size(Card#groups_user.nickname) > 1 ->
+        [Card#groups_user.nickname, <<" ">>];
       public ->
-        [jid:to_string(Card#xabbergroupchat_user_card.jid),<<" ">>];
+        [jid:to_string(Card#groups_user.jid),<<" ">>];
       anonim ->
-        [Card#xabbergroupchat_user_card.nickname, <<" ">>]
+        [Card#groups_user.nickname, <<" ">>]
     end end, Acc
   ),
   case length(KickedUsers) of
@@ -283,7 +283,7 @@ users_blocked(Acc, #iq{lang = Lang,to = To, from = From}) ->
   end,
   MsgTxt = text_for_msg(Lang,Txt,UserID,KickedUsers,AddTxt),
   Body = [#text{lang = <<>>,data = MsgTxt}],
-  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = Acc, type = <<"block">>},
+  XEl = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, sub_els = Acc, type = <<"block">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
   SubEls = [XEl,By],
   M = form_message(To,Body,SubEls),
@@ -295,21 +295,21 @@ users_kicked(Acc,LServer,Chat,Admin,_Kick,Lang) ->
   UsersCard = lists:map(fun(User) -> mod_groups_users:form_user_card(User,Chat) end, Acc),
   X = mod_groups_users:form_user_card(Admin,Chat),
   UserID = case anon(X) of
-             public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
-               X#xabbergroupchat_user_card.nickname;
+             public when X#groups_user.nickname =/= undefined andalso X#groups_user.nickname =/= <<" ">> andalso X#groups_user.nickname =/= <<"">> andalso X#groups_user.nickname =/= <<>> andalso bit_size(X#groups_user.nickname) > 1 ->
+               X#groups_user.nickname;
              public ->
-               jid:to_string(X#xabbergroupchat_user_card.jid);
+               jid:to_string(X#groups_user.jid);
              anonim ->
-               X#xabbergroupchat_user_card.nickname
+               X#groups_user.nickname
            end,
   KickedUsers = lists:map(fun(Card) ->
     case anon(Card) of
-      public when Card#xabbergroupchat_user_card.nickname =/= undefined andalso Card#xabbergroupchat_user_card.nickname =/= <<" ">> andalso Card#xabbergroupchat_user_card.nickname =/= <<"">> andalso Card#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(Card#xabbergroupchat_user_card.nickname) > 1 ->
-        [Card#xabbergroupchat_user_card.nickname, <<" ">>];
+      public when Card#groups_user.nickname =/= undefined andalso Card#groups_user.nickname =/= <<" ">> andalso Card#groups_user.nickname =/= <<"">> andalso Card#groups_user.nickname =/= <<>> andalso bit_size(Card#groups_user.nickname) > 1 ->
+        [Card#groups_user.nickname, <<" ">>];
       public ->
-        [jid:to_string(Card#xabbergroupchat_user_card.jid),<<" ">>];
+        [jid:to_string(Card#groups_user.jid),<<" ">>];
       anonim ->
-        [Card#xabbergroupchat_user_card.nickname, <<" ">>]
+        [Card#groups_user.nickname, <<" ">>]
     end end, UsersCard
   ),
   case length(KickedUsers) of
@@ -323,7 +323,7 @@ users_kicked(Acc,LServer,Chat,Admin,_Kick,Lang) ->
   MsgTxt = text_for_msg(Lang,Txt,UserID,KickedUsers,AddTxt),
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groups_users:current_chat_version(LServer,Chat),
-  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = UsersCard, type = <<"kick">>, version = Version},
+  XEl = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, sub_els = UsersCard, type = <<"kick">>, version = Version},
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
   SubEls = [XEl,By],
   ChatJID = jid:from_string(Chat),
@@ -336,17 +336,17 @@ user_left(_Acc,{Server,_User,Chat,X,Lang})->
   Txt = <<"left chat">>,
   ChatJID = jid:from_string(Chat),
   UserID = case anon(X) of
-             public when X#xabbergroupchat_user_card.nickname =/= undefined andalso X#xabbergroupchat_user_card.nickname =/= <<" ">> andalso X#xabbergroupchat_user_card.nickname =/= <<"">> andalso X#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(X#xabbergroupchat_user_card.nickname) > 1 ->
-               X#xabbergroupchat_user_card.nickname;
+             public when X#groups_user.nickname =/= undefined andalso X#groups_user.nickname =/= <<" ">> andalso X#groups_user.nickname =/= <<"">> andalso X#groups_user.nickname =/= <<>> andalso bit_size(X#groups_user.nickname) > 1 ->
+               X#groups_user.nickname;
              public ->
-               jid:to_string(X#xabbergroupchat_user_card.jid);
+               jid:to_string(X#groups_user.jid);
              anonim ->
-               X#xabbergroupchat_user_card.nickname
+               X#groups_user.nickname
            end,
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groups_users:current_chat_version(Server,Chat),
-  XEl = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"left">>},
+  XEl = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, type = <<"left">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [X]},
   SubEls = [XEl,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -360,17 +360,17 @@ user_join(_Acc,{Server,To,Chat,Lang}) ->
   Txt = <<"joined chat">>,
   ChatJID = jid:from_string(Chat),
   UserID = case anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
+             public when ByUserCard#groups_user.nickname =/= undefined andalso ByUserCard#groups_user.nickname =/= <<" ">> andalso ByUserCard#groups_user.nickname =/= <<"">> andalso ByUserCard#groups_user.nickname =/= <<>> andalso bit_size(ByUserCard#groups_user.nickname) > 1 ->
+               ByUserCard#groups_user.nickname;
              public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
+               jid:to_string(ByUserCard#groups_user.jid);
              anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
+               ByUserCard#groups_user.nickname
            end,
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groups_users:current_chat_version(Server,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, type = <<"join">>},
+  X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, type = <<"join">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -382,33 +382,33 @@ user_updated({User,OldCard}, LServer,Chat, Admin,_ID,Nick,_Badge,Lang) ->
   ByUserCard = mod_groups_users:form_user_card(Admin,Chat),
   UpdatedUser = mod_groups_users:form_user_card(User,Chat),
   OldName = case anon(UpdatedUser) of
-              public when OldCard#xabbergroupchat_user_card.nickname =/= undefined andalso OldCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso OldCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso OldCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(OldCard#xabbergroupchat_user_card.nickname) > 1 ->
-                OldCard#xabbergroupchat_user_card.nickname;
+              public when OldCard#groups_user.nickname =/= undefined andalso OldCard#groups_user.nickname =/= <<" ">> andalso OldCard#groups_user.nickname =/= <<"">> andalso OldCard#groups_user.nickname =/= <<>> andalso bit_size(OldCard#groups_user.nickname) > 1 ->
+                OldCard#groups_user.nickname;
               public ->
-                jid:to_string(OldCard#xabbergroupchat_user_card.jid);
+                jid:to_string(OldCard#groups_user.jid);
               anonim ->
-                OldCard#xabbergroupchat_user_card.nickname
+                OldCard#groups_user.nickname
             end,
   Acc = case anon(UpdatedUser) of
-          public when UpdatedUser#xabbergroupchat_user_card.nickname =/= undefined andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<" ">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<"">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(UpdatedUser#xabbergroupchat_user_card.nickname) > 1 ->
-          UpdatedUser#xabbergroupchat_user_card.nickname;
+          public when UpdatedUser#groups_user.nickname =/= undefined andalso UpdatedUser#groups_user.nickname =/= <<" ">> andalso UpdatedUser#groups_user.nickname =/= <<"">> andalso UpdatedUser#groups_user.nickname =/= <<>> andalso bit_size(UpdatedUser#groups_user.nickname) > 1 ->
+          UpdatedUser#groups_user.nickname;
           public ->
-            jid:to_string(UpdatedUser#xabbergroupchat_user_card.jid);
+            jid:to_string(UpdatedUser#groups_user.jid);
           anonim ->
-            UpdatedUser#xabbergroupchat_user_card.nickname
+            UpdatedUser#groups_user.nickname
         end,
   UserID = case anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
+             public when ByUserCard#groups_user.nickname =/= undefined andalso ByUserCard#groups_user.nickname =/= <<" ">> andalso ByUserCard#groups_user.nickname =/= <<"">> andalso ByUserCard#groups_user.nickname =/= <<>> andalso bit_size(ByUserCard#groups_user.nickname) > 1 ->
+               ByUserCard#groups_user.nickname;
              public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
+               jid:to_string(ByUserCard#groups_user.jid);
              anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
+               ByUserCard#groups_user.nickname
            end,
-  OldNick = OldCard#xabbergroupchat_user_card.nickname,
-  NewNick = UpdatedUser#xabbergroupchat_user_card.nickname,
-  OldBadge = OldCard#xabbergroupchat_user_card.badge,
-  NewBadge = UpdatedUser#xabbergroupchat_user_card.badge,
+  OldNick = OldCard#groups_user.nickname,
+  NewNick = UpdatedUser#groups_user.nickname,
+  OldBadge = OldCard#groups_user.badge,
+  NewBadge = UpdatedUser#groups_user.badge,
   case Admin of
     User when OldNick =/= NewNick andalso OldBadge =/= NewBadge ->
       Txt = <<" changed his/her badge and is now known as ">>,
@@ -443,7 +443,7 @@ send_user_updated(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt) ->
   ChatJID = jid:from_string(Chat),
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groups_users:current_chat_version(LServer,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
+  X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -454,20 +454,20 @@ user_rights_changed({OldCard,RequestUser,Permission,Restriction,Form}, LServer, 
   UpdatedUser = mod_groups_users:form_user_card(RequestUser,Chat),
   ChatJID = jid:from_string(Chat),
   Acc = case anon(UpdatedUser) of
-          public when UpdatedUser#xabbergroupchat_user_card.nickname =/= undefined andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<" ">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<"">> andalso UpdatedUser#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(UpdatedUser#xabbergroupchat_user_card.nickname) > 1 ->
-            UpdatedUser#xabbergroupchat_user_card.nickname;
+          public when UpdatedUser#groups_user.nickname =/= undefined andalso UpdatedUser#groups_user.nickname =/= <<" ">> andalso UpdatedUser#groups_user.nickname =/= <<"">> andalso UpdatedUser#groups_user.nickname =/= <<>> andalso bit_size(UpdatedUser#groups_user.nickname) > 1 ->
+            UpdatedUser#groups_user.nickname;
           public ->
-            jid:to_string(UpdatedUser#xabbergroupchat_user_card.jid);
+            jid:to_string(UpdatedUser#groups_user.jid);
           anonim ->
-            UpdatedUser#xabbergroupchat_user_card.nickname
+            UpdatedUser#groups_user.nickname
         end,
   UserID = case anon(ByUserCard) of
-             public when ByUserCard#xabbergroupchat_user_card.nickname =/= undefined andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<" ">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<"">> andalso ByUserCard#xabbergroupchat_user_card.nickname =/= <<>> andalso bit_size(ByUserCard#xabbergroupchat_user_card.nickname) > 1 ->
-               ByUserCard#xabbergroupchat_user_card.nickname;
+             public when ByUserCard#groups_user.nickname =/= undefined andalso ByUserCard#groups_user.nickname =/= <<" ">> andalso ByUserCard#groups_user.nickname =/= <<"">> andalso ByUserCard#groups_user.nickname =/= <<>> andalso bit_size(ByUserCard#groups_user.nickname) > 1 ->
+               ByUserCard#groups_user.nickname;
              public ->
-               jid:to_string(ByUserCard#xabbergroupchat_user_card.jid);
+               jid:to_string(ByUserCard#groups_user.jid);
              anonim ->
-               ByUserCard#xabbergroupchat_user_card.nickname
+               ByUserCard#groups_user.nickname
            end,
   MsgTxt =
     case Admin of
@@ -486,7 +486,7 @@ user_rights_changed({OldCard,RequestUser,Permission,Restriction,Form}, LServer, 
     end,
   Body = [#text{lang = <<>>,data = MsgTxt}],
   Version = mod_groups_users:current_chat_version(LServer,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
+  X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   M = form_message(ChatJID,Body,SubEls),
@@ -496,8 +496,8 @@ user_rights_changed({OldCard,RequestUser,Permission,Restriction,Form}, LServer, 
 % Internal function
 
 permission_text(Perms,OldUserCard,UpdateUserCard) ->
-  OldRole = OldUserCard#xabbergroupchat_user_card.role,
-  NewRole = UpdateUserCard#xabbergroupchat_user_card.role,
+  OldRole = OldUserCard#groups_user.role,
+  NewRole = UpdateUserCard#groups_user.role,
   case NewRole of
     OldRole when length(Perms) > 1 ->
       <<" permissions were changed by ">>;
@@ -559,7 +559,7 @@ send_to_all(Chat, Pkt1) ->
     ejabberd_router:route(FromChat,To,Pkt2) end, Users).
 
 anon(ByUser) ->
-  case ByUser#xabbergroupchat_user_card.jid of
+  case ByUser#groups_user.jid of
     undefined ->
       anonim;
     _ ->

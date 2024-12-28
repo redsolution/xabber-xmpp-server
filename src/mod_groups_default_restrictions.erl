@@ -151,9 +151,9 @@ create_right_form(Chat, LServer, Lang, FormType) ->
     end,
   Rights = default_rights(LServer, Chat, Lang, WithOpts),
   Fields = [#xdata_field{var = <<"FORM_TYPE">>, type = hidden,
-    values = [?NS_GROUPCHAT]} | Rights ],
-  #xabbergroupchat{
-    xmlns = ?NS_GROUPCHAT_DEFAULT_RIGHTS,
+    values = [?NS_GROUPS]} | Rights ],
+  #groups_query{
+    xmlns = ?NS_GROUPS_DEFAULT_RIGHTS,
     sub_els = [
       #xdata{type = FormType,
         title = <<"Groupchat default rights">>,

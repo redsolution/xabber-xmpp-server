@@ -153,18 +153,18 @@ pre_process_iq(#iq{to = To} = IQ) ->
   end.
 
 -spec process_iq(iq()) -> iq().
-process_iq(#iq{type = set, lang = Lang, sub_els = [#xabber_retract_query{}]} = IQ) ->
+process_iq(#iq{type = set, lang = Lang, sub_els = [#retract_query{}]} = IQ) ->
   Txt = <<"Value 'set' of 'type' attribute is not allowed">>,
   xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
 %% Query the current version
 process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
   to = #jid{luser = LUser, lserver = LServer}, type = get,
-  sub_els = [#xabber_retract_query{version = undefined}]} = IQ) ->
+  sub_els = [#retract_query{version = undefined}]} = IQ) ->
   Version = get_version(LServer, LUser),
-  xmpp:make_iq_result(IQ, #xabber_retract_query{version = Version});
+  xmpp:make_iq_result(IQ, #retract_query{version = Version});
 process_iq(#iq{from = #jid{luser = LUser, lserver = LServer} = From,
   to = #jid{luser = LUser, lserver = LServer}, type = get,
-  sub_els = [#xabber_retract_query{version = Ver, 'less-than' = Less0}]} = IQ) ->
+  sub_els = [#retract_query{version = Ver, 'less-than' = Less0}]} = IQ) ->
   Less = if
            Less0 == undefined -> 50;
            Less0 == 0 -> 50;
@@ -174,27 +174,27 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer} = From,
   ChatList = get_count_events(LServer, LUser, Ver),
   CurrentVer = send_retract_query_messages(From, Ver, Less, ChatList),
   spawn(auto_clean(From, CurrentVer)),
-  xmpp:make_iq_result(IQ, #xabber_retract_query{version = CurrentVer});
-process_iq(#iq{type = set, sub_els = [#xabber_retract_message{id = undefined}]} = IQ) ->
+  xmpp:make_iq_result(IQ, #retract_query{version = CurrentVer});
+process_iq(#iq{type = set, sub_els = [#retract_message{id = undefined}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
-process_iq(#iq{type = set, sub_els = [#xabber_retract_message{type = <<>>}]} = IQ) ->
+process_iq(#iq{type = set, sub_els = [#retract_message{type = <<>>}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
   to = #jid{luser = LUser, lserver = LServer}, type = set, sub_els = [
-  #xabber_retract_message{symmetric = false, id = StanzaID, type = CType}]} = IQ) ->
+  #retract_message{symmetric = false, id = StanzaID, type = CType}]} = IQ) ->
   case get_bare_peer(LServer,LUser,StanzaID) of
     not_found ->
       xmpp:make_error(IQ, xmpp:err_item_not_found());
     PeerS ->
       PeerJID = jid:from_string(PeerS),
       Version = get_version(LServer, LUser) + 1,
-      Retract = #xabber_retract_message{id = StanzaID, conversation = PeerJID,
+      Retract = #retract_message{id = StanzaID, conversation = PeerJID,
         symmetric = false, version = Version, type = check_type(CType),
         xmlns = ?NS_XABBER_REWRITE_NOTIFY},
       retract_message(LUser, LServer, StanzaID, IQ, Retract, Version)
   end;
 process_iq(#iq{from = From, to = To, type = set, sub_els = [
-  #xabber_retract_message{symmetric = true, id = StanzaID, type = CTRaw}]} = IQ) ->
+  #retract_message{symmetric = true, id = StanzaID, type = CTRaw}]} = IQ) ->
   CType = check_type(CTRaw),
   {LUser, LServer, _} = jid:tolower(To),
   case jid:tolower(From) of
@@ -209,7 +209,7 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [
           xmpp:make_error(IQ, xmpp:err_internal_server_error());
         OurStanzaID ->
           Version = get_version(LServer,LUser) + 1,
-          OurRetractAsk = #xabber_retract_message{
+          OurRetractAsk = #retract_message{
             conversation = jid:remove_resource(From),
             id = OurStanzaID,
             version = Version,
@@ -238,22 +238,22 @@ process_iq(#iq{from = From, to = To, type = set, sub_els = [
       ?ERROR_MSG("Bad symmetric retract:~p",[IQ]),
       xmpp:make_error(IQ, xmpp:err_bad_request())
   end;
-process_iq(#iq{type = set, sub_els = [#xabber_retract_all{ type = <<>>}]} = IQ) ->
+process_iq(#iq{type = set, sub_els = [#retract_all{ type = <<>>}]} = IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
   to = #jid{luser = LUser, lserver = LServer}, type = set, sub_els = [
-  #xabber_retract_all{conversation = Conv, symmetric = false, type = CType}]} = IQ) ->
+  #retract_all{conversation = Conv, symmetric = false, type = CType}]} = IQ) ->
   Version = get_version(LServer,LUser) + 1,
-  NewRetractAsk = #xabber_retract_all{type = check_type(CType),
+  NewRetractAsk = #retract_all{type = check_type(CType),
     conversation = Conv,
     version = Version, xmlns = ?NS_XABBER_REWRITE_NOTIFY},
   retract_all_messages(LUser, LServer, IQ, NewRetractAsk, Version);
-process_iq(#iq{type = set,sub_els = [#xabber_replace{id = undefined}]} = IQ)->
+process_iq(#iq{type = set,sub_els = [#replace{id = undefined}]} = IQ)->
   xmpp:make_error(IQ, xmpp:err_bad_request());
-process_iq(#iq{type = set,sub_els = [#xabber_replace{type = <<>>}]} = IQ)->
+process_iq(#iq{type = set,sub_els = [#replace{type = <<>>}]} = IQ)->
   xmpp:make_error(IQ, xmpp:err_bad_request());
 process_iq(#iq{from = From,to = To, type = set, sub_els = [
-  #xabber_replace{id = StanzaID, xabber_replace_message = Message, type = CTRaw}]} = IQ) ->
+  #replace{id = StanzaID, replace_message = Message, type = CTRaw}]} = IQ) ->
   CType = check_type(CTRaw),
   LUser = To#jid.luser,
   LServer = To#jid.lserver,
@@ -271,12 +271,12 @@ process_iq(#iq{from = From,to = To, type = set, sub_els = [
         OurStanzaID ->
           Version = get_version(LServer, LUser) + 1,
           Replaced = #replaced{stamp = erlang:timestamp()},
-          NewMessage = Message#xabber_replace_message{replaced = Replaced},
-          OurReplaceAsk = #xabber_replace{
+          NewMessage = Message#replace_message{replaced = Replaced},
+          OurReplaceAsk = #replace{
             type = CType, xmlns = ?NS_XABBER_REWRITE_NOTIFY,
             conversation = From,
             id = OurStanzaID, version = Version,
-            xabber_replace_message = NewMessage},
+            replace_message = NewMessage},
           replace_message(LUser, LServer, OurStanzaID, IQ, OurReplaceAsk, Version)
       end;
     {LUser, LServer, _} ->
@@ -308,10 +308,10 @@ process_iq(IQ) ->
 s2s_rewrite(UserFullJID, #iq{id = IqID, sub_els = [El]} = IQ) ->
   {Ask, StanzaID, XML, CType} =
     case El of
-      #xabber_retract_message{id = ID, type = T} ->
+      #retract_message{id = ID, type = T} ->
         {retract, ID, [], check_type(T)};
-      #xabber_replace{id = ID, type = T,
-        xabber_replace_message = M} ->
+      #replace{id = ID, type = T,
+        replace_message = M} ->
         {rewrite, ID, M, check_type(T)}
     end,
   NewID = randoms:get_alphanum_string(32),
@@ -350,18 +350,18 @@ local_replace(User1,User2,LServer,StanzaID,Message,IQ,Type) ->
       xmpp:make_error(IQ, xmpp:err_item_not_found());
     OurStanzaID ->
       Replaced = #replaced{stamp = erlang:timestamp()},
-      NewMessage = Message#xabber_replace_message{replaced = Replaced},
+      NewMessage = Message#replace_message{replaced = Replaced},
       User1Version = get_version(LServer, User1) + 1,
-      RetractAskUser1 = #xabber_replace{
-        xabber_replace_message = NewMessage,
+      RetractAskUser1 = #replace{
+        replace_message = NewMessage,
         type = Type,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User2JID,
         version = User1Version,
         id = StanzaID},
       User2Version = get_version(LServer, User2) + 1,
-      RetractAskUser2 = #xabber_replace{
-        xabber_replace_message = NewMessage,
+      RetractAskUser2 = #replace{
+        replace_message = NewMessage,
         type = Type,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User1JID,
@@ -379,9 +379,9 @@ local_replace(User1,User2,LServer,StanzaID,Message,IQ,Type) ->
 replace_msg_to_yourself(LUser, LServer, StanzaID, Message, IQ) ->
   Version = get_version(LServer, LUser) + 1,
   Replaced = #replaced{stamp = erlang:timestamp()},
-  NewMessage = Message#xabber_replace_message{replaced = Replaced},
-  RetractAsk = #xabber_replace{
-    xabber_replace_message = NewMessage,
+  NewMessage = Message#replace_message{replaced = Replaced},
+  RetractAsk = #replace{
+    replace_message = NewMessage,
     type = ?NS_XABBER_CHAT,
     xmlns = ?NS_XABBER_REWRITE_NOTIFY,
     conversation = jid:make(LUser, LServer),
@@ -402,14 +402,14 @@ local_retract(User1,User2,LServer,StanzaID,IQ, Type) ->
       xmpp:make_error(IQ, xmpp:err_item_not_found());
     OurStanzaID ->
       User1Version = get_version(LServer, User1) + 1,
-      RetractAskUser1 = #xabber_retract_message{
+      RetractAskUser1 = #retract_message{
         type = Type,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User2JID,
         version = User1Version,
         id = StanzaID},
       User2Version = get_version(LServer, User2) + 1,
-      RetractAskUser2 = #xabber_retract_message{
+      RetractAskUser2 = #retract_message{
         type = Type,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY,
         conversation = User1JID,
@@ -464,11 +464,11 @@ retract_all_messages(LUser, LServer, IQ, RetractAsk, Version) ->
 do_rewrite(rewrite, StanzaID, UserFullJID, IqID, Message, CType, From) ->
   {LUser, LServer, LResource} = jid:tolower(UserFullJID),
   Replaced = #replaced{stamp = erlang:timestamp()},
-  RMessage = Message#xabber_replace_message{replaced = Replaced},
+  RMessage = Message#replace_message{replaced = Replaced},
   BareJID = jid:make(LUser,LServer),
   JID = jid:make(LUser,LServer,LResource),
   Version = get_version(LServer, LUser) + 1,
-  RetractAsk = #xabber_replace{xabber_replace_message = RMessage,
+  RetractAsk = #replace{replace_message = RMessage,
     id = StanzaID, by = BareJID, conversation = From, version = Version,
     xmlns = ?NS_XABBER_REWRITE_NOTIFY, type = CType},
   IQ = #iq{id = IqID, type = set, to = BareJID, from = JID},
@@ -488,7 +488,7 @@ do_rewrite(retract, StanzaID, UserFullJID, IqID, _XML, CType, _From) ->
   JID = jid:make(LUser,LServer,LResource),
   BarePeer = get_bare_peer(LServer,LUser,StanzaID),
   Version = get_version(LServer, LUser) + 1,
-  RetractAsk = #xabber_retract_message{by = BareJID, id = StanzaID,
+  RetractAsk = #retract_message{by = BareJID, id = StanzaID,
     conversation = jid:from_string(BarePeer), version = Version,
     xmlns = ?NS_XABBER_REWRITE_NOTIFY, type = CType},
   IQ = #iq{id = IqID, type = set, to = BareJID, from = JID},
@@ -503,7 +503,7 @@ do_rewrite(retract, StanzaID, UserFullJID, IqID, _XML, CType, _From) ->
   ejabberd_router:route(NewIQ).
 
 delete_all_messages(RewriteAsk, LUser, LServer, Ver) ->
-  #xabber_retract_all{conversation = Conv, type = TypeRaw} = RewriteAsk,
+  #retract_all{conversation = Conv, type = TypeRaw} = RewriteAsk,
   BarePeer = jid:to_string(Conv),
   Type = case TypeRaw of
            <<>> -> ?NS_XABBER_CHAT;
@@ -557,22 +557,22 @@ replace_message(LUser, LServer, StanzaID, RewriteAsk, Version) ->
 
 do_replace_message(OldMessage, RewriteAsk, LUser, LServer, StanzaID) ->
 %%  todo: update message tags after replacement
-  #xabber_replace{xabber_replace_message = ReplaceMessage} = RewriteAsk,
-  Sub = ReplaceMessage#xabber_replace_message.sub_els,
+  #replace{replace_message = ReplaceMessage} = RewriteAsk,
+  Sub = ReplaceMessage#replace_message.sub_els,
   Lang = xmpp:get_lang(OldMessage),
   SubEls = xmpp:get_els(OldMessage),
-  Replaced = ReplaceMessage#xabber_replace_message.replaced,
+  Replaced = ReplaceMessage#replace_message.replaced,
   NewEls = filter_old_els(SubEls) ++ filter_new_els(Sub),
-  NewTXT = ReplaceMessage#xabber_replace_message.body,
+  NewTXT = ReplaceMessage#replace_message.body,
   NewMessage = OldMessage#message{body = [#text{data = NewTXT,lang = Lang}], sub_els = NewEls ++ [Replaced]},
   NewXML = fxml:element_to_binary(xmpp:encode(NewMessage)),
   NewElsWithAll = set_stanza_id(NewEls,jid:make(LUser,LServer), StanzaID),
-  NewReplaceMessage = ReplaceMessage#xabber_replace_message{sub_els = NewElsWithAll},
+  NewReplaceMessage = ReplaceMessage#replace_message{sub_els = NewElsWithAll},
   ejabberd_sql:sql_query(
     LServer,
     ?SQL("update archive set xml = %(NewXML)s, txt = %(NewTXT)s "
     " where timestamp=%(StanzaID)d and username=%(LUser)s and %(LServer)H")),
-  RewriteAsk#xabber_replace{xabber_replace_message = NewReplaceMessage}.
+  RewriteAsk#replace{replace_message = NewReplaceMessage}.
 
 store_event(RewriteAsk, LUser, LServer, Ver) ->
   XML = fxml:element_to_binary(xmpp:encode(RewriteAsk)),
@@ -585,11 +585,11 @@ notify(Payload, LUser, LServer) ->
     from = BareJID, to = BareJID, sub_els = [Payload]},
   ejabberd_router:route(Message).
 
-get_conv(#xabber_replace{conversation = C, type = T}) ->
+get_conv(#replace{conversation = C, type = T}) ->
   get_conv(T, C);
-get_conv(#xabber_retract_message{conversation = C, type = T}) ->
+get_conv(#retract_message{conversation = C, type = T}) ->
   get_conv(T, C);
-get_conv(#xabber_retract_all{conversation = C, type = T}) ->
+get_conv(#retract_all{conversation = C, type = T}) ->
   get_conv(T, C);
 get_conv(_Type) ->
   {<<>>, <<>>}.
@@ -613,7 +613,7 @@ send_retract_query_messages(User, Version, Less, ChatList) ->
     Msg#message{id= randoms:get_string(), sub_els = [Event, Delay]}
                       end, RetractNotifications),
   Msgs2 = lists:map(fun({Conv, CType, _}) ->
-    Invalidate = #xabber_retract_invalidate{version = CurrentVer,
+    Invalidate = #retract_invalidate{version = CurrentVer,
       conversation = jid:from_string(Conv),
       type = CType},
     Msg#message{id= randoms:get_string(), sub_els = [Invalidate]}
@@ -773,7 +773,7 @@ filter_new_els(Els) ->
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      IsGroupsNS = str:prefix(?NS_GROUPCHAT, NS),
+      IsGroupsNS = str:prefix(?NS_GROUPS, NS),
       if
         (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
           (Name == <<"time">> andalso NS == ?NS_UNIQUE);
@@ -804,7 +804,7 @@ set_stanza_id(SubELS, JID, ID) ->
   BareJID = jid:remove_resource(JID),
   Archived = #mam_archived{by = BareJID, id = ID},
   StanzaID = #stanza_id{by = BareJID, id = ID},
-  Time = #unique_time{by = BareJID, stamp = TimeStamp},
+  Time = #delivery_time{by = BareJID, stamp = TimeStamp},
   [Archived, StanzaID, Time|SubELS].
 
 check_type(<<>>) -> ?NS_XABBER_CHAT;

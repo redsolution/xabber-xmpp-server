@@ -146,14 +146,15 @@ send_received(Pkt, _LServer, JID, _StanzaID) ->
   end.
 
 send_received(
-        #message{meta = #{stanza_id := ID, unique_time := TimeStamp}} = Pkt,
+        #message{meta = #{stanza_id := ID, delivery_time := TimeStamp}} = Pkt,
         #jid{lserver = LServer} = JID,
         OriginID) ->
     BareJID = jid:remove_resource(JID),
-    UniqueReceived = #unique_received{
+    UniqueReceived = #delivery_received{
             origin_id = #origin_id{ id = OriginID },
             stanza_id = #stanza_id{ by = BareJID, id = integer_to_binary(ID) },
-            time = #unique_time{ by = BareJID, stamp = misc:usec_to_now(TimeStamp) }},
+            time = #delivery_time{ by = BareJID, stamp = misc:usec_to_now(TimeStamp) }},
+    %% todo: maybe remove this hook
     NewUniqueReceived = ejabberd_hooks:run_fold(
         unique_received, LServer, UniqueReceived, [Pkt]),
     Confirmation = #message{
@@ -176,7 +177,7 @@ send_received(
 %%	Err ->
 %%	    Err
 %%    end.
-
+%% todo: get stanza id from archive
 get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
   OriginIDLike = <<"%<origin-id %",
     (ejabberd_sql:escape(ejabberd_sql:escape_like_arg_circumflex(OriginID)))/binary,
@@ -203,7 +204,7 @@ get_message(LServer, LUser, OriginID) ->
     0 ->
       error;
     StanzaID ->
-      #message{meta = #{stanza_id => StanzaID, unique_time => StanzaID}}
+      #message{meta = #{stanza_id => StanzaID, delivery_time => StanzaID}}
   end.
 
 remove_request(Pkt,false) -> Pkt;
@@ -237,9 +238,9 @@ remove_request(Pkt,_Request, To) ->
 			    {error, stanza_error()} | {result, [binary()]}.
 disco_sm_features({error, Err}, _From, _To, _Node, _Lang) ->
     {error, Err};
-disco_sm_features(empty, _From, _To, <<"">>, _Lang) ->
-    {result, [?NS_UNIQUE, ?NS_XABBER_ARCHIVE]};
+disco_sm_features(empty, From, To, Node, Lang) ->
+  disco_sm_features({result, []}, From, To, Node, Lang);
 disco_sm_features({result, Feats}, _From, _To, <<"">>, _Lang) ->
-    {result, [?NS_UNIQUE, ?NS_XABBER_ARCHIVE |Feats]};
+    {result, [?NS_UNIQUE | Feats]};
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
     Acc.

@@ -392,17 +392,19 @@ get_pubsub_data(ID) ->
     ]}.
 
 -spec maybe_update_avatar(jid(), jid(), binary()) -> any().
-maybe_update_avatar(User, Chat, Server) ->
-  SUser = jid:to_string(jid:remove_resource(User)),
-  SChat = jid:to_string(jid:remove_resource(Chat)),
+maybe_update_avatar(User, Group, Server) ->
+  UserS = jid:to_string(jid:remove_resource(User)),
+  GroupS = jid:to_string(jid:remove_resource(Group)),
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(parse_avatar)s from groupchat_users
-    where username = %(SUser)s and chatgroup  = %(SChat)s and
-    chatgroup not in (select jid from groupchats where anonymous = 'incognito')")) of
+    ?SQL("select @(parse_avatar)s from groupchat_users "
+    " where username = %(UserS)s and chatgroup  = %(GroupS)s and "
+    "'public' = (select anonymous from groupchats  "
+    " where jid = %(GroupS)s)")) of
     {selected, [{<<"yes">>}]} ->
-      From = jid:replace_resource(Chat, ?RESOURCE),
-      ejabberd_router:route(From,jid:remove_resource(User), mod_groups_vcard:get_pubsub_meta());
+      From = jid:replace_resource(Group, ?RESOURCE),
+      ejabberd_router:route(From,jid:remove_resource(User),
+        mod_groups_vcard:get_pubsub_meta());
     _ ->
       ok
   end.
@@ -591,7 +593,7 @@ notification_message(User, Server, Chat) ->
   ChatJID = jid:replace_resource(jid:from_string(Chat),?RESOURCE),
   ByUserCard = mod_groups_users:form_user_card(User,Chat),
   Version = mod_groups_users:current_chat_version(Server,Chat),
-  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
+  X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, sub_els = [ByUserCard]},
   By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
   SubEls = [X,By],
   ID = randoms:get_string(),
@@ -606,7 +608,7 @@ notification_message(User, Server, Chat) ->
 %%  ChatJID = jid:replace_resource(jid:from_string(Chat),?RESOURCE),
 %%  Body = [#text{lang = <<>>,data = MsgTxt}],
 %%  Version = mod_groups_users:current_chat_version(Server, Chat),
-%%  X = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, version = Version,
+%%  X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version,
 %%    sub_els = [UserCard], type = <<"update">>},
 %%  By = #xmppreference{type = <<"mutable">>, sub_els = [UserCard]},
 %%  SubEls = [X,By],

@@ -106,7 +106,7 @@ delete_chat_hook(_Acc, _LServer, _User, Chat) ->
   {stop, ok}.
 
 check_create_query(_Acc,Server,_CreatorLUser,_CreatorLServer,SubEls) ->
-  LocalPart = case get_value(xabbergroupchat_localpart,SubEls) of
+  LocalPart = case get_value(groups_localpart,SubEls) of
                 B when is_binary(B) ->
                   case jid:nodeprep(str:strip(B)) of
                     error -> <<>>;
@@ -129,9 +129,9 @@ check_create_query(_Acc,Server,_CreatorLUser,_CreatorLServer,SubEls) ->
   end.
 
 check_params(SubEls) ->
-  Privacy = set_value(<<"public">>,get_value(xabbergroupchat_privacy,SubEls)),
-  Membership = set_value(<<"open">>,get_value(xabbergroupchat_membership,SubEls)),
-  Index = set_value(<<"local">>,get_value(xabbergroupchat_index,SubEls)),
+  Privacy = set_value(<<"public">>,get_value(groups_privacy,SubEls)),
+  Membership = set_value(<<"open">>,get_value(groups_membership,SubEls)),
+  Index = set_value(<<"local">>,get_value(groups_index,SubEls)),
   IsPrivacyValid = validate_privacy(Privacy),
   IsMembershipValid = validate_membership(Membership),
   IsIndexValid = validate_index(Index),
@@ -156,18 +156,18 @@ create_chat(_Acc, Server, CreatorLUser, CreatorLServer, SubEls)->
 create_chat(_Server, <<>>, _SubEls) ->
   error;
 create_chat(Server, Creator, SubEls) ->
-  LocalPart = case get_value(xabbergroupchat_localpart,SubEls) of
+  LocalPart = case get_value(groups_localpart,SubEls) of
                 undefined -> create_localpart();
                 V -> jid:nodeprep(str:strip(V))
               end,
-  Name = set_value(LocalPart,get_value(xabbergroupchat_name,SubEls)),
-  Desc = set_value(<<>>,get_value(xabbergroupchat_description,SubEls)),
-  Privacy = set_value(<<"public">>,get_value(xabbergroupchat_privacy,SubEls)),
-  Membership = set_value(<<"open">>,get_value(xabbergroupchat_membership,SubEls)),
-  Index = set_value(<<"local">>,get_value(xabbergroupchat_index,SubEls)),
-  ContactList = set_value([],get_value(xabbergroup_contacts,SubEls)),
+  Name = set_value(LocalPart,get_value(groups_name,SubEls)),
+  Desc = set_value(<<>>,get_value(groups_description,SubEls)),
+  Privacy = set_value(<<"public">>,get_value(groups_privacy,SubEls)),
+  Membership = set_value(<<"open">>,get_value(groups_membership,SubEls)),
+  Index = set_value(<<"local">>,get_value(groups_index,SubEls)),
+  ContactList = set_value([],get_value(groups_contacts,SubEls)),
   Contacts = make_string(ContactList),
-  DomainList = set_value([],get_value(xabbergroup_domains,SubEls)),
+  DomainList = set_value([],get_value(groups_domains,SubEls)),
   Domains = make_string(DomainList),
   Chat = jid:to_string(jid:make(LocalPart,Server)),
   Status = ?DEFAULT_GROUP_STATUS,
@@ -217,13 +217,13 @@ check_user_rights(_Acc,User,Chat,Server) ->
       {stop, {error,xmpp:err_not_allowed(<<"You are not allowed to change group properties">>, <<"en">>)}}
   end.
 
-handle_update_query(_, _, _, #xabbergroupchat_update{owner = NewOwner})
-  when NewOwner /= undefined ->
-  %% It was deprecated a long time ago.
-  {error, xmpp:err_feature_not_implemented()};
+%%handle_update_query(_, _, _, #groups_update{owner = NewOwner})
+%%  when NewOwner /= undefined ->
+%%  %% It was deprecated a long time ago.
+%%  {error, xmpp:err_feature_not_implemented()};
 handle_update_query(Server, Group, User, XElem) ->
-  Pinned = case XElem#xabbergroupchat_update.pinned of
-             #xabbergroupchat_pinned_message{cdata = Cdata} ->
+  Pinned = case XElem#groups_update.pinned of
+             #groups_pinned_message{cdata = Cdata} ->
                Cdata;
              _ ->
                undefined
@@ -307,7 +307,7 @@ change_chat(Acc,_User,Chat,Server,_FS) ->
       {stop, {ok,form_chat_information(Chat,Server,result),Status,ChangeDiff}}
   end.
 
-check_creator(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
+check_creator(_Acc, LServer, Creator,  #groups_ptp{jid = ChatJID}) ->
   ?DEBUG("start fold ~p ~p ~p", [LServer,Creator, ChatJID]),
   Chat = jid:to_string(ChatJID),
   case mod_groups_users:check_user(LServer, Creator, Chat) of
@@ -319,14 +319,14 @@ check_creator(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
       ok
   end.
 
-check_chat(_Acc, LServer, _Creator,  #xabbergroup_peer{jid = ChatJID}) ->
+check_chat(_Acc, LServer, _Creator,  #groups_ptp{jid = ChatJID}) ->
   Chat = jid:to_string(ChatJID),
   case get_type_and_parent(LServer,Chat) of
     {ok, <<"incognito">>, <<>>} -> ok;
     _ -> {stop, notallowed}
   end.
 
-check_user(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID, id = UserID}) ->
+check_user(_Acc, LServer, Creator,  #groups_ptp{jid = ChatJID, id = UserID}) ->
   Chat = jid:to_string(ChatJID),
   case mod_groups_users:get_user_by_id_and_allow_to_invite(LServer,Chat,UserID) of
     none ->
@@ -338,7 +338,7 @@ check_user(_Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID, id = UserID
       User
   end.
 
-check_if_peer_to_peer_exist(User, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
+check_if_peer_to_peer_exist(User, LServer, Creator,  #groups_ptp{jid = ChatJID}) ->
   Chat = jid:to_string(ChatJID),
   case get_p2p_chat(LServer,Chat,Creator,User) of
     notexist ->
@@ -347,7 +347,7 @@ check_if_peer_to_peer_exist(User, LServer, Creator,  #xabbergroup_peer{jid = Cha
       {exist,ExistedChat,User}
   end.
 
-check_if_users_invited(Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID}) ->
+check_if_users_invited(Acc, LServer, Creator,  #groups_ptp{jid = ChatJID}) ->
   case Acc of
     {exist,ExistedChat,User} ->
       Chat = jid:to_string(ChatJID),
@@ -372,7 +372,7 @@ check_if_users_invited(Acc, LServer, Creator,  #xabbergroup_peer{jid = ChatJID})
       Acc
   end.
 
-create_peer_to_peer(User, LServer, Creator, #xabbergroup_peer{jid = ChatJID}) ->
+create_peer_to_peer(User, LServer, Creator, #groups_ptp{jid = ChatJID}) ->
   Localpart = create_localpart(),
   OldChat = jid:to_string(jid:remove_resource(ChatJID)),
   Chat = jid:to_string(jid:make(Localpart,LServer)),
@@ -406,12 +406,12 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
   Model = <<"member-only">>,
   OldChatName = get_chat_name(OldChat,LServer),
   BareOldChatJID = jid:remove_resource(OldChatJID),
-  Privacy = #xabbergroupchat_privacy{cdata = Anonymous},
-  Membership = #xabbergroupchat_membership{cdata = Model},
-  Description = #xabbergroupchat_description{cdata = Desc},
-  Index = #xabbergroupchat_index{cdata = Search},
+  Privacy = #groups_privacy{cdata = Anonymous},
+  Membership = #groups_membership{cdata = Model},
+  Description = #groups_description{cdata = Desc},
+  Index = #groups_index{cdata = Search},
   SubEls = [Privacy, Membership, Description, Index],
-  ChatInfo = #xabbergroupchat_x{parent = BareOldChatJID, sub_els = SubEls},
+  ChatInfo = #groups_x{parent = BareOldChatJID, sub_els = SubEls},
   ChatJID = jid:from_string(Chat),
   Text = <<"You was invited to ",Chat/binary," Please add it to the contacts to join a group chat">>,
   Reason = <<User1Nick/binary,
@@ -419,7 +419,7 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
   " If you accept this invitation, you won't see each other's real XMPP IDs."
   " You will be known as ", User2Nick/binary
   >>,
-  Invite = #xabbergroupchat_invite{reason = Reason, jid = ChatJID},
+  Invite = #groups_invite{reason = Reason, jid = ChatJID},
   Message = #message{
     type = chat,
     id = randoms:get_string(),
@@ -428,9 +428,9 @@ send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJI
     body = [#text{lang = <<>>,data = Text}],
     sub_els = [Invite,ChatInfo]},
   ejabberd_router:route(Message),
-  SubEls1 = [#xabbergroupchat_localpart{cdata = ChatJID#jid.luser},
-    #xabbergroupchat_name{cdata = ChatName}],
-  Created = #xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE,sub_els = SubEls ++ SubEls1},
+  SubEls1 = [#groups_localpart{cdata = ChatJID#jid.luser},
+    #groups_name{cdata = ChatName}],
+  Created = #groups_query{xmlns = ?NS_GROUPS_CREATE,sub_els = SubEls ++ SubEls1},
   {ok, Created}.
 
 send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
@@ -444,12 +444,12 @@ send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
   Model = <<"member-only">>,
   OldChatName = get_chat_name(OldChat,LServer),
   BareOldChatJID = jid:remove_resource(OldChatJID),
-  Name = #xabbergroupchat_name{cdata = ChatName},
-  Privacy = #xabbergroupchat_privacy{cdata = Anonymous},
-  Membership = #xabbergroupchat_membership{cdata = Model},
-  Description = #xabbergroupchat_description{cdata = Desc},
-  Index = #xabbergroupchat_index{cdata = Search},
-  ChatInfo = #xabbergroupchat_x{parent = BareOldChatJID, sub_els = [Name, Privacy, Membership, Description, Index]},
+  Name = #groups_name{cdata = ChatName},
+  Privacy = #groups_privacy{cdata = Anonymous},
+  Membership = #groups_membership{cdata = Model},
+  Description = #groups_description{cdata = Desc},
+  Index = #groups_index{cdata = Search},
+  ChatInfo = #groups_x{parent = BareOldChatJID, sub_els = [Name, Privacy, Membership, Description, Index]},
   ChatJID = jid:from_string(Chat),
   Text = <<"You was invited to ",Chat/binary," Please add it to the contacts to join a group chat">>,
   Reason = <<User1Nick/binary,
@@ -457,7 +457,7 @@ send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
     " If you accept this invitation, you won't see each other's real XMPP IDs."
     " You will be known as ", User2Nick/binary
   >>,
-  Invite = #xabbergroupchat_invite{reason = Reason, jid = ChatJID},
+  Invite = #groups_invite{reason = Reason, jid = ChatJID},
   Message = #message{
     type = chat,
     id = randoms:get_string(),
@@ -582,7 +582,9 @@ get_count_chats(LServer) ->
       0
   end.
 
-create_groupchat(Server,Localpart,CreatorJid,Name,ChatJid,Anon,Search,Model,Desc,Message,Contacts,Domains,ParentChat) ->
+create_groupchat(Server, Localpart, CreatorJid, Name,
+    ChatJid, Anon , Search, Model, Desc, Message, Contacts,
+    Domains, ParentChat) ->
   ejabberd_sql:sql_query(
     Server,
     ?SQL_INSERT(
@@ -638,7 +640,7 @@ search_and_count_chats(Server,Name,Anonymous,_Model,Desc,UserJid,UserHost) ->
     ]).
 
 query(Children) ->
-  #xmlel{name = <<"query">>, attrs = [{"xmlns",?NS_GROUPCHAT}], children = Children}.
+  #xmlel{name = <<"query">>, attrs = [{"xmlns",?NS_GROUPS}], children = Children}.
 
 item_chat(ChatJidQ,NameQ,AnonymousQ,ModelQ,DescQ,_ContactListQ,_DomainListQ,Count) ->
   #xmlel{name = <<"item">>, children =
@@ -780,7 +782,7 @@ get_chat_fields(Chat,LServer) ->
   {Name, _Anonymous, Search, Model, Desc, _ChatMessage, ContactList,
     DomainList, _Parent, _Status} = get_info(Chat, LServer),
   [
-    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT]},
+    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS]},
     #xdata_field{var = <<"name">>, type = 'text-single', values = [Name], label = <<"Name">>},
     #xdata_field{var = <<"description">>, type = 'text-multi', values = [Desc], label = <<"Description">>},
     #xdata_field{var = <<"index">>, type = 'list-single', values = [Search], label = <<"Index">>, options = index_options()},
@@ -985,16 +987,16 @@ sql_get_user_count(LServer,Chat) ->
 
 create_result_query(LocalPart,Name,Desc,Privacy,Membership,Index,Contacts,Domains) ->
   SubEls = [
-    #xabbergroupchat_localpart{cdata = LocalPart},
-    #xabbergroupchat_name{cdata = Name},
-    #xabbergroupchat_description{cdata = Desc},
-    #xabbergroupchat_privacy{cdata = Privacy},
-    #xabbergroupchat_membership{cdata = Membership},
-    #xabbergroupchat_index{cdata = Index},
-    #xabbergroup_domains{domain = lists:usort(Domains)},
-    #xabbergroup_contacts{contact = lists:usort(Contacts)}
+    #groups_localpart{cdata = LocalPart},
+    #groups_name{cdata = Name},
+    #groups_description{cdata = Desc},
+    #groups_privacy{cdata = Privacy},
+    #groups_membership{cdata = Membership},
+    #groups_index{cdata = Index},
+    #groups_domains{domains = lists:usort(Domains)},
+    #groups_contacts{contacts = lists:usort(Contacts)}
   ],
-  #xabbergroupchat{xmlns = ?NS_GROUPCHAT_CREATE,sub_els = SubEls}.
+  #groups_query{xmlns = ?NS_GROUPS_CREATE,sub_els = SubEls}.
 
 membership_options() ->
   [#xdata_option{label = <<"Member-only">>, value = <<"member-only">>}, #xdata_option{label = <<"Open">>, value = <<"open">>}].
@@ -1043,7 +1045,7 @@ make_form(LServer, Chat, Status, Type) ->
 
 fill_fields(LServer, Chat, Status, Type) ->
   [
-    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_STATUS]},
+    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_STATUS]},
     #xdata_field{type = 'fixed', var = <<"header1">>, values = [<<"Section 1 : Statuses">>]},
     #xdata_field{var = <<"status">>, desc = <<"Change status to change behaviour of group">>, type = Type, values = [Status], label = <<"Status">>, options = fill_status_options(LServer, Chat)},
     #xdata_field{type = 'fixed', var = <<"header2">>, values = [<<"Section 2 : Description of statuses">>]}

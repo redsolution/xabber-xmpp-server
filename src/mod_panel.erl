@@ -817,11 +817,11 @@ add_group(Args) ->
 add_group(Owner, LocalPart,GroupHost, GroupName,
     Privacy, Index, Membership) ->
   GroupInfo = [
-    #xabbergroupchat_localpart{cdata = LocalPart},
-    #xabbergroupchat_name{cdata = GroupName},
-    #xabbergroupchat_index{cdata = Index},
-    #xabbergroupchat_privacy{cdata = Privacy},
-    #xabbergroupchat_membership{cdata = Membership}
+    #groups_localpart{cdata = LocalPart},
+    #groups_name{cdata = GroupName},
+    #groups_index{cdata = Index},
+    #groups_privacy{cdata = Privacy},
+    #groups_membership{cdata = Membership}
     ],
   case mod_groups_chats:create_chat(GroupHost, Owner, GroupInfo) of
     {ok, _ , _, _} ->

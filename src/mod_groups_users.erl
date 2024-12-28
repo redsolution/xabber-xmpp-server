@@ -40,9 +40,7 @@
   get_user_from_chat/4,
   get_users_from_chat/5,
   form_user_card/2,
-  form_user_updated/2,
   users_to_send/2,
-  form_kicked/2,
   add_user/6,
   delete_user/2,
   is_in_chat/3,
@@ -171,29 +169,22 @@ check_if_user_can(_Acc,_LServer,Chat,Admin,_Kick,_Lang) ->
       {stop, {error, xmpp:err_not_allowed()}}
   end.
 
-check_kick(_Acc,LServer,Chat,Admin,Kick,_Lang) ->
-  case Kick of
-    #xabbergroup_kick{jid = JIDs, id = IDs} when length(JIDs) > 0 orelse length(IDs) > 0 ->
-      #xabbergroup_kick{jid = JIDs, id = IDs} = Kick,
-      UsersByID = lists:map(fun (Block_ID) ->
-        #block_id{cdata = ID} = Block_ID,
-        get_user_by_id(LServer,Chat,ID) end, IDs),
-      Users = lists:map(fun (Block_JID) ->
-        #block_jid{cdata = JID} = Block_JID,
-        JID end, JIDs),
-      V1 = lists:map(fun(User) -> validate_kick_request(LServer,Chat,Admin,User) end, Users),
-      V2 = lists:map(fun(User) -> validate_kick_request(LServer,Chat,Admin,User) end, UsersByID),
-      Validations = V1 ++ V2,
-      case lists:member(not_ok, Validations) of
-        false ->
-          AllUsers = UsersByID ++ Users,
-          AllUsers;
-        _ ->
-          {stop, {error, xmpp:err_not_allowed()}}
-        end;
+check_kick(_Acc, LServer, Chat, Admin, Kick, _Lang) ->
+  #groups_kick{jids = JIDs, ids = IDs} = Kick,
+  UsersByID = lists:map(fun (Block_ID) ->
+    #groups_user_id{cdata = ID} = Block_ID,
+    get_user_by_id(LServer ,Chat, ID) end, IDs),
+  Users = lists:map(fun (JID) ->
+    jid:to_string(JID) end, JIDs),
+  V1 = lists:map(fun(User) -> validate_kick_request(LServer,Chat,Admin,User) end, Users),
+  V2 = lists:map(fun(User) -> validate_kick_request(LServer,Chat,Admin,User) end, UsersByID),
+  Validations = V1 ++ V2,
+  case lists:member(not_ok, Validations) of
+    false ->
+      UsersByID ++ Users;
     _ ->
-      {stop, {error, xmpp:err_bad_request()}}
-  end.
+      {stop, {error, xmpp:err_not_allowed()}}
+    end.
 
 kick_user(Acc, LServer, Chat, _Admin, _Kick, _Lang) ->
   lists:foreach(fun(User) -> kick_user_from_chat(LServer,Chat,User) end, Acc),
@@ -255,11 +246,11 @@ check_if_user_exist(Acc, LServer, User, Chat,_Lang) ->
 send_user_rights(_Acc, LServer, User, Chat, Lang) ->
   RightsAndTime = user_rights_and_time(LServer,Chat,User),
   Fields = [
-    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
     #xdata_field{var = <<"user-id">>, type = hidden, values = [<<"">>]}| make_fields_owner_no_options(LServer,RightsAndTime,Lang,'fixed')
   ],
-  {stop,{ok,#xabbergroupchat{
-    xmlns = ?NS_GROUPCHAT_RIGHTS,
+  {stop,{ok,#groups_query{
+    xmlns = ?NS_GROUPS_RIGHTS,
     sub_els = [
       #xdata{type = form,
         title = <<"Group user's rights">>,
@@ -321,18 +312,18 @@ choose_name(UserCard) ->
   choose_name(UserCard,IsAnon).
 
 choose_name(UserCard,yes) ->
-  case UserCard#xabbergroupchat_user_card.nickname of
+  case UserCard#groups_user.nickname of
     undefined ->
-      UserCard#xabbergroupchat_user_card.id;
+      UserCard#groups_user.id;
     _ ->
-      UserCard#xabbergroupchat_user_card.nickname
+      UserCard#groups_user.nickname
   end;
 choose_name(UserCard,no) ->
-  case UserCard#xabbergroupchat_user_card.nickname of
+  case UserCard#groups_user.nickname of
     undefined ->
-      jid:to_string(UserCard#xabbergroupchat_user_card.jid);
+      jid:to_string(UserCard#groups_user.jid);
     _ ->
-      UserCard#xabbergroupchat_user_card.nickname
+      UserCard#groups_user.nickname
   end.
 
 
@@ -354,7 +345,7 @@ get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
   end.
 
 add_user_vcard(_Acc, {_Admin,Chat,Server,
-  #xabbergroupchat_invite{invite_jid = User, reason = _Reason, send = _Send}}) ->
+  #groups_invite{invite_jid = User, reason = _Reason, send = _Send}}) ->
   case mod_groups_chats:is_anonim(Server,Chat) of
     false ->
       add_wait_for_vcard(Server,User),
@@ -446,7 +437,7 @@ set_default_restrictions(_Acc,{Server,To,Chat,_Lang}) ->
   end.
 
 is_anon_card(UserCard) ->
-  case UserCard#xabbergroupchat_user_card.jid of
+  case UserCard#groups_user.jid of
     undefined -> yes;
     _ -> no
   end.
@@ -454,25 +445,14 @@ is_anon_card(UserCard) ->
 form_user_card(User,Chat) ->
   case get_user_info(User,Chat) of
     error ->
-      #xabbergroupchat_user_card{};
+      #groups_user{};
     {Role, UserJID, Badge, UserId, Nick, AvatarEl, false} ->
-      #xabbergroupchat_user_card{role = Role, jid = UserJID,
+      #groups_user{role = Role, jid = UserJID,
         badge = Badge, id = UserId, nickname = Nick, avatar = AvatarEl};
     {Role, _UserJID, Badge, UserId, Nick, AvatarEl, true} ->
-      #xabbergroupchat_user_card{role = Role, badge = Badge,
+      #groups_user{role = Role, badge = Badge,
         id = UserId, nickname = Nick, avatar = AvatarEl}
   end.
-
-form_user_updated(User,Chat) ->
-  UserCard = form_user_card(User,Chat),
-  #xabbergroupchat_user_updated{user = UserCard}.
-
-form_kicked(Users,Chat) ->
-  UserCards = lists:map(
-    fun(User) ->
-      form_user_card(User,Chat) end, Users
-  ),
-  #xabbergroupchat_kicked{users = UserCards}.
 
 users_to_send(Server, Group) ->
   Users =  sql_users_to_send(Server, Group),
@@ -512,14 +492,16 @@ sql_add_user(Server, User, Role, Group, Subs, InvitedBy) ->
   ID = str:to_lower(randoms:get_alphanum_string(16)),
   IsAnon = mod_groups_chats:is_anonim(Server, Group),
   F = fun() ->
-    ANN = case IsAnon of
-            true -> ID;
-            _ ->
-              case sql_get_vcard_nickname_t(User) of
-                not_exist -> User;
-                V -> V
-              end
-          end,
+    {ANN, ParseAvatar} =
+      case IsAnon of
+        true -> {ID, <<"no">>};
+        _ ->
+          Nick = case sql_get_vcard_nickname_t(User) of
+                    not_exist -> User;
+                    V -> V
+                  end,
+          {Nick, <<"yes">>}
+      end,
     Badge = case ejabberd_sql:sql_query_t(
       ?SQL("select @(username)s from groupchat_users "
       " where chatgroup=%(Group)s and (nickname=%(ANN)s or auto_nickname=%(ANN)s)"
@@ -537,7 +519,8 @@ sql_add_user(Server, User, Role, Group, Subs, InvitedBy) ->
           "subscription=%(Subs)s",
           "invited_by=%(InvitedBy)s",
           "auto_nickname=%(ANN)s",
-          "badge=%(Badge)s"
+          "badge=%(Badge)s",
+          "parse_avatar=%(ParseAvatar)s"
           ]))
       end,
   ejabberd_sql:sql_transaction(Server, F),
@@ -1118,11 +1101,11 @@ create_right_form(LServer,User,Chat,RequestUser,ID, Lang) ->
     true ->
       RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
       Fields = [
-        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
         #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_owner(LServer,RightsAndTime,Lang)
       ],
-      #xabbergroupchat{
-        xmlns = ?NS_GROUPCHAT_RIGHTS,
+      #groups_query{
+        xmlns = ?NS_GROUPS_RIGHTS,
         sub_els = [
           #xdata{type = form,
             title = <<"Groupchat user's rights change">>,
@@ -1132,11 +1115,11 @@ create_right_form(LServer,User,Chat,RequestUser,ID, Lang) ->
     _ when CanRestrictUsers == true ->
       RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
       Fields = [
-        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
         #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_admin(LServer,RightsAndTime,Lang)
       ],
-      #xabbergroupchat{
-        xmlns = ?NS_GROUPCHAT_RIGHTS,
+      #groups_query{
+        xmlns = ?NS_GROUPS_RIGHTS,
         sub_els = [
           #xdata{type = form,
             title = <<"Groupchat user's rights change">>,
@@ -1155,11 +1138,11 @@ create_right_form_no_options(LServer,User,Chat,RequestUser,ID, Lang) ->
     true ->
       RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
       Fields = [
-        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
         #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_owner_no_options(LServer,RightsAndTime,Lang,'list-single')
       ],
-      #xabbergroupchat{
-        xmlns = ?NS_GROUPCHAT_RIGHTS,
+      #groups_query{
+        xmlns = ?NS_GROUPS_RIGHTS,
         sub_els = [
           #xdata{type = result,
             title = <<"Groupchat user's rights change">>,
@@ -1169,11 +1152,11 @@ create_right_form_no_options(LServer,User,Chat,RequestUser,ID, Lang) ->
     _ when CanRestrictUsers == true ->
       RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
       Fields = [
-        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
         #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_admin_no_options(LServer,RightsAndTime,Lang)
       ],
-      #xabbergroupchat{
-        xmlns = ?NS_GROUPCHAT_RIGHTS,
+      #groups_query{
+        xmlns = ?NS_GROUPS_RIGHTS,
         sub_els = [
           #xdata{type = result,
             title = <<"Groupchat user's rights change">>,
@@ -1186,11 +1169,11 @@ create_right_form_no_options(LServer,User,Chat,RequestUser,ID, Lang) ->
 
 create_empty_form(ID) ->
   Fields = [
-    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPCHAT_RIGHTS]},
+    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
     #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}
     ],
-  #xabbergroupchat{
-    xmlns = ?NS_GROUPCHAT_RIGHTS,
+  #groups_query{
+    xmlns = ?NS_GROUPS_RIGHTS,
     sub_els = [
       #xdata{type = form,
         title = <<"Groupchat user s rights change">>,
@@ -1430,14 +1413,14 @@ get_user_from_chat(LServer, Chat, User, ID) ->
                   [] -> LastSeen;
                   _ -> undefined
                 end,
-      UserCard = #xabbergroupchat_user_card{subscription = Subscription, id = Id, nickname = Nick,
+      UserCard = #groups_user{subscription = Subscription, id = Id, nickname = Nick,
         role = Role, avatar = AvatarEl, badge = Badge, present = Present},
       RequesterRole = calculate_role(LServer,User,Chat),
       SubEls = if
                  IsAnon andalso RequesterRole /= <<"owner">> -> [UserCard] ;
-                 true -> [UserCard#xabbergroupchat_user_card{jid = jid:from_string(Username)}]
+                 true -> [UserCard#groups_user{jid = jid:from_string(Username)}]
                end,
-      #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls};
+      #groups_query{xmlns = ?NS_GROUPS_MEMBERS, sub_els = SubEls};
     _ ->
       []
   end.
@@ -1450,8 +1433,8 @@ get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
   Count = binary_to_integer(CountBinary),
   SubEls = case Users of
              [_|_] when RSM /= undefined ->
-               #xabbergroupchat_user_card{nickname = First} = hd(Users),
-               #xabbergroupchat_user_card{nickname = Last} = lists:last(Users),
+               #groups_user{nickname = First} = hd(Users),
+               #groups_user{nickname = Last} = lists:last(Users),
                [#rsm_set{first = #rsm_first{data = First},
                  last = Last,
                  count = Count}|Users];
@@ -1462,7 +1445,7 @@ get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
            end,
   DateNew = get_chat_version(LServer,Chat),
   VersionNew = convert_from_datetime_to_unix_time(DateNew),
-  #xabbergroupchat{xmlns = ?NS_GROUPCHAT_MEMBERS, sub_els = SubEls, version = VersionNew}.
+  #groups_query{xmlns = ?NS_GROUPS_MEMBERS, sub_els = SubEls, version = VersionNew}.
 
 make_sql_query(SChat,RSM,Version) ->
   {Max, Direction, Item} = get_max_direction_item(RSM),
@@ -1560,14 +1543,14 @@ make_query(LServer,RawData,RequesterUser,Chat) ->
                      _ ->
                        undefined
                    end,
-      Card = #xabbergroupchat_user_card{id = Id, nickname = Nick,
+      Card = #groups_user{id = Id, nickname = Nick,
         role = Role, avatar = AvatarEl, badge = Badge, present = Present,
         subscription = Subs},
       WithoutJID = IsAnon andalso RequesterUser /= Username andalso
         RequesterUserRole /= <<"owner">>,
       if
         WithoutJID -> Card;
-        true -> Card#xabbergroupchat_user_card{jid = jid:from_string(Username)}
+        true -> Card#groups_user{jid = jid:from_string(Username)}
       end
     end, RawData).
 

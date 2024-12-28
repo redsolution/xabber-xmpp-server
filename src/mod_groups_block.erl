@@ -87,9 +87,9 @@ validate_block_query(_Acc, #iq{from = From, to = To, sub_els = [El]}) ->
   end.
 
 block(Acc, #iq{to = To, from = From} = Iq)->
-  Elements = Acc#xabbergroup_block.domain
-    ++ Acc#xabbergroup_block.jid
-    ++ Acc#xabbergroup_block.id,
+  Elements = Acc#groups_block.domain
+    ++ Acc#groups_block.jid
+    ++ Acc#groups_block.id,
   Group = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   Admin = jid:to_string(jid:remove_resource(From)),
@@ -124,9 +124,9 @@ unblock(_Acc, #iq{to = To, sub_els = [El]}) ->
   Group = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   D = xmpp:decode(El),
-  Elements = validate(D#xabbergroup_unblock.domain) ++
-    validate(D#xabbergroup_unblock.jid) ++
-    D#xabbergroup_unblock.id,
+  Elements = validate(D#groups_unblock.domain) ++
+    validate(D#groups_unblock.jid) ++
+    D#groups_unblock.id,
   unblock(Elements, Server, Group).
 
 %%%% API
@@ -165,12 +165,12 @@ block_list(GroupJID) ->
 
 
 validate_domains(BlockEl) ->
-  Domains = validate(BlockEl#xabbergroup_block.domain),
+  Domains = validate(BlockEl#groups_block.domain),
   case lists:member(error, Domains) of
     true ->
       error;
     _ ->
-      #xabbergroup_block{domain = Domains}
+      #groups_block{domain = Domains}
   end.
 
 validate_ids(Acc, BlockEl, Server, Group, Admin) ->
@@ -178,29 +178,29 @@ validate_ids(Acc, BlockEl, Server, Group, Admin) ->
     fun({_,Cdata}) ->
       {block_jid,
         mod_groups_users:get_user_by_id(Server, Group, Cdata )}
-    end, BlockEl#xabbergroup_block.id),
+    end, BlockEl#groups_block.id),
   case lists:member({block_jid, none}, UserJIDs) of
     false->
-      NewAcc = Acc#xabbergroup_block{jid= UserJIDs},
+      NewAcc = Acc#groups_block{jid= UserJIDs},
       validate_jids(NewAcc, BlockEl, Server, Group, Admin);
     _ ->
       {stop, {error, xmpp:err_bad_request()}}
   end.
 
 validate_jids(Acc, BlockEl, Server, Group, Admin) ->
-  JIDs = validate(BlockEl#xabbergroup_block.jid),
+  JIDs = validate(BlockEl#groups_block.jid),
   case lists:member(error, JIDs)  of
     true ->
       {stop, {error, xmpp:err_bad_request()}};
     _ ->
-      JIDsSum = Acc#xabbergroup_block.jid ++ JIDs,
-      NewAcc = Acc#xabbergroup_block{jid = JIDsSum},
+      JIDsSum = Acc#groups_block.jid ++ JIDs,
+      NewAcc = Acc#groups_block{jid = JIDsSum},
       check_permissions(NewAcc, Server, Group, Admin)
   end.
 
 check_permissions(Acc, Server, Group, Admin) ->
-  JIDs = [J || {_ ,J} <- Acc#xabbergroup_block.jid],
-  Domains = [D || {_ ,D} <- Acc#xabbergroup_block.domain],
+  JIDs = [J || {_ ,J} <- Acc#groups_block.jid],
+  Domains = [D || {_ ,D} <- Acc#groups_block.domain],
   R = case lists:member(Admin, JIDs) of
         true -> error;
         _ ->

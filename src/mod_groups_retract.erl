@@ -59,26 +59,26 @@ get_version_reply(UserJID, GroupJID) ->
   case check_permissions(user_exist, Server, User, Group, []) of
     ok ->
       Ver = get_version(Server, Group),
-      {ok, #xabber_retract_query{version=Ver}};
+      {ok, #retract_query{version=Ver}};
     Err ->
       Err
   end.
 
 %% rewrite message
 
-rewrite_message(UserJID, GroupJID, #xabber_replace{id = ID,
-  xabber_replace_message = XRM}) ->
+rewrite_message(UserJID, GroupJID, #replace{id = ID, 
+  replace_message = XRM}) ->
   User = jid:to_string(jid:remove_resource(UserJID)),
   Group = jid:to_string(jid:remove_resource(GroupJID)),
   Server = GroupJID#jid.lserver,
   case check_permissions(rewrite, Server, User, Group, [ID]) of
     ok ->
       Ver = get_new_version(Server, Group),
-      Notify1 = #xabber_replace{id = ID,
-        xabber_replace_message = XRM,
+      Notify1 = #replace{id = ID,
+        replace_message = XRM,
         version = Ver,
         conversation = jid:remove_resource(GroupJID),
-        type = ?NS_GROUPCHAT,
+        type = ?NS_GROUPS,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY},
       Notify2 = rewrite_message(Server, Group, User, Notify1),
       store_event(Server, Group, Notify2, Ver),
@@ -89,9 +89,9 @@ rewrite_message(UserJID, GroupJID, #xabber_replace{id = ID,
   end.
 
 rewrite_message(Server, Group, UserS, Replace) ->
-  #xabber_replace{id = ID,
-    xabber_replace_message = ReplaceMsg} = Replace,
-  #xabber_replace_message{body = Text,
+  #replace{id = ID,
+    replace_message = ReplaceMsg} = Replace,
+  #replace_message{body = Text,
     sub_els = SubEls} = ReplaceMsg,
   NewEls = mod_retract:filter_new_els(SubEls),
   GroupJID = jid:from_string(Group),
@@ -110,7 +110,7 @@ rewrite_message(Server, Group, UserS, Replace) ->
   UserChoose = mod_groups_users:choose_name(ActualCard),
   Username = <<UserChoose/binary, ":", "\n">>,
   Length = misc:escaped_text_len(Username),
-  NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT,
+  NewX = #groups_x{xmlns = ?NS_GROUPS,
     sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [ActualCard],
       'begin' = 0, 'end' = Length}]},
   NewElsShifted = mod_groups_messages:shift_references(NewEls, Length),
@@ -129,13 +129,13 @@ rewrite_message(Server, Group, UserS, Replace) ->
       "!server_host=%(Server)s",
       "xml=%(XML)s",
       "txt=%(NewText)s"]),
-  Time = #unique_time{by = GroupJID,
+  Time = #delivery_time{by = GroupJID,
     stamp = misc:usec_to_now(binary_to_integer(ID))},
-  NewReplaceMsg = ReplaceMsg#xabber_replace_message{
+  NewReplaceMsg = ReplaceMsg#replace_message{
     replaced = Replaced,
     stanza_id = #stanza_id{id = ID, by = GroupJID},
     body = NewText, sub_els = Els2 ++ [Time]},
-  Replace#xabber_replace{xabber_replace_message = NewReplaceMsg}.
+  Replace#replace{replace_message = NewReplaceMsg}.
 
 %% retract all messages
 
@@ -146,9 +146,9 @@ retract_all_messages(UserJID, GroupJID) ->
   case check_permissions(retract_all, Server, User, Group, []) of
     ok ->
       Ver = get_new_version(Server, Group),
-      Notify = #xabber_retract_all{symmetric = true,
+      Notify = #retract_all{symmetric = true,
         conversation = jid:remove_resource(GroupJID),
-        type = ?NS_GROUPCHAT, version = Ver,
+        type = ?NS_GROUPS, version = Ver,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY},
       delete_messages_from_archive(Group),
       check_if_message_pinned(Server, Group, 0),
@@ -162,7 +162,7 @@ retract_all_messages(UserJID, GroupJID) ->
 %% retract user messages
 
 retract_user_messages( UserJID, GroupJID, Retract) ->
-  #xabber_retract_user{id = UserID} = Retract,
+  #retract_user{id = UserID} = Retract,
   User = jid:to_string(jid:remove_resource(UserJID)),
   Group = jid:to_string(jid:remove_resource(GroupJID)),
   Server = GroupJID#jid.lserver,
@@ -170,8 +170,8 @@ retract_user_messages( UserJID, GroupJID, Retract) ->
     Group, [UserID]) of
     {ok, Peer} ->
       Ver = get_new_version(Server, Group),
-      Notify =  #xabber_retract_user{id = UserID,
-        symmetric = true, type = ?NS_GROUPCHAT,
+      Notify =  #retract_user{id = UserID,
+        symmetric = true, type = ?NS_GROUPS,
         conversation = jid:remove_resource(GroupJID),
         version = Ver,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY},
@@ -187,14 +187,14 @@ retract_user_messages( UserJID, GroupJID, Retract) ->
 %% retract message
 
 retract_message(UserJID, GroupJID, Retract) ->
-  #xabber_retract_message{id = ID} = Retract,
+  #retract_message{id = ID} = Retract,
   User = jid:to_string(jid:remove_resource(UserJID)),
   Group = jid:to_string(jid:remove_resource(GroupJID)),
   Server = GroupJID#jid.lserver,
   case check_permissions(retract, Server, User, Group, [ID]) of
     ok ->
-      Notify = #xabber_retract_message{id = ID,
-        type = ?NS_GROUPCHAT, symmetric = true,
+      Notify = #retract_message{id = ID,
+        type = ?NS_GROUPS, symmetric = true,
         conversation = jid:remove_resource(GroupJID),
         xmlns = ?NS_XABBER_REWRITE_NOTIFY},
       retract_message(Server, Group, ID, Notify);
@@ -206,7 +206,7 @@ retract_message(Server, Group, ID, Notify)->
   case delete_message_from_archive(Server, Group, ID) of
     ok ->
       Ver = get_new_version(Server, Group),
-      Notify1 = Notify#xabber_retract_message{version = Ver},
+      Notify1 = Notify#retract_message{version = Ver},
       check_if_message_pinned(Server, Group, ID),
       store_event(Server, Group, Notify1, Ver),
       send_notifications(Server, Group, Notify1),
@@ -253,9 +253,9 @@ send_rewrite_archive(Server, UserJID, Group, Ver)->
   ok.
 
 send_invalidate(UserJID, Group, Ver) ->
-  Invalidate = #xabber_retract_invalidate{version = Ver,
+  Invalidate = #retract_invalidate{version = Ver,
     conversation = jid:from_string(Group),
-    type = ?NS_GROUPCHAT},
+    type = ?NS_GROUPS},
   M = #message{from = jid:from_string(Group), to = UserJID,
     type = headline, id= randoms:get_string(),
     sub_els = [Invalidate]},

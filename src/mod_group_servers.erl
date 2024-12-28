@@ -58,7 +58,7 @@ get_xabber_group_servers(LServer) ->
   Servers = gen_mod:get_module_opt(LServer, ?MODULE, servers),
   lists:map(fun(JID) ->
     #disco_item{jid = jid:make(JID),
-      node = ?NS_GROUPCHAT,
+      node = ?NS_GROUPS,
       name = <<"Group Service">>} end, Servers).
 
 get_local_items(Acc, _From, #jid{lserver = LServer} = _To,

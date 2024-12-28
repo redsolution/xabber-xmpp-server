@@ -169,9 +169,9 @@ process_iq(#iq{type = get, sub_els = [#disco_info{}]} = IQ) ->
   xmpp:make_iq_result(IQ,Info);
 process_iq(#iq{type = get, sub_els = [#disco_items{}]} = IQ) ->
   xmpp:make_iq_result(IQ, #disco_items{});
-process_iq(#iq{type = set, sub_els = [#xabber_replace{}]} = IQ) ->
+process_iq(#iq{type = set, sub_els = [#replace{}]} = IQ) ->
   xmpp:make_iq_result(IQ);
-process_iq(#iq{type = set, sub_els = [#xabber_retract_message{}]} = IQ) ->
+process_iq(#iq{type = set, sub_els = [#retract_message{}]} = IQ) ->
   xmpp:make_iq_result(IQ);
 process_iq(_) ->
   none.

@@ -500,12 +500,12 @@ xabber_register_chat(Server,Creator,Host,Name,LocalJid,Anon,Searchable,Model,Des
   case validate(Anon,Searchable,Model) of
     ok ->
       GroupInfo = [
-        #xabbergroupchat_localpart{cdata = jid:nodeprep(LocalJid)},
-        #xabbergroupchat_name{cdata = Name},
-        #xabbergroupchat_description{cdata = Description},
-        #xabbergroupchat_index{cdata = Searchable},
-        #xabbergroupchat_privacy{cdata = Anon},
-        #xabbergroupchat_membership{cdata = Model}
+        #groups_localpart{cdata = jid:nodeprep(LocalJid)},
+        #groups_name{cdata = Name},
+        #groups_description{cdata = Description},
+        #groups_index{cdata = Searchable},
+        #groups_privacy{cdata = Anon},
+        #groups_membership{cdata = Model}
       ],
       Owner = jid:to_string(jid:make(Creator, Host)),
       case mod_groups_chats:create_chat(Server, Owner, GroupInfo) of

@@ -116,7 +116,7 @@ message_hook(#message{to =To, from = From} = Pkt) ->
     restricted ->
       Text = <<"You have no permission to write in this chat">>,
       BodySer = [#text{lang = <<>>,data = Text}],
-      ElsSer = [#xabbergroupchat_x{no_permission = <<>>, xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}],
+      ElsSer = [#groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE}],
       MessageNew = #message{from = To, to = From, id = randoms:get_string(),
         type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
       UserID = mod_groups_users:get_user_id(Server,User,Chat),
@@ -127,8 +127,8 @@ message_hook(#message{to =To, from = From} = Pkt) ->
       BodySer = [#text{lang = <<>>,data = Text}],
       UserID = mod_groups_users:get_user_id(Server,User,Chat),
       UserJID = jid:from_string(User),
-      UserCard = #xabbergroupchat_user_card{id = UserID, jid = UserJID},
-      ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE, sub_els = [UserCard]}],
+      UserCard = #groups_user{id = UserID, jid = UserJID},
+      ElsSer = [#groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, sub_els = [UserCard]}],
       MessageNew = #message{from = To, to = From, id = randoms:get_string(),
         type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
       ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
@@ -139,7 +139,7 @@ message_hook(#message{to =To, from = From} = Pkt) ->
     _ when ChatStatus == <<"inactive">> ->
       Text = <<"Chat is inactive.">>,
       BodySer = [#text{lang = <<>>,data = Text}],
-      ElsSer = [#xabbergroupchat_x{xmlns = ?NS_GROUPCHAT_SYSTEM_MESSAGE}],
+      ElsSer = [#groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE}],
       MessageNew = #message{from = To, to = From, id = randoms:get_string(),
         type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
       UserID = mod_groups_users:get_user_id(Server,User,Chat),
@@ -284,7 +284,7 @@ do_route(#message{body=[], from = From, type = Type, to = To} = Msg)
   {_, LServer, _} = jid:tolower(To),
   ChatJID = jid:remove_resource(To),
   SUser = jid:to_string(jid:remove_resource(From)),
-  Displayed = xmpp:get_subtag(Msg, #message_displayed{}),
+  Displayed = xmpp:get_subtag(Msg, #mark_displayed{}),
   PresentType = lists:foldl(fun(CType, Result) ->
     case xmpp:get_subtag(Msg, #chatstate{type = CType}) of
       false -> Result;
@@ -299,7 +299,7 @@ do_route(#message{body=[], from = From, type = Type, to = To} = Msg)
             end,
   if
     Displayed /= false  andalso IsAllowed ->
-      #message_displayed{id = OriginID} = Displayed,
+      #mark_displayed{id = OriginID} = Displayed,
       Displayed2 = filter_packet(Displayed,ChatJID),
       StanzaID = get_stanza_id(Displayed2,ChatJID,LServer,OriginID),
       ejabberd_hooks:run(groupchat_got_displayed,LServer,[From,ChatJID,StanzaID]),
@@ -310,7 +310,7 @@ do_route(#message{body=[], from = From, type = Type, to = To} = Msg)
       ok
   end;
 do_route(#message{body=_Body, type = Type} = Message) when Type == normal orelse Type == chat->
-  case xmpp:get_subtag(Message, #xabbergroupchat_invite{}) of
+  case xmpp:get_subtag(Message, #groups_invite{}) of
     false ->
       message_hook(Message);
     _ ->
@@ -332,7 +332,7 @@ send_displayed(ChatJID,StanzaID,MessageID) ->
       LName when PServer == LServer ->
         send_displayed_to_all(ChatJID,StanzaID,MessageID);
       _ ->
-        Displayed = #message_displayed{id = MessageID, sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
+        Displayed = #mark_displayed{id = MessageID, sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
         M = #message{type = chat, from = ChatJID, to = jid:make(PUser,PServer), sub_els = [Displayed], id=randoms:get_string()},
         ejabberd_router:route(M)
     end
@@ -340,7 +340,7 @@ send_displayed(ChatJID,StanzaID,MessageID) ->
   delete_old_messages(LName,LServer,StanzaID).
 
 send_displayed_to_all(ChatJID,StanzaID,MessageID) ->
-  Displayed = #message_displayed{id = MessageID,
+  Displayed = #mark_displayed{id = MessageID,
     sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
@@ -406,7 +406,7 @@ transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
   Username = mod_groups_users:choose_name(UserCard),
   Header = <<Username/binary, ":", "\n">>,
   Length = misc:escaped_text_len(Header),
-  Reference = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT,
+  Reference = #groups_x{xmlns = ?NS_GROUPS,
     sub_els = [#xmppreference{ 'begin' = 0, 'end' = Length,
       type = <<"mutable">>, sub_els = [UserCard]}]},
   NewBody = [T#text{data = <<Header/binary, Text/binary >>}
@@ -468,15 +468,15 @@ strip_group_elements(Els) ->
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      IsGroupsNS = str:prefix(?NS_GROUPCHAT, NS),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0);
+      IsGroupsNS = str:prefix(?NS_GROUPS, NS),
+      if (Name == <<"reference">> andalso NS == ?NS_REFERENCES);
       (Name == <<"x">> andalso IsGroupsNS) ->
         try xmpp:decode(El) of
           #xmppreference{type = <<"groupchat">>} ->
             false;
           #xmppreference{type = _Any} ->
             true;
-          #xabbergroupchat_x{} ->
+          #groups_x{} ->
             false
         catch _:{xmpp_codec, _} ->
           false
@@ -538,7 +538,7 @@ set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
 %%    {_ID, _IDInt, El} = Pkt,
 %%    #forwarded{sub_els = [MsgE]} = El,
 %%    Msg = xmpp:decode(MsgE),
-%%    X = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+%%    X = xmpp:get_subtag(Msg, #groups_x{xmlns = ?NS_GROUPS}),
 %%    case X of
 %%      false ->
 %%        {false,false};
@@ -548,7 +548,7 @@ set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
 %%          false ->
 %%            {false, false};
 %%          _ ->
-%%            Card = xmpp:get_subtag(Reference, #xabbergroupchat_user_card{}),
+%%            Card = xmpp:get_subtag(Reference, #groups_user{}),
 %%            case Card of
 %%              false ->
 %%                {false,false};
@@ -587,7 +587,7 @@ set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
 %%    {_ID, _IDInt, El} = Pkt,
 %%    #forwarded{sub_els = [Msg0]} = El,
 %%    Msg = xmpp:decode(Msg0),
-%%    X = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+%%    X = xmpp:get_subtag(Msg, #groups_x{xmlns = ?NS_GROUPS}),
 %%    case X of
 %%      false ->
 %%        Pkt;
@@ -597,7 +597,7 @@ set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
 %%          false ->
 %%            Pkt;
 %%          _ ->
-%%            Card = xmpp:get_subtag(Ref, #xabbergroupchat_user_card{}),
+%%            Card = xmpp:get_subtag(Ref, #groups_user{}),
 %%            change_message(Card,ChatandUsers,Pkt)
 %%        end
 %%    end
@@ -611,7 +611,7 @@ set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
 %%  {ID, IDInt, El} = Pkt,
 %%  #forwarded{sub_els = [Msg0]} = El,
 %%  Msg = xmpp:decode(Msg0),
-%%  Xtag = xmpp:get_subtag(Msg, #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT}),
+%%  Xtag = xmpp:get_subtag(Msg, #groups_x{xmlns = ?NS_GROUPS}),
 %%  CurrentUserID = OldCard#xabbergroupchat_user_card.id,
 %%  Chat = jid:to_string(jid:remove_resource(Msg#message.from)),
 %%  Cards = lists:keyfind(Chat,1,ChatandUsers),
@@ -630,7 +630,7 @@ set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
 %%          Sub2 = xmpp:get_els(Pkt2),
 %%          Reference = xmpp:get_subtag(Xtag, #xmppreference{}),
 %%          X = Reference#xmppreference{type = <<"mutable">>, sub_els = [NewCard]},
-%%          NewX = #xabbergroupchat_x{xmlns = ?NS_GROUPCHAT, sub_els = [X]},
+%%          NewX = #groups_x{xmlns = ?NS_GROUPS, sub_els = [X]},
 %%          XEl = xmpp:encode(NewX),
 %%          Sub3 = [XEl|Sub2],
 %%          {ID,IDInt,El#forwarded{sub_els = [Msg0#message{sub_els = Sub3}]}}
@@ -643,7 +643,7 @@ shift_references(Els, Length) ->
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCE_0) ->
+      if (Name == <<"reference">> andalso NS == ?NS_REFERENCES) ->
         try xmpp:decode(El) of
           #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub} ->
             {true, #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub}};

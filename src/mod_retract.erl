@@ -147,7 +147,6 @@ pre_process_iq(#iq{to = To} = IQ) ->
   {PUser, PServer, _} = jid:tolower(To),
   case mod_xabber_entity:get_entity_type(PUser, PServer) of
     group -> mod_groups_iq_handler:make_action(IQ);
-    channel -> mod_channels_iq_handler:process_iq(IQ);
     _ ->
       process_iq(IQ)
   end.

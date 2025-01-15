@@ -299,7 +299,6 @@ disco_identity(Acc, _From, _To, _Node, _Lang) ->
 get_vcard(LUser, LServer) ->
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
 		group -> mod_groups_vcard:get_vcard(LUser,LServer);
-		channel -> mod_channels:get_vcard(LUser,LServer);
 		_ ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
     Result = case use_cache(Mod, LServer) of

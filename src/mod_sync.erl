@@ -508,7 +508,7 @@ process_message(in, #message{type = chat, from = Peer, to = To,
           maybe_push_notification(LUser,LServer,Conversation,?NS_XABBER_CHAT,
             <<"message">>,#stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)})
       end;
-    Type == ?NS_GROUPS; Type == ?NS_CHANNELS ->
+    Type == ?NS_GROUPS ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
       StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
       UTime = xmpp:get_subtag(FilPacket, #delivery_time{}),
@@ -762,39 +762,6 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
   {PUser, PServer,_} = jid:tolower(jid:from_string(Conversation)),
   IsLocal = is_local(PServer),
   case Type of
-    ?NS_CHANNELS when IsLocal == false ->
-      {Sub, _, _} = mod_roster:get_jid_info(<<>>, LUser, LServer,
-        jid:from_string(Conversation)),
-      Count = eg_get_unread_msgs_count({PUser, PServer}, ReadTS, Sub),
-      UserCard = eg_get_user_card(LUser, LServer, PUser, PServer),
-      LastMessage = eg_get_last_message(LUser, LServer, PUser, PServer, Sub),
-      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
-      Unread = #sync_unread{count = Count, 'after' = Read},
-      XabberDelivered = #sync_delivered{id = Delivered},
-      XabberDisplayed = #sync_displayed{id = Display},
-      SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
-        sub_els = [#sync_retract{version = Retract}]},
-        #sync_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
-        #sync_metadata{node = ?NS_CHANNELS, sub_els = UserCard},
-        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
-    ?NS_CHANNELS ->
-      User = jid:to_string(jid:make(LUser,LServer)),
-      Chat = jid:to_string(jid:make(PUser,PServer)),
-      Status = mod_channels_users:check_user_if_exist(LServer,User,Chat),
-      Count = lg_get_count_messages(User,Chat,Read,Status),
-      LastMessage = lg_get_last_message(LUser, LServer, PUser, PServer,Status),
-      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
-      Unread = #sync_unread{count = Count, 'after' = Read},
-      XabberDelivered = #sync_delivered{id = Delivered},
-      XabberDisplayed = #sync_displayed{id = Display},
-      UserCard = mod_channels_users:form_user_card(User,Chat),
-      SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
-        sub_els = [#sync_retract{version = Retract}]},
-        #sync_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
-        #sync_metadata{node = ?NS_CHANNELS, sub_els = [UserCard]},
-        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
     ?NS_GROUPS when IsLocal == true ->
       User = jid:to_string(jid:make(LUser,LServer)),
       Chat = jid:to_string(jid:make(PUser,PServer)),
@@ -1082,34 +1049,23 @@ eg_change_last_msg(Replace, LastMsg) ->
   eg_store_last_msg(NewLastMsg).
 
 get_user_id(Pkt) ->
-  get_id_from_x(Pkt, xmpp:get_subtag(Pkt, #groups_x{xmlns = ?NS_GROUPS})).
+  case get_user_card(Pkt) of
+    #groups_user{id = ID} -> ID;
+    _ -> false
+  end.
 
-get_id_from_x(Pkt, false) ->
-  try_to_get_id(Pkt);
-get_id_from_x(_Pkt, X) ->
-  get_card_from_refence(xmpp:get_subtag(X,#xmppreference{}), group).
+get_user_card(Pkt) ->
+  Path = [#groups_x{xmlns = ?NS_GROUPS}, #xmppreference{}, #groups_user{}],
+  get_user_card(Path, Pkt).
 
-get_card_from_refence(false,_Type) ->
-  false;
-get_card_from_refence(Reference, channel) ->
-  get_id_from_card(xmpp:get_subtag(Reference, #channel_user_card{}));
-get_card_from_refence(Reference, group) ->
-  get_id_from_card(xmpp:get_subtag(Reference, #groups_user{})).
-
-get_id_from_card(#channel_user_card{id = ID}) ->
-  ID;
-get_id_from_card(#groups_user{id = ID}) ->
-  ID;
-get_id_from_card(_Card) ->
+get_user_card([], Card) ->
+  Card;
+get_user_card([H|T], Elem) when is_tuple(Elem)->
+  Result = xmpp:get_subtag(Elem, H),
+  get_user_card(T, Result);
+get_user_card(_, _) ->
   false.
 
-try_to_get_id(Pkt) ->
-  get_x(xmpp:get_subtag(Pkt, #channel_x{xmlns = ?NS_CHANNELS})).
-
-get_x(false) ->
-  false;
-get_x(X) ->
-  get_card_from_refence(xmpp:get_subtag(X,#xmppreference{}), channel).
 
 %%eg_store_message(PUser, PServer, UserID, StanzaID, false) ->
 %%  case {mnesia:table_info(external_group_msgs, disc_only_copies),
@@ -2354,38 +2310,22 @@ conversation_sql_upsert(LServer, LUser, Conversation , Options) ->
       "encrypted=%(Encrypted)b",
       "server_host=%(LServer)s"]).
 
-get_and_store_user_card(LServer,LUser,PeerJID,Message) ->
-  {X, Type} = case xmpp:get_subtag(Message,
-    #groups_x{xmlns = ?NS_GROUPS}) of
-                false ->
-                  T = xmpp:get_subtag(Message,#channel_x{xmlns = ?NS_CHANNELS}),
-                  {T, #channel_user_card{}};
-                T ->
-                  {T, #groups_user{}}
-              end,
-  Ref = case X of
-        false -> false;
-        _ -> xmpp:get_subtag(X,#xmppreference{})
-  end,
-  Card = case Ref of
-           false -> false;
-           _ -> xmpp:get_subtag(Ref, Type)
-         end,
-  case Card of
-    false -> false;
-    _ -> eg_store_card(LServer,LUser,PeerJID,Card)
-  end.
+get_and_store_user_card(LServer, LUser, PeerJID, Message) ->
+  Card = get_user_card(Message),
+  eg_store_card(LServer, LUser, PeerJID, Card).
 
 
-eg_store_card(LServer,LUser,Peer,Pkt) ->
+eg_store_card(LServer, LUser, Peer, Card) when is_tuple(Card)->
   {PUser, PServer, _} = jid:tolower(Peer),
   Data = get_sync_data(LUser, LServer, PUser, PServer),
-  NewData = Data#sync_data{card = Pkt},
+  NewData = Data#sync_data{card = Card},
   case store_sync_data(NewData) of
     {atomic, ok} -> ok;
     {aborted, Err} ->
       ?ERROR_MSG("Cannot store card for ~s@~s: ~s", [LUser, LServer, Err]), Err
-  end.
+  end;
+eg_store_card(_, _, _, _) ->
+  ok.
 
 eg_get_user_card(LUser, LServer, PUser, PServer) ->
   Data = get_sync_data(LUser, LServer, PUser, PServer),

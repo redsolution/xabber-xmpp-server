@@ -564,7 +564,6 @@ pre_process_iq_v0_2(#iq{
 	type = set, sub_els = [#mam_query{}]} = IQ) ->
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
 		group -> mod_groups_iq_handler:make_action(IQ);
-		channel -> mod_channels_iq_handler:process_iq(IQ);
 		_ -> process_iq_v0_2(IQ)
 	end;
 pre_process_iq_v0_2(IQ) ->
@@ -576,7 +575,6 @@ pre_process_iq_v0_3(#iq{
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
 		group ->
 			mod_groups_iq_handler:make_action(IQ);
-		channel -> mod_channels_iq_handler:process_iq(IQ);
 		_ -> process_iq_v0_3(IQ)
 	end;
 pre_process_iq_v0_3(IQ) ->
@@ -752,7 +750,6 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer}} = IQ) ->
 	IsLocal = lists:member(LServer,ejabberd_config:get_myhosts()),
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
 		group when IsLocal == true -> process_iq(LServer, IQ, chat);
-		channel when IsLocal == true -> process_iq(LServer, IQ, chat);
 		_ -> xmpp:make_error(IQ, xmpp:err_not_allowed())
 	end.
 

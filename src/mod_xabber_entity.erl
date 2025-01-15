@@ -27,7 +27,7 @@
 %%-include("ejabberd_sql_pt.hrl").
 -compile([{parse_transform, ejabberd_sql_pt}]).
 %% API
--export([is_exist/2, is_exist_anywhere/2, get_entity_type/2, is_group/2, is_channel/2]).
+-export([is_exist/2, is_exist_anywhere/2, get_entity_type/2, is_group/2]).
 
 is_exist_anywhere(LUser, LServer) ->
   case ejabberd_auth:user_exists(LUser, LServer) of
@@ -46,19 +46,13 @@ is_exist(LUser, LServer) ->
 is_group(LUser, LServer) ->
   check_entity_type(group, ejabberd_sm:get_user_info(LUser,LServer)).
 
-is_channel(LUser, LServer) ->
-  check_entity_type(channel, ejabberd_sm:get_user_info(LUser,LServer)).
-
 get_entity_type(LUser, LServer) ->
   Ss = ejabberd_sm:get_user_info(LUser,LServer),
   case check_entity_type(group, Ss) of
     true ->
       group;
     _ ->
-      case check_entity_type(channel, Ss) of
-        true -> channel;
-        _ -> user
-      end
+      user
   end.
 
 %% Internal API

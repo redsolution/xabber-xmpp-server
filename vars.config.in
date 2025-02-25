@@ -62,6 +62,7 @@
 
 {latest_deps, @latest_deps@}.
 {system_deps, @system_deps@}.
+{shared_libs, @shared_libs@}.
 
 {ldflags, "@LDFLAGS@"}.
 {cflags, "@CFLAGS@"}.

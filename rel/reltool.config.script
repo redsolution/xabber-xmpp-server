@@ -87,6 +87,35 @@ Sys = [{lib_dirs, []},
              {app, App, [{incl_cond, include}]}
      end, OTPApps).
 
+SharedLibs =
+  case proplists:get_value(shared_libs, Vars) of
+    true ->
+      LibsPath = "lib/linux-x86_64/",
+      case file:read_file("/etc/lsb-release") of
+        {ok, Bin} ->
+          Lines = binary:split(Bin, <<"\n">>, [trim, global]),
+          OSInfo = [{K,V} || [K,V] <- [binary:split(L,<<$=>>,[]) || L <- Lines]],
+          DISTRIB_ID = proplists:get_value(<<"DISTRIB_ID">>, OSInfo),
+          DISTRIB_RELEASE = proplists:get_value(<<"DISTRIB_RELEASE">>, OSInfo),
+          case  {DISTRIB_ID, DISTRIB_RELEASE} of
+            {<<"Ubuntu">>, <<"18.04">>}->
+              Crypto = {"/usr/lib/x86_64-linux-gnu/libcrypto.so.1.1", "libcrypto.so.1.1"},
+              SSL = {"/usr/lib/x86_64-linux-gnu/libssl.so.1.1", "libssl.so.1.1"},
+              JPEG = {"/usr/lib/x86_64-linux-gnu/libjpeg.so.8.1.2", "libjpeg.so.8"},
+              TInfo = {"/lib/x86_64-linux-gnu/libtinfo.so.5.9","libtinfo.so.5"},
+              [{copy, element(1,Crypto), LibsPath ++ element(2,Crypto)},
+              {copy, element(1,SSL), LibsPath ++ element(2,SSL)},
+              {copy, element(1,JPEG), LibsPath ++ element(2,JPEG)},
+              {copy, element(1,TInfo), LibsPath ++ element(2,TInfo)}
+              ];
+            _ -> []
+          end;
+        {error, _Reason} ->
+          []
+      end;
+    _ -> []
+  end,
+
 Overlay = [
            {mkdir, "var/log/ejabberd"},
            {mkdir, "var/lock"},
@@ -99,7 +128,7 @@ Overlay = [
            {copy, "../ejabberd.yml.example", "etc/ejabberd/ejabberd.yml"},
            {copy, "../inetrc", "etc/ejabberd/inetrc"},
            {copy, "files/install_upgrade.escript", "bin/install_upgrade.escript"}
-          ],
+          ] ++ SharedLibs,
 
 Config = [{sys, Sys},
           {overlay_vars, "../vars.config"},

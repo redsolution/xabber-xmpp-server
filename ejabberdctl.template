@@ -16,6 +16,7 @@ ERL="{{erl}}"
 IEX="{{bindir}}/iex"
 EPMD="{{epmd}}"
 INSTALLUSER="{{installuser}}"
+SHARED_LIBS="{{shared_libs}}"
 
 # check the proper system user is used
 case $(id -un) in
@@ -103,6 +104,14 @@ export ERL_MAX_ETS_TABLES
 export CONTRIB_MODULES_PATH
 export CONTRIB_MODULES_CONF_DIR
 export ERL_LIBS
+
+if [ -n "$SHARED_LIBS" ]
+then
+  LD_LIBRARY_PATH=$ERL_LIBS/linux-x86_64
+  export LD_LIBRARY_PATH
+  DYLD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+  export DYLD_LIBRARY_PATH
+fi
 
 # run command either directly or via su $INSTALLUSER
 exec_cmd()

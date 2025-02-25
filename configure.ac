@@ -244,6 +244,14 @@ AC_ARG_ENABLE(sip,
   *) AC_MSG_ERROR(bad value ${enableval} for --enable-sip) ;;
 esac],[if test "x$sip" = "x"; then sip=false; fi])
 
+AC_ARG_ENABLE(shared_libs,
+[AC_HELP_STRING([--enable-shared-libs], [add shared libs to release (default: no)])],
+[case "${enableval}" in
+  yes) shared_libs=true ;;
+  no)  shared_libs=false ;;
+  *) AC_MSG_ERROR(bad value ${enableval} for --enable-shared-libs) ;;
+esac],[if test "x$shared_libs" = "x"; then shared_libs=false; fi])
+
 AC_CONFIG_FILES([Makefile
 		 vars.config
 		 src/ejabberd.app.src])
@@ -312,6 +320,7 @@ AC_SUBST(elixir)
 AC_SUBST(iconv)
 AC_SUBST(stun)
 AC_SUBST(sip)
+AC_SUBST(shared_libs)
 AC_SUBST(debug)
 AC_SUBST(tools)
 AC_SUBST(latest_deps)

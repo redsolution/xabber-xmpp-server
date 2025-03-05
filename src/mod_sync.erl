@@ -71,7 +71,7 @@
   group = {<<"">>, <<"">>}             :: {binary(), binary()} | '_',
   id = <<>>                            :: binary() | '_',
   user_id = <<>>                       :: binary() | '_',
-  packet = #xmlel{}                    :: xmlel() | message() | '_',
+  packet = <<>>                        :: binary() | xmlel() | message() | '_',
   retract_version = <<>>               :: binary() | '_'
 }
 ).
@@ -184,10 +184,10 @@ handle_cast({eg_change_last_message, Group, Replace},
   Acc1 = case lists:member({Group, ID, Ver}, Acc) of
            true -> Acc;
            _->
-             case mnesia:dirty_read(external_group_last_msg, Group) of
-               [#external_group_last_msg{retract_version = Ver, id = ID}] ->
+             case eg_select_last_msg(Group) of
+               #external_group_last_msg{retract_version = Ver, id = ID} ->
                  ok;
-               [#external_group_last_msg{id = ID} = Record] ->
+               #external_group_last_msg{id = ID} = Record ->
                  eg_change_last_msg(Replace, Record);
                _ ->
                  ok
@@ -950,16 +950,17 @@ get_actual_last_call(LUser, LServer, PUser, PServer) ->
   end.
 
 %% Get last message in the external group if ID matches
-eg_get_last_message_by_id(Group, ID) when is_integer(ID) ->
-  eg_get_last_message_by_id(Group, integer_to_binary(ID));
-eg_get_last_message_by_id(Group, ID) ->
+eg_is_last_message(Group, ID) when is_integer(ID) ->
+  eg_is_last_message(Group, integer_to_binary(ID));
+eg_is_last_message(Group, ID) ->
   FN = fun()->
     mnesia:match_object(external_group_last_msg,
-      {external_group_last_msg, Group,ID,'_','_','_'},
+      {external_group_last_msg, Group, ID, '_', '_', '_'},
       read)
        end,
   case mnesia:transaction(FN) of
-    {atomic, [#external_group_last_msg{packet = Msg}]} -> Msg;
+    {atomic, [#external_group_last_msg{}]} ->
+      true;
     _ -> false
   end.
 
@@ -998,7 +999,10 @@ eg_store_message1(Group_SID, UserID, TS) ->
   end.
 
 %% Save the last message of the external group
-eg_store_last_msg(Record) ->
+eg_store_last_msg(Record1) ->
+  #external_group_last_msg{packet = Pkt} = Record1,
+  XML = fxml:element_to_binary(xmpp:encode(Pkt)),
+  Record = Record1#external_group_last_msg{packet = XML},
   case {mnesia:table_info(external_group_last_msg, disc_only_copies),
     mnesia:table_info(external_group_last_msg, memory)} of
     {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
@@ -1020,6 +1024,31 @@ eg_store_last_msg(Record) ->
           Err1
       end
   end.
+
+eg_select_last_msg(Group) ->
+  case mnesia:dirty_read(external_group_last_msg, Group) of
+    [#external_group_last_msg{packet = XML} = Record] ->
+      case fxml_stream:parse_element(XML) of
+        #xmlel{} = El ->
+          try xmpp:decode(El, ?NS_CLIENT, []) of
+            Pkt ->
+              Record#external_group_last_msg{packet = Pkt}
+          catch _:{xmpp_codec, Why} ->
+            ?ERROR_MSG("Failed to decode raw element ~p from "
+            "external_group_last_msg of group ~p: ~s",
+              [El, Group, xmpp:format_error(Why)]),
+            {error, invalid_xml}
+          end;
+        {error, {_, Reason}} ->
+          ?ERROR_MSG("Malformed 'xml' field with value '~s' detected "
+          "for group ~p in table 'external_group_last_msg': ~s",
+            [XML, Group, Reason]),
+          {error, invalid_xml}
+      end;
+    _ ->
+      {error, not_found}
+  end.
+
 
 %% Maybe change last message in the external group
 eg_maybe_change_last_msg(LServer, ConversationJID, Replace) ->
@@ -1136,7 +1165,7 @@ eg_do_remove_msg(Group, all, all) ->
   mnesia:transaction(FN);
 %% Mark the message of the external group as deleted by the stanza ID
 eg_do_remove_msg(Group, ID, <<>>) when ID /= <<>> ->
-  case eg_get_last_message_by_id(Group, ID) of
+  case eg_is_last_message(Group, ID) of
     false -> ok;
     _ ->
       mnesia:dirty_delete(external_group_last_msg, Group)
@@ -1149,8 +1178,8 @@ eg_do_remove_msg(Group, ID, <<>>) when ID /= <<>> ->
   mnesia:transaction(FN);
 %% Mark the message of the external group as deleted by the user ID
 eg_do_remove_msg(Group, <<>>, UserID) when UserID /= <<>> ->
-  case mnesia:dirty_read(external_group_last_msg, Group) of
-    [#external_group_last_msg{user_id = UserID} = LMsg] ->
+  case eg_select_last_msg(Group) of
+    #external_group_last_msg{user_id = UserID} = LMsg ->
       mnesia:dirty_delete_object(LMsg);
     _ -> ok
   end,
@@ -1166,9 +1195,8 @@ eg_do_remove_msg(_, _, _) ->
 
 %% Get last message in the external group
 eg_get_last_message(LUser, LServer, GUser, GServer, both) ->
-  case mnesia:dirty_read(external_group_last_msg, {GUser, GServer}) of
-    [Result] ->
-      #external_group_last_msg{packet = Msg} = Result,
+  case eg_select_last_msg({GUser, GServer}) of
+    #external_group_last_msg{packet = Msg} ->
       [#sync_last{sub_els = [xmpp:set_to(Msg, jid:make(LUser, LServer))]}];
     _->
       []

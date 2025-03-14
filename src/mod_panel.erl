@@ -200,6 +200,7 @@ handle_request('POST',[<<"config">>,<<"reload">>], _Req, {Adm, P}, _User, _Serve
   {200, <<>>};
 handle_request(_,[<<"config">>,<<"reload">>], _, _, _, _) ->
   forbidden_response();
+%% registration keys
 handle_request('GET',[<<"registration">>,<<"keys">>], #request{q = Q}, {true, _}, _User, _Server) ->
   Args = check_args(Q, [host]),
   case check_args(Q, [host]) of
@@ -226,6 +227,7 @@ handle_request('DELETE',[<<"registration">>,<<"keys">>,Key], #request{data = Dat
     Args ->
       remove_reg_key(Key, Args)
   end;
+%% admin management
 handle_request('POST',[<<"permissions">>], #request{data = Data}, {true, _}, _User, _Server) ->
   case extract_args(Data, [username, host, permissions]) of
     error -> badrequest_response();
@@ -244,9 +246,11 @@ handle_request('DELETE',[<<"admins">>], #request{data = Data}, {true, _}, _User,
     Args ->
       remove_admin(Args)
   end;
+%% get vhosts
 handle_request('GET',[<<"vhosts">>], _Req, _Perms, _User, _Server) ->
   Result = {[{vhosts,  ejabberd_config:get_myhosts()}]},
   {200, Result};
+%% user management
 handle_request('POST',[<<"users">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, password]),
@@ -270,10 +274,12 @@ handle_request('GET',[<<"users">>,<<"online">>], #request{q = Q},
     {Adm, <<_:8,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
   Args = check_args(Q, [host]),
   check_and_run(Adm, Server, Args,fun get_online_count/1);
+%% set user password
 handle_request('PUT',[<<"users">>,<<"set_password">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, password]),
   check_and_run(Adm, Server, Args, fun set_password/1);
+%% block user
 handle_request('POST',[<<"users">>,<<"block">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
   Args = extract_args(Data, [username, host, reason]),
   check_and_run(true, <<>>, Args, fun block_user/1);
@@ -288,6 +294,7 @@ handle_request('DELETE',[<<"users">>,<<"block">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
   check_and_run(Adm, Server, Args, fun unblock_user/1);
+%% ban user
 handle_request('POST',[<<"users">>,<<"ban">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
@@ -296,10 +303,30 @@ handle_request('DELETE',[<<"users">>,<<"ban">>], #request{data = Data},
     {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host]),
   check_and_run(Adm, Server, Args, fun unban_user/1);
+%% user settings
+handle_request('GET',[<<"users">>,<<"settings">>], #request{q = Q},
+    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $r orelse true->
+  Args = check_args(Q, [username, host]),
+  check_and_run(Adm, Server, Args, fun get_user_settings/1);
+handle_request('POST',[<<"users">>,<<"settings">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
+  Args = extract_args(Data, [username, host, name, value]),
+  check_and_run(true, <<>>, Args, fun post_user_settings/1);
+handle_request('POST',[<<"users">>,<<"settings">>], #request{data = Data},
+    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [username, host, name, value]),
+  check_and_run(Adm, Server, Args, fun post_user_settings/1);
+handle_request('DELETE',[<<"users">>,<<"settings">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
+  Args = extract_args(Data, [username, host, name]),
+  check_and_run(true, <<>>, Args, fun delete_user_settings/1);
+handle_request('DELETE',[<<"users">>,<<"settings">>], #request{data = Data},
+    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [username, host, name]),
+  check_and_run(Adm, Server, Args, fun delete_user_settings/1);
 handle_request(_,[<<"users">>], _, _, _, _) ->
   forbidden_response();
 handle_request(_,[<<"users">>| _], _, _, _, _) ->
   forbidden_response();
+%% groups
 handle_request('POST',[<<"groups">>], #request{data = Data},
     {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [localpart, host, owner, name, privacy, index, membership]),
@@ -320,6 +347,7 @@ handle_request(_,[<<"groups">>], _, _, _, _) ->
   forbidden_response();
 handle_request(_,[<<"groups">>| _], _, _, _, _) ->
   forbidden_response();
+%% vcard
 handle_request('POST',[<<"vcard">>], #request{data = Data},
     {Adm, <<_:56,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [username, host, vcard]),
@@ -330,6 +358,7 @@ handle_request('GET',[<<"vcard">>], #request{q = Q},
   check_and_run(Adm, Server, Args , fun get_vcard/1);
 handle_request(_,[<<"vcard">>], _, _, _, _) ->
   forbidden_response();
+%% circles
 handle_request('POST',[<<"circles">>], #request{data = Data},
     {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
   Args = extract_args(Data, [circle, host]),
@@ -448,11 +477,11 @@ decode_json(Data) ->
     (V) -> V end, PL).
 
 check_args(ArgsRaw, RequiredKeys) ->
-  Args = lists:map(
-    fun({K, V}) ->
-      {binary_to_atom(K, latin1), V}
-    end, ArgsRaw
-  ),
+  Args = lists:filtermap(
+    fun({_,<<>>}) -> false;
+      ({K, V}) ->
+        {true, {binary_to_atom(K, latin1), V}}
+    end, ArgsRaw),
   ExistingKeys = lists:filter(
     fun(Key) ->
       lists:keymember(Key, 1, Args)
@@ -734,6 +763,71 @@ ban_user(Action, Args) ->
     _ -> {500, <<>>}
   end.
 
+get_user_settings(Args) ->
+  {Username, Host} = extract_user_host(Args),
+  Name = proplists:get_value(name, Args, <<>>),
+  case get_user_settings(Username, Host, Name) of
+    {error, badarg} -> badrequest_response();
+    {error, Why} -> {500, misc:atom_to_binary(Why)};
+    Result ->
+      Settings = lists:map(fun([N, V, E]) ->
+        {[{name, N}, {value, V}, {expires, binary_to_integer(E)}]}
+                           end, Result),
+      {200, {[{username, Username}, {host, Host}, {settings, Settings}]}}
+  end.
+
+get_user_settings(Username, Host, Name) when is_binary(Username) ->
+  sql_select_user_settings(Username, Host, Name);
+get_user_settings(_, _, _)->
+  {error, badarg}.
+
+post_user_settings(Args) ->
+  {Username, Host} = extract_user_host(Args),
+  Name = proplists:get_value(name, Args, undefined),
+  Value = proplists:get_value(value, Args, undefined),
+  Expires = proplists:get_value(expires, Args, 0),
+  case store_user_settings(Username, Host, Name, Value, Expires) of
+    ok -> {201, <<>>};
+    {error, badarg} -> badrequest_response();
+    _ -> {500, <<>>}
+  end.
+
+store_user_settings(User, Host, Name, Value, Exp) when is_binary(User)->
+  Exp1 = if
+           is_binary(Exp) ->
+             try
+               binary_to_integer(Exp)
+             catch
+               _:_  -> badarg
+             end;
+           is_integer(Exp) ->
+             Exp;
+           true -> badarg
+         end,
+  case Exp1 of
+    badarg ->
+      {error, badarg};
+    _ ->
+     sql_save_user_setting(User, Host, Name, Value, Exp1)
+  end;
+store_user_settings(_, _, _, _,_) ->
+  {error, badarg}.
+
+
+delete_user_settings(Args) ->
+  {Username, Host} = extract_user_host(Args),
+  Name = proplists:get_value(name, Args, <<>>),
+  case delete_user_settings(Username, Host, Name) of
+    ok -> {200, <<>>};
+    _ -> badrequest_response()
+  end.
+
+delete_user_settings(User, Host, Name) when is_binary(User) ->
+  sql_delete_user_settings(User, Host, Name),
+  ok;
+delete_user_settings(_, _, _) ->
+  {error, badarg}.
+
 sql_ban_user(Username, Host) ->
   ejabberd_sql:sql_query(
     Host,
@@ -1008,7 +1102,7 @@ check_token_old(Token) ->
       R -> {true, R}
     end end, Hosts),
   case Users of
-    [UserServer] -> {ok, UserServer};
+    [UserServer | _] -> {ok, UserServer};
     _ -> {false, not_found}
   end.
 
@@ -1110,3 +1204,51 @@ sql_check_token_new(LServer, _Token) ->
     _->
       error
   end.
+
+sql_save_user_setting(User, Server, Name, Value, Expires) ->
+  case ?SQL_UPSERT(Server, "panel_user_settings",
+    ["!username=%(User)s",
+      "!server_host=%(Server)s",
+      "!name=%(Name)s",
+      "value=%(Value)s",
+      "expires=%(Expires)d"
+    ]) of
+    ok -> ok;
+    Err ->
+      ?ERROR_MSG("Error to save rule ~p",[Err]),
+      {error, db_failure}
+  end.
+
+sql_select_user_settings(User, Server, Name) ->
+  Action = <<"select name, value, expires">>,
+  case sql_run_query_user_settings(Action, User, Server, Name) of
+    {selected, _, List} -> List;
+    _ -> {error, db_failure}
+  end.
+
+sql_delete_user_settings(User, Server, Name) ->
+  Action = <<"delete">>,
+  sql_run_query_user_settings(Action, User, Server, Name).
+
+sql_run_query_user_settings(Action, User, Server,Name) ->
+  UserClause = make_clause(<<"username">>, User),
+  HostClause = case ejabberd_sql:use_new_schema() of
+                 true ->
+                   make_clause(<<"server_host">>, Server);
+                 _->
+                   <<>>
+               end,
+  NameClause = make_clause(<<"name">>, Name),
+  Query = [Action, <<" from panel_user_settings where ">>,
+    binary:replace(UserClause,<<" and">>, <<>>), HostClause,
+    NameClause,<<";">>],
+  ejabberd_sql:sql_query(Server, Query).
+
+make_clause(_, <<>>) -> <<>>;
+make_clause(Column, Binary) when is_binary(Binary) ->
+  SValue = ejabberd_sql:escape(Binary),
+  <<" and ",Column/binary,"='",SValue/binary,"'">>;
+make_clause(Column, Integer) when is_integer(Integer) ->
+  SValue = integer_to_binary(Integer),
+  <<" and ",Column/binary,"=",SValue/binary>>;
+make_clause(_,_) -> <<>>.

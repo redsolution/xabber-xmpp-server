@@ -86,7 +86,8 @@
 -export([process/2]).
 
 %% register commands
--export([get_commands_spec/0, set_admin/2, issue_token/3, add_group/8]).
+-export([get_commands_spec/0, set_admin/2, make_jwt/3, add_group/8,
+  revoke_tokens/0]).
 
 %% internal
 %%-export([create_user/1]).
@@ -94,6 +95,16 @@
 
 %% gen_mod
 start(_Host, _Opts) ->
+  ejabberd_mnesia:create(?MODULE, panel_opts,
+    [{disc_copies, [node()]},
+      {attributes, [key, val]}]),
+  case mnesia:dirty_read(panel_opts, jwk) of
+    [] ->
+      mnesia:dirty_write({panel_opts,
+        jwk, crypto:strong_rand_bytes(64)});
+    _ ->
+      ok
+  end,
   ejabberd_commands:register_commands(get_commands_spec()),
   ok.
 
@@ -124,14 +135,22 @@ get_commands_spec() ->
       args_example = [<<"bob">>, <<"example.com">>],
       args = [{user, binary}, {host, binary}],
       result = {res, rescode}},
+    #ejabberd_commands{name = panel_revoke_tokens, tags = [panel],
+      desc = "Attention!!! Revokes all panel tokens.",
+      policy = admin,
+      module = ?MODULE, function = revoke_tokens,
+      args_desc = [],
+      args_example = [],
+      args = [],
+      result = {result, string}},
     #ejabberd_commands{name = panel_issue_token, tags = [panel],
       desc = "Issue token for Panel",
       policy = admin,
-      module = ?MODULE, function = issue_token,
+      module = ?MODULE, function = make_jwt,
       args_desc = ["Username", "Local vhost served by ejabberd","Time to live of generated token in seconds"],
       args_example = [<<"bob">>, <<"example.com">>, 3600],
       args = [{user, binary}, {host, binary},{ttl, integer}],
-      result = {res, rescode}},
+      result = {result, string}},
     #ejabberd_commands{name = create_group, tags = [groups],
       desc = "Create groupchat with owner",
       module = ?MODULE, function = add_group,
@@ -188,12 +207,9 @@ process(Path, #request{method = Method, data = Data, q = Q, headers = Headers} =
 
 handle_request('POST',[<<"issue_token">>], _Req, _Perms, User, Server) ->
   issue_token(User, Server, ?TOKEN_TTL);
-handle_request('POST',[<<"revoke_token">>], #request{data = Data}, _Perms, User, Server) ->
-  case extract_args(Data, [token]) of
-    error -> badrequest_response();
-    Args ->
-      revoke_token(User, Server, proplists:get_value(token, Args))
-  end;
+handle_request('POST',[<<"revoke_tokens">>], _Req, {true, _}, _User, _Server) ->
+  revoke_tokens(),
+  {200, <<>>};
 handle_request('POST',[<<"config">>,<<"reload">>], _Req, {Adm, P}, _User, _Server)
   when Adm orelse P == <<"cronjob">> ->
   ejabberd_admin:reload_config(),
@@ -411,13 +427,13 @@ extract_auth(#request{auth = HTTPAuth, ip = {IP, _}}) ->
                {error, invalid_auth}
              end;
            {oauth, Token, _} ->
-             case check_token(Token) of
+             case verify_jwt(Token) of
                {ok, {U, S}} ->
                  #{usr => {U, S, <<"">>}, caller_server => S};
-               {false, Reason} ->
+               _ ->
                  case gen_mod:get_module_opt(global,?MODULE,cronjob_token) of
                    Token -> cronjob;
-                   _ -> {error, Reason}
+                   _ -> {error, invalid_auth}
                  end
              end;
            _ ->
@@ -581,16 +597,28 @@ parse_permissions(Perms) ->
     end end, ?PERM_KEYS),
   lists:foldl(fun({K,V}, Acc) -> <<Acc/binary,K/binary,V/binary>> end, <<>>,PL).
 
-%% Commands
+make_jwt(User, Host, TTL) ->
+  {_, _, Key} = hd(mnesia:dirty_read(panel_opts, jwk)),
+  JWK = #{<<"kty">> => <<"oct">>, <<"k">> => base64url:encode(Key)},
+  JWS = #{<<"alg">> => <<"HS256">>},
+  JWT = #{
+    <<"iss">> => Host,
+    <<"sub">> => User,
+    <<"iat">> => erlang:system_time(second),
+    <<"exp">> => erlang:system_time(second) + TTL
+  },
+  Signed = jose_jwt:sign(JWK, JWS, JWT),
+  {_Alg, Token} = jose_jws:compact(Signed),
+  Token.
+
+%% HTTP API
 issue_token(User, Server, TTL) ->
-  AccessToken = oauth2_token:generate(32),
-  Expires = seconds_since_epoch(TTL),
-  sql_save_token(User, Server, AccessToken, Expires),
+  AccessToken = make_jwt(User, Server, TTL),
   {201, {[{token, AccessToken},{expires_in, TTL}]}}.
 
-revoke_token(User, Server, Token) ->
-  sql_remove_token(Server, User, Token),
-  {200, <<>>}.
+revoke_tokens() ->
+  mnesia:dirty_write({panel_opts,
+    jwk, crypto:strong_rand_bytes(64)}).
 
 set_permissions(Args) ->
   {Username, Host} = extract_user_host(Args),
@@ -1079,32 +1107,55 @@ get_circle_members(Args) ->
   {200, Result}.
 
 
-check_token(Token) ->
-  case ejabberd_sql:use_new_schema() of
-    true ->
-      check_token_new(Token);
+verify_jwt(Token) ->
+  {_, _, Key} = hd(mnesia:dirty_read(panel_opts, jwk)),
+  JWK = #{<<"kty">> => <<"oct">>, <<"k">> => base64url:encode(Key)},
+  try jose_jwt:verify(JWK, Token) of
+    {true, {jose_jwt, JWT}, _} ->
+      verify_jwt_payload(JWT);
     _ ->
-      check_token_old(Token)
+      false
+  catch  _:_  -> false
   end.
 
-check_token_new(Token) ->
-  Host  = hd(ejabberd_config:get_myhosts()),
-  case sql_check_token_new(Host, Token) of
-    {U, S} -> {ok, {U, S}};
-    _ -> {false, not_found}
-  end.
+verify_jwt_payload(JWT) ->
+  Exp = maps:get(<<"exp">>, JWT, undefined),
+  verify_jwt_payload({exp, Exp}, JWT).
 
-check_token_old(Token) ->
-  Hosts  = ejabberd_config:get_myhosts(),
-  Users = lists:filtermap(fun(Host) ->
-    case sql_check_token_old(Host, Token) of
-      error -> false;
-      R -> {true, R}
-    end end, Hosts),
-  case Users of
-    [UserServer | _] -> {ok, UserServer};
-    _ -> {false, not_found}
-  end.
+verify_jwt_payload({_, undefined}, _) ->
+  false;
+verify_jwt_payload({exp , Exp}, JWT) when is_integer(Exp) ->
+  case Exp > erlang:system_time(second) of
+    true ->
+      Host = maps:get(<<"iss">>, JWT, undefined),
+      verify_jwt_payload({iss , Host}, JWT);
+    _ ->
+      false
+  end;
+verify_jwt_payload({iss , Host}, JWT) ->
+  case check_host(Host) of
+    {ok, LServer} ->
+      JWT1 = maps:update(<<"iss">>, LServer, JWT),
+      User  = maps:get(<<"sub">>, JWT, undefined),
+      verify_jwt_payload({sub , User}, JWT1);
+    _ ->
+      false
+  end;
+verify_jwt_payload({sub , User}, JWT) ->
+  Host = maps:get(<<"iss">>, JWT),
+  case jid:nodeprep(User) of
+    error ->
+      false;
+    LUser ->
+      case ejabberd_auth:user_exists(LUser, Host) of
+        true ->
+          {ok, {LUser, Host}};
+        _ ->
+          false
+      end
+  end;
+verify_jwt_payload(_, _) ->
+  false.
 
 extract_user_host(PropList)->
   Username = jid:nodeprep(proplists:get_value(username,PropList)),
@@ -1113,11 +1164,6 @@ extract_user_host(PropList)->
 
 extract_host(PropList) ->
   jid:nameprep(proplists:get_value(host,PropList)).
-
--spec seconds_since_epoch(integer()) -> non_neg_integer().
-seconds_since_epoch(Diff) ->
-  {Mega, Secs, _} = os:timestamp(),
-  Mega * 1000000 + Secs + Diff.
 
 kick_user_sessions(User, Server) ->
   lists:map(
@@ -1163,46 +1209,6 @@ sql_get_permissions(_User, Server) ->
       Result;
     _ ->
       {error,internal}
-  end.
-
-sql_save_token(_LUser, LServer, _Token, _Expires) ->
-  ejabberd_sql:sql_query(
-    LServer,
-    ?SQL_INSERT(
-      "panel_tokens",
-      ["username=%(_LUser)s",
-        "server_host=%(LServer)s",
-        "token=%(_Token)s",
-        "expire=%(_Expires)d"])).
-
-sql_remove_token(LServer, _LUser, _Token) ->
-  ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("delete from panel_tokens "
-    "where username=%(_LUser)s and token=%(_Token)s and %(LServer)H")).
-
-sql_check_token_old(LServer, _Token) ->
-  _Now = seconds_since_epoch(0),
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(username)s from panel_tokens "
-    "where token=%(_Token)s and expire > %(_Now)d")) of
-    {selected,[{Username}]} ->
-      {Username, LServer};
-    _->
-      error
-  end.
-
-sql_check_token_new(LServer, _Token) ->
-  _Now = seconds_since_epoch(0),
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(username)s,@(server_host)s from panel_tokens "
-    "where token=%(_Token)s and expire > %(_Now)d")) of
-    {selected,[{Username, Host}]} ->
-      {Username, Host};
-    _->
-      error
   end.
 
 sql_save_user_setting(User, Server, Name, Value, Expires) ->

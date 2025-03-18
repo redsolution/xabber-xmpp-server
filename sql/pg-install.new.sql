@@ -654,14 +654,6 @@ CREATE TABLE panel_permissions (
     PRIMARY KEY (server_host, username)
 );
 
-CREATE TABLE panel_tokens (
-    username text NOT NULL,
-    server_host text NOT NULL,
-    token text NOT NULL,
-    expire bigint NOT NULL,
-    PRIMARY KEY (server_host, username, token)
-);
-
 CREATE TABLE panel_user_settings(
     username text,
     server_host text NOT NULL,

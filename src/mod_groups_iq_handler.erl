@@ -30,7 +30,7 @@
 -include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
--export([start/2, stop/1, depends/2, mod_options/1, disco_sm_features/5,
+-export([start/2, stop/1, depends/2, mod_options/1,
   init/1, handle_call/3, handle_cast/2, terminate/2]).
 -export([process_groupchat/1,make_action/1]).
 
@@ -51,12 +51,10 @@ mod_options(_Host) -> [].
 
 init([Host, _Opts]) ->
   register_iq_handlers(Host),
-  register_hooks(Host),
   {ok, #state{host = Host}}.
 
 terminate(_Reason, State) ->
   Host = State#state.host,
-  unregister_hooks(Host),
   unregister_iq_handlers(Host).
 
 register_iq_handlers(Host) ->
@@ -68,12 +66,6 @@ unregister_iq_handlers(Host) ->
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_GROUPS),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_GROUPS_DELETE),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_GROUPS_CREATE).
-
-register_hooks(Host) ->
-  ejabberd_hooks:add(disco_sm_features, Host, ?MODULE, disco_sm_features, 50).
-
-unregister_hooks(Host) ->
-  ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE, disco_sm_features, 50).
 
 handle_call(_Request, _From, _State) ->
   erlang:error(not_implemented).
@@ -749,19 +741,6 @@ process_groupchat_iq(#iq{type = error} = IQ) ->
   ?DEBUG("Drop error iq ~p", [IQ]);
 process_groupchat_iq(IQ) ->
   ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request())).
-
--spec disco_sm_features({error, stanza_error()} | {result, [binary()]} | empty,
-                                             jid(), jid(), binary(), binary()) ->
-                                {error, stanza_error()} | {result, [binary()]}.
-disco_sm_features({error, Err}, _From, _To, _Node, _Lang) ->
-        {error, Err};
-disco_sm_features(empty, _From, _To, <<"">>, _Lang) ->
-        {result, [?NS_GROUPS,?NS_XABBER_REWRITE]};
-disco_sm_features({result, Feats}, _From, _To, <<"">>, _Lang) ->
-        {result, [[?NS_XABBER_REWRITE|[?NS_GROUPS|Feats]]]};
-disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
-        Acc.
-
 
 %% Internal Functions
 x_element_chat(Desc,Anon,Model) ->

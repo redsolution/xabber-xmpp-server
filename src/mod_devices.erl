@@ -99,15 +99,15 @@ c2s_stream_features(Acc, Host) ->
       Acc
   end.
 
--spec disco_sm_features({error, stanza_error()} | {result, [binary()]} | empty,
-    jid(), jid(), binary(), binary()) ->
-  {error, stanza_error()} | {result, [binary()]}.
-disco_sm_features({error, Err}, _From, _To, _Node, _Lang) ->
-  {error, Err};
-disco_sm_features(empty, _From, _To, <<"">>, _Lang) ->
-  {result, [?NS_DEVICES]};
-disco_sm_features({result, Feats}, _From, _To, <<"">>, _Lang) ->
-  {result, [?NS_DEVICES|Feats]};
+-spec disco_sm_features(empty | {result, [binary()]} | {error, stanza_error()},
+    jid(), jid(), binary(), binary())
+      -> {result, [binary()]} | {error, stanza_error()}.
+disco_sm_features(empty, From, To, Node, Lang) ->
+  disco_sm_features({result, []}, From, To, Node, Lang);
+disco_sm_features({result, OtherFeatures},
+    #jid{luser = U, lserver = S},
+    #jid{luser = U, lserver = S}, <<"">>, _Lang) ->
+  {result, [?NS_DEVICES, ?NS_DEVICES_QUERY] ++ OtherFeatures};
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
   Acc.
 

@@ -33,7 +33,7 @@
 -export([start/2,stop/1,reload/3,depends/2,mod_opt_type/1,mod_options/1]).
 
 %% ejabberd_hooks callbacks.
--export([disco_sm_features/5, remove_user/2]).
+-export([disco_features/5, remove_user/2]).
 
 %% gen_iq_handler callback.
 -export([process_iq/1, pre_process_iq/1]).
@@ -98,14 +98,14 @@ mod_options(_Host) ->
 %% Hooks.
 %%--------------------------------------------------------------------
 %% Service discovery.
--spec disco_sm_features(empty | {result, [binary()]} | {error, stanza_error()},
+-spec disco_features(empty | {result, [binary()]} | {error, stanza_error()},
     jid(), jid(), binary(), binary())
       -> {result, [binary()]} | {error, stanza_error()}.
-disco_sm_features(empty, From, To, Node, Lang) ->
-  disco_sm_features({result, [?NS_XABBER_REWRITE]}, From, To, Node, Lang);
-disco_sm_features({result, OtherFeatures}, _From, _To, <<"">>, _Lang) ->
+disco_features(empty, From, To, Node, Lang) ->
+  disco_features({result, []}, From, To, Node, Lang);
+disco_features({result, OtherFeatures}, _From, _To, <<"">>, _Lang) ->
   {result, [?NS_XABBER_REWRITE | OtherFeatures]};
-disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
+disco_features(Acc, _From, _To, _Node, _Lang) ->
   Acc.
 
 %% Remove user.
@@ -119,17 +119,17 @@ remove_user(User, Server) ->
 register_hooks(Host) ->
   ejabberd_hooks:add(remove_user, Host, ?MODULE, remove_user, 60),
   ejabberd_hooks:add(disco_local_features, Host, ?MODULE,
-    disco_sm_features, 50),
+    disco_features, 50),
   ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
-    disco_sm_features, 50).
+    disco_features, 50).
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
   ejabberd_hooks:delete(remove_user, Host, ?MODULE, remove_user, 60),
   ejabberd_hooks:delete(disco_local_features, Host, ?MODULE,
-    disco_sm_features, 50),
+    disco_features, 50),
   ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
-    disco_sm_features, 50).
+    disco_features, 50).
 
 %%--------------------------------------------------------------------
 %% IQ handlers.

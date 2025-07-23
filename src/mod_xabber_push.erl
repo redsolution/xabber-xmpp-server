@@ -517,8 +517,10 @@ notify(#{jid := #jid{luser = LUser, lserver = LServer}, sid := {TS, _}}, Pkt) ->
       case lookup_session(LUser, LServer, TS) of
         {ok, Client} ->
           notify(LUser, LServer, [Client], Pkt);
-        _Err ->
-          ?ERROR_MSG("Error to notify ~p~n",[LUser])
+        {error, notfound} ->
+          ok;
+        Err ->
+          ?ERROR_MSG("Error to notify user ~s@~s: ~p~n",[LUser, LServer, Err])
       end;
     _ ->
       ok

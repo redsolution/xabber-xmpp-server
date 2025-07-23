@@ -416,7 +416,7 @@ process(_LocalPath, #request{method = Method, host = Host, ip = IP} = Request)
 	    Path = str:join([DocRoot | Slot], <<$/>>),
 	    case file:read_file(Path) of
 		{ok, Data} ->
-		    ?INFO_MSG("Serving ~s to ~s", [Path, ?ADDR_TO_STR(IP)]),
+		    ?DEBUG("Serving ~s to ~s", [Path, ?ADDR_TO_STR(IP)]),
 		    ContentType = guess_content_type(FileName),
 		    Headers1 = case ContentType of
 				 <<"image/", _SubType/binary>> -> [];

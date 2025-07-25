@@ -476,7 +476,8 @@ send_notification(Server, Message) ->
     true ->
       mod_notify:send_notification(Server, Message#message.to,
         jid:make(Server), Message,
-        xmpp:get_text(Message#message.body));
+        xmpp:get_text(Message#message.body),
+        [{category, <<"security">>}]);
     _ ->
       ejabberd_router:route(Message)
   end.
@@ -508,16 +509,6 @@ make_ip_string(Map) ->
     _ -> IP
   end.
 
-bold() ->
-  #xmlel{
-    name = <<"bold">>,
-    attrs = [{<<"xmlns">>, ?NS_XABBER_MARKUP}]
-  }.
-
-mention(User) ->
-  XMPP = <<"xmpp:",User/binary>>,
-  #markup_mention{cdata = XMPP}.
-
 new_device_msg(<<>>, Info, DeviceID, BareJID, IP) ->
   new_device_msg(<<"Unknown client">>, Info, DeviceID, BareJID, IP);
 new_device_msg(Client, <<>>, DeviceID ,BareJID, IP) ->
@@ -529,7 +520,7 @@ new_device_msg(Client, Info, DeviceID, BareJID, IP) ->
   Time = get_time_now(),
   Device = <<Client/binary, "\n", Info/binary,"\n", IP/binary>>,
   Parts = [{bold, <<"New login">>}, <<" to server ">>, {bold, LServer},
-    <<":\nWe detected a new login into your account ">>, {mention, User},
+    <<":\nWe detected a new login into your account ">>, {url, User},
     <<" from a new device on ">>, Time, <<"\n\n">>, {bold, Device},
     <<"\n\nIf it wasn't you, go to ">>, {bold, <<"Settings -> Devices">>},
     <<" and terminate suspicious sessions.">>],
@@ -550,8 +541,8 @@ make_text_with_refs([H | T], {BString, Refs}) ->
       Begin = misc:escaped_text_len(BString),
       End =  Begin + misc:escaped_text_len(Text),
       Els = case RType of
-              bold -> [bold()];
-              mention -> [mention(Text)];
+              bold -> [#markup_bold{}];
+              url -> [#markup_link{cdata = <<"xmpp:",Text/binary>>}];
               _ -> []
             end,
       NewRefs = Refs ++ [#xmppreference{type = <<"decoration">>,

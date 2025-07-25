@@ -166,18 +166,19 @@ check_permission_write(User,Chat) ->
       end
   end.
 
-send_received_and_message(Pkt, From, To, OriginID, Users) ->
-  {Pkt2, _State2} = mod_mam:user_send_packet({Pkt,#{jid => To}}),
-  send_received(Pkt2,From,OriginID,To),
-  send_message(Pkt2,Users,To).
+send_received_and_message(Pkt, UserJID, GroupJID, OriginID, Users) ->
+  {Pkt2, _State2} = mod_mam:user_send_packet({Pkt,#{jid => GroupJID}}),
+  send_received(Pkt2, UserJID, OriginID, GroupJID),
+  send_message(Pkt2, Users, GroupJID),
+  send_notifications(Pkt2, GroupJID, UserJID, Users).
 
-send_message(Message,[],From) ->
-  send_message_to_index(From, Message),
+send_message(Message,[], GroupJID) ->
+  send_message_to_index(GroupJID, Message),
   ok;
-send_message(Message,Users,From) ->
+send_message(Message, Users, GroupJID) ->
   [User|RestUsers] = Users,
-  ejabberd_router:route(From, User, Message),
-  send_message(Message, RestUsers, From).
+  ejabberd_router:route(GroupJID, User, Message),
+  send_message(Message, RestUsers, GroupJID).
 
 send_message_to_index(ChatJID, Message) ->
   Server = ChatJID#jid.lserver,
@@ -193,6 +194,45 @@ send_message_to_index(ChatJID, Message) ->
     _ ->
       ok
   end.
+
+send_notifications(Message, GroupJID, AuthorJID, Users) ->
+  Server = GroupJID#jid.lserver,
+  Group = jid:to_string(jid:remove_resource(GroupJID)),
+  case xmpp:get_subtag(Message, #groups_mentions{}) of
+    #groups_mentions{members = []} ->
+      Author = jid:to_string(jid:remove_resource(AuthorJID)),
+      case mod_groups_users:calculate_role(Server, Author, Group) of
+        <<"member">> -> {error, not_allowed};
+        _ ->
+          send_notifications(Message, GroupJID, Users)
+      end;
+    #groups_mentions{members = Members} ->
+      MemberIDs = [ ID || #groups_user{id = ID} <- Members, ID /= <<>>],
+      MemberJIDSs = [mod_groups_users:get_user_by_id(Server, Group, ID)
+        || ID <- MemberIDs],
+      MemberJIDs = [jid:from_string(S) || S <- MemberJIDSs],
+      send_notifications(Message, GroupJID, MemberJIDs);
+    _ ->
+      ok
+  end.
+
+send_notifications(_Message, _GroupJID, []) ->
+  ok;
+send_notifications(Message, GroupJID, [User | Users]) ->
+  Group = jid:to_string(jid:remove_resource(GroupJID)),
+  Fallback = xmpp:mk_text(<<"You were mentioned in ",Group/binary," group.">>),
+    Notification = #xen_notification{category = <<"mention">>,
+      sub_els = [
+        #forwarded{sub_els = [xmpp:set_from_to(Message, GroupJID, User)]}
+      ]},
+    Notify = #xen_notify{notification = Notification,
+      fallback = Fallback,
+      addresses = #addresses{list = [#address{type = to, jid = User}]}},
+    IQ = #iq{from = GroupJID, to = User, type = set, id = randoms:get_string(),
+      sub_els = [Notify]},
+    ejabberd_router:route(IQ),
+  send_notifications(Message, GroupJID, Users).
+
 
 %%--------------------------------------------------------------------
 %% Sub process.

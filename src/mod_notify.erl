@@ -25,7 +25,7 @@
   handle_info/2, terminate/2, code_change/3]).
 
 %% API
--export([send_notification/4, send_notification/5]).
+-export([send_notification/4, send_notification/6]).
 
 %% Hooks
 -export([process_iq/1]).
@@ -148,19 +148,24 @@ process_iq(#iq{to = To} = IQ) ->
 %%--------------------------------------------------------------------
 -spec send_notification(binary(), jid(), jid(), xmpp_element() | xmlel()) -> ok.
 send_notification(ServerHost , To, OFrom, Payload) ->
-  send_notification(ServerHost , To, OFrom, Payload, xmpp:mk_text(?FALLBACK)).
+  send_notification(ServerHost , To, OFrom, Payload,
+    xmpp:mk_text(?FALLBACK), []).
 
--spec send_notification(binary(), jid(), jid(), xmpp_element() | xmlel(), binary()) -> ok.
-send_notification(ServerHost , To, OFrom, Payload, Fallback) when is_binary(Fallback) ->
-  send_notification(ServerHost , To, OFrom, Payload, xmpp:mk_text(Fallback));
-send_notification(ServerHost , To, OFrom, #message{} = Payload, Fallback) ->
+-spec send_notification(binary(), jid(), jid(), xmpp_element() | xmlel(),
+    binary(), list()) -> ok.
+send_notification(ServerHost , To, OFrom, Payload, Fallback, Opts) when is_binary(Fallback) ->
+  send_notification(ServerHost , To, OFrom, Payload, xmpp:mk_text(Fallback), Opts);
+send_notification(ServerHost , To, OFrom, #message{} = Payload, Fallback, Opts) ->
   Forwarded = #forwarded{sub_els = [Payload]},
-  send_notification(ServerHost , To, OFrom, Forwarded, Fallback);
-send_notification(ServerHost , To, OFrom, Payload, Fallback) ->
+  send_notification(ServerHost , To, OFrom, Forwarded, Fallback, Opts);
+send_notification(ServerHost , To, OFrom, Payload, Fallback, Opts) ->
   Proc = gen_mod:get_module_proc(ServerHost, ?MODULE),
   State = gen_server:call(Proc, get_state),
   From = jid:make(hd(State#state.hosts)),
-  Notification = #xen_notification{sub_els =  [xmpp:encode(Payload)]},
+  Category = proplists:get_value(category, Opts, <<>>),
+  Alert = proplists:get_value(alert, Opts, false),
+  Notification = #xen_notification{ category = Category, alert = Alert,
+    sub_els =  [xmpp:encode(Payload)]},
   notify(From, To, OFrom, Notification, Fallback).
 
 %%--------------------------------------------------------------------

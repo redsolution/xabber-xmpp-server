@@ -163,8 +163,8 @@ send_notification(ServerHost , To, OFrom, Payload, Fallback, Opts) ->
   State = gen_server:call(Proc, get_state),
   From = jid:make(hd(State#state.hosts)),
   Category = proplists:get_value(category, Opts, <<>>),
-  Alert = proplists:get_value(alert, Opts, false),
-  Notification = #xen_notification{ category = Category, alert = Alert,
+  NType = proplists:get_value(type, Opts, <<"normal">>),
+  Notification = #xen_notification{ category = Category, type = NType,
     sub_els =  [xmpp:encode(Payload)]},
   notify(From, To, OFrom, Notification, Fallback).
 

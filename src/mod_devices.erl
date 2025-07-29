@@ -477,7 +477,7 @@ send_notification(Server, Message) ->
       mod_notify:send_notification(Server, Message#message.to,
         jid:make(Server), Message,
         xmpp:get_text(Message#message.body),
-        [{category, <<"security">>}]);
+        [{category, <<"security">>},{type, <<"alert">>}]);
     _ ->
       ejabberd_router:route(Message)
   end.

@@ -768,7 +768,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
       Status = mod_groups_users:check_user_if_exist(LServer,User,Chat),
       Count = lg_get_count_messages(User,Chat,Read,Status),
       LastMessage = lg_get_last_message(LUser, LServer, PUser, PServer,Status),
-      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
+%%      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #sync_unread{count = Count, 'after' = Read},
       XabberDelivered = #sync_delivered{id = Delivered},
       XabberDisplayed = #sync_displayed{id = Display},
@@ -776,25 +776,25 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
       {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
         sub_els = [#sync_retract{version = Retract}]},
-        #sync_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+%%        #sync_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
         #sync_metadata{node = ?NS_GROUPS, sub_els = UserCard ++ GroupInfo},
-        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
+        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}] ++ Acc};
     ?NS_GROUPS ->
       {Sub, _, _} = mod_roster:get_jid_info(<<>>, LUser, LServer,
         jid:from_string(Conversation)),
       Count = eg_get_unread_msgs_count({PUser, PServer}, ReadTS, Sub),
       UserCard = eg_get_user_card(LUser, LServer, PUser, PServer),
       LastMessage = eg_get_last_message(LUser, LServer, PUser, PServer, Sub),
-      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
+%%      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
       Unread = #sync_unread{count = Count, 'after' = Read},
       XabberDelivered = #sync_delivered{id = Delivered},
       XabberDisplayed = #sync_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
       {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
         sub_els = [#sync_retract{version = Retract}]},
-        #sync_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
+%%        #sync_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
         #sync_metadata{node = ?NS_GROUPS, sub_els = UserCard ++ GroupInfo},
-        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}]};
+        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}] ++ Acc};
     _ when Encrypted == true ->
       Count = get_count_messages(LServer,LUser,Conversation,Read,Type),
       LastMessage = get_last_encrypted_message(LServer,LUser,Conversation,Type),
@@ -805,11 +805,16 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
 %%      RetractVersion = mod_retract:get_version(LServer, LUser),
       {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
         sub_els = [#sync_retract{version = Retract}]},
-        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]};
+        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}] ++ Acc};
     _ ->
       Count = get_count_messages(LServer,LUser,Conversation,Read,?NS_XABBER_CHAT),
       LastMessage = get_last_message(LServer,LUser,Conversation),
-      LastCall = get_actual_last_call(LUser, LServer, PUser, PServer),
+      LastCall = case get_actual_last_call(LUser, LServer, PUser, PServer) of
+                   [] -> [];
+                   Calls ->
+                     [#sync_metadata{node = ?NS_JINGLE_MESSAGE,
+                       sub_els = Calls}]
+                 end,
       Unread = #sync_unread{count = Count, 'after' = Read},
       XabberDelivered = #sync_delivered{id = Delivered},
       XabberDisplayed = #sync_displayed{id = Display},
@@ -817,8 +822,8 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
 %%      RetractVersion = mod_retract:get_version(LServer, LUser),
       {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
         sub_els = [#sync_retract{version = Retract}]},
-        #sync_metadata{node = ?NS_JINGLE_MESSAGE,sub_els = LastCall},
-        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}|Acc]}
+        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION,
+          sub_els = SubEls}] ++ LastCall ++ Acc}
   end.
 
 get_pending_subscriptions(LUser, LServer) ->

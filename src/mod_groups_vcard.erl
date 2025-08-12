@@ -1115,7 +1115,7 @@ get_vcard(LUser,Server) ->
                   _ ->
                     <<"Private chat">>
                 end,
-  [#vcard_temp{
+  [xmpp:encode(#vcard_temp{
     jabberid = Chat,
     nickname = Name,
     desc = Desc,
@@ -1124,7 +1124,7 @@ get_vcard(LUser,Server) ->
     membership = Membership,
     parent = Parent,
     status = HumanStatus,
-    members = Members}].
+    members = Members})].
 
 
 define_parent_chat(<<"0">>) ->

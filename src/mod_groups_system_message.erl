@@ -526,9 +526,9 @@ new_restriction_text(Restrictions) ->
   DiffList = ResExpire--NowExpireList,
   case length(DiffList) of
     0 when length(NowExpireList) > 1 ->
-      <<" restrictions were canceled by ">>;
+      <<" restrictions were removed by ">>;
     0 ->
-      <<" restriction was canceled by ">>;
+      <<" restriction was removed by ">>;
     _ when NowExpireList == [] ->
       <<" was restricted by ">>;
     _ when length(Restrictions) > 1 ->

@@ -55,7 +55,8 @@
   get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/4,
   update_user_status/3, user_no_read/2, get_nick_in_chat/3, get_user_by_id_and_allow_to_invite/3,
   process_subscribed/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2,
-  change_peer_to_peer_invitation_state/4
+  change_peer_to_peer_invitation_state/4,
+  get_users_from_p2p/2
 ]).
 
 -export([is_exist/2, set_default_restrictions/2]).
@@ -335,7 +336,7 @@ get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
   User = jid:to_string(jid:remove_resource(UserJID)),
   From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
   To = jid:remove_resource(UserJID),
-  case mod_groups_chats:is_anonim(Server,Chat) of
+  case mod_groups_chats:is_anonim(Chat) of
     true ->
       mod_groups_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>);
     _ ->
@@ -346,7 +347,7 @@ get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
 
 add_user_vcard(_Acc, {_Admin,Chat,Server,
   #groups_invite{invite_jid = User, reason = _Reason, send = _Send}}) ->
-  case mod_groups_chats:is_anonim(Server,Chat) of
+  case mod_groups_chats:is_anonim(Chat) of
     false ->
       add_wait_for_vcard(Server,User),
       From = jid:from_string(Chat),
@@ -490,7 +491,7 @@ sql_get_vcard_nickname_t(User)->
 
 sql_add_user(Server, User, Role, Group, Subs, InvitedBy) ->
   ID = str:to_lower(randoms:get_alphanum_string(16)),
-  IsAnon = mod_groups_chats:is_anonim(Server, Group),
+  IsAnon = mod_groups_chats:is_anonim(Group),
   F = fun() ->
     {ANN, ParseAvatar} =
       case IsAnon of
@@ -524,7 +525,7 @@ sql_add_user(Server, User, Role, Group, Subs, InvitedBy) ->
           ]))
       end,
   ejabberd_sql:sql_transaction(Server, F),
-  case mod_groups_chats:is_anonim(Server, Group) of
+  case mod_groups_chats:is_anonim(Group) of
     true ->
       make_incognito_nickname(Server, User, Group, ID);
     _ -> ok
@@ -535,6 +536,15 @@ sql_users_to_send(Server, Group) ->
     Server,
     ?SQL("select @(username)s from groupchat_users "
     " where chatgroup=%(Group)s and subscription='both'")) of
+    {selected, Users} -> Users;
+    _ -> []
+  end.
+
+sql_users_from_p2p(Server, Group) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s,@(nickname)s from groupchat_users "
+    " where chatgroup=%(Group)s")) of
     {selected, Users} -> Users;
     _ -> []
   end.
@@ -842,7 +852,7 @@ get_user_info(User,Chat) ->
   Server = ChatJID#jid.lserver,
   case get_user_info(Server, User, Chat) of
     [Username, UserId, _Subs, Badge, Nick, _Last, Role] ->
-      IsAnon = mod_groups_chats:is_anonim(Server,Chat),
+      IsAnon = mod_groups_chats:is_anonim(Chat),
       UserJID = jid:from_string(User),
       AvatarEl = mod_groups_vcard:get_photo_meta(Server,Username,Chat),
       {Role, UserJID, Badge, UserId, Nick, AvatarEl, IsAnon};
@@ -1012,7 +1022,7 @@ add_wait_for_vcard(Server,Jid) ->
 get_user_info_for_peer_to_peer(LServer,User,Chat) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(avatar_id)s,@(avatar_type)s,@(avatar_url)s,@(avatar_size)d,
+    ?SQL("select @(id)s,@(avatar_id)s,@(avatar_type)s,@(avatar_url)s,@(avatar_size)d,
     CASE
       WHEN nickname != '' and nickname is not null
         THEN groupchat_users.nickname
@@ -1027,23 +1037,17 @@ get_user_info_for_peer_to_peer(LServer,User,Chat) ->
   end.
 
 add_user_to_peer_to_peer_chat(LServer,User,Chat,
-    {AvatarID,AvatarType,AvatarUrl,AvatarSize,
+    {Id, AvatarID,AvatarType,AvatarUrl,AvatarSize,
       Nickname,ParseAvatar,Badge}) ->
-  Role = <<"member">>,
-  Subscription = <<"wait">>,
-  R = randoms:get_alphanum_string(16),
-  R_s = binary_to_list(R),
-  R_sl = string:to_lower(R_s),
-  Id = list_to_binary(R_sl),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL_INSERT(
       "groupchat_users",
       ["username=%(User)s",
-        "role=%(Role)s",
+        "role='member'",
         "chatgroup=%(Chat)s",
         "id=%(Id)s",
-        "subscription=%(Subscription)s",
+        "subscription='wait'",
         "avatar_id=%(AvatarID)s",
         "avatar_type=%(AvatarType)s",
         "avatar_url=%(AvatarUrl)s",
@@ -1405,22 +1409,24 @@ get_user_from_chat(LServer, Chat, User, ID) ->
                    ID == <<>> orelse ID == <<"0">> -> {User, undefined};
                    true -> {undefined, ID}
                  end,
+
   case get_user_info(LServer, Chat, User1, ID1) of
     [Username, Id, Subscription, Badge, Nick, LastSeen, Role] ->
-      IsAnon = mod_groups_chats:is_anonim(LServer,Chat),
+      IsAnon = mod_groups_chats:is_anonim(Chat),
       AvatarEl = mod_groups_vcard:get_photo_meta(LServer,Username,Chat),
       Present = case mod_groups_presence:select_sessions(Username,Chat) of
                   [] -> LastSeen;
                   _ -> undefined
                 end,
-      UserCard = #groups_user{subscription = Subscription, id = Id, nickname = Nick,
-        role = Role, avatar = AvatarEl, badge = Badge, present = Present},
       RequesterRole = calculate_role(LServer,User,Chat),
-      SubEls = if
-                 IsAnon andalso RequesterRole /= <<"owner">> -> [UserCard] ;
-                 true -> [UserCard#groups_user{jid = jid:from_string(Username)}]
-               end,
-      #groups_query{xmlns = ?NS_GROUPS_MEMBERS, sub_els = SubEls};
+      JID = if
+              IsAnon andalso RequesterRole /= <<"owner">> -> undefined;
+              true -> jid:from_string(Username)
+            end,
+      UserCard = #groups_user{subscription = Subscription, id = Id,
+        nickname = Nick, role = Role, avatar = AvatarEl,
+        badge = Badge, present = Present, jid = JID},
+      #groups_query{xmlns = ?NS_GROUPS_MEMBERS, sub_els = [UserCard]};
     _ ->
       []
   end.
@@ -1528,7 +1534,7 @@ get_max_direction_item(RSM) ->
   end.
 
 make_query(LServer,RawData,RequesterUser,Chat) ->
-  IsAnon = mod_groups_chats:is_anonim(LServer,Chat),
+  IsAnon = mod_groups_chats:is_anonim(Chat),
   RequesterUserRole = calculate_role(LServer,RequesterUser,Chat),
   lists:map(
     fun(UserInfo) ->
@@ -1553,6 +1559,9 @@ make_query(LServer,RawData,RequesterUser,Chat) ->
         true -> Card#groups_user{jid = jid:from_string(Username)}
       end
     end, RawData).
+
+get_users_from_p2p(Server, Group)->
+ sql_users_from_p2p(Server, Group).
 
 calculate_role(LServer,Username,Chat) ->
   TS = now_to_timestamp(now()),

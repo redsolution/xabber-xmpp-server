@@ -29,9 +29,7 @@
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -export([
   get_vcard/0,
-  give_vcard/2,
   handle/1,
-  iq_last/0,
   handle_pubsub/1,
   handle_request/1,
   change_nick_in_vcard/3,
@@ -51,7 +49,8 @@
   handle_iq/1,
   get_vcard_avatar_hash/2,
   set_update_status/3,
-  update_chat_avatar_id/3
+  update_chat_avatar_id/3,
+  get_group_avatar_metadata/2
 ]).
 -export([publish_avatar/3, make_http_request/4, store_user_avatar_file/3]).
 -export([maybe_update_avatar/3]).
@@ -215,7 +214,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
             sub_els = [Event]
           },
           ejabberd_hooks:run_fold(groupchat_user_change_own_avatar, Server, User, [Server,Chat]),
-          notificate_all(To,M),
+          notify_all(To,M),
           xmpp:make_iq_result(Iq);
         _ ->
           #ps_item{sub_els = [Sub]} = Item,
@@ -241,7 +240,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                     sub_els = [Event],
                     meta = #{}
                   },
-                  notificate_all(To,M);
+                  notify_all(To,M);
                 _ ->
                   download_user_avatar(Server, User, Info, Chat)
               end,
@@ -284,7 +283,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
             id = randoms:get_string(),
             sub_els = [Event]
           },
-          notificate_all(To,M),
+          notify_all(To,M),
           ejabberd_hooks:run_fold(groupchat_user_change_some_avatar,
             Server, User, [Server,Chat,SomeUser]),
           xmpp:make_iq_result(Iq);
@@ -313,7 +312,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
                     sub_els = [Event],
                     meta = #{}
                   },
-                  notificate_all(To,M);
+                  notify_all(To,M);
                 _ ->
                   download_user_avatar(Server, SomeUser, Info, Chat)
               end,
@@ -334,7 +333,7 @@ not_allowed_result(IQ, From, To) ->
   xmpp:make_error(IQ1, xmpp:err_not_allowed(Txt, IQ#iq.lang)).
 
 
-notificate_all(ChatJID,Message) ->
+notify_all(ChatJID,Message) ->
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
   FromChat = jid:replace_resource(ChatJID,?RESOURCE),
   AllUsers = mod_groups_users:users_to_send(ChatJID#jid.lserver,Chat),
@@ -348,36 +347,13 @@ change_nick_in_vcard(LUser,LServer,NewNick) ->
   IqSet = #iq{from = Jid, type = set, id = randoms:get_string(), sub_els = [NewVcard]},
   mod_vcard:vcard_iq_set(IqSet).
 
-iq_last() ->
-#xmlel{name = <<"query">>, attrs = [{<<"xmlns">>,<<"jabber:iq:last">>},{<<"seconds">>,<<"0">>}]}.
-
-give_vcard(User,Server) ->
-  Vcard = mod_vcard:get_vcard(User,Server),
-  #xmlel{
-     name = <<"vCard">>,
-     attrs = [{<<"xmlns">>,<<"vcard-temp">>}],
-     children = Vcard}.
-
 get_vcard() ->
-    #xmlel{
-       name = <<"iq">>,
-       attrs = [
-                {<<"id">>, randoms:get_string()},
-                {<<"xmlns">>,<<"jabber:client">>},
-                {<<"type">>,<<"get">>}
-               ],
-       children = [#xmlel{
-                      name = <<"vCard">>,
-                      attrs = [
-                               {<<"xmlns">>,<<"vcard-temp">>}
-                              ]
-                     }
-                  ]
-      }.
+  #iq{type = get, id = randoms:get_string(),
+    sub_els = [#vcard_temp{}]}.
 
 get_pubsub_meta() ->
   #iq{type = get, id = randoms:get_string(),
-    sub_els = [#pubsub{items = #ps_items{node = <<"urn:xmpp:avatar:metadata">>}}]
+    sub_els = [#pubsub{items = #ps_items{node = ?NS_AVATAR_METADATA}}]
   }.
 
 get_pubsub_data(ID) ->
@@ -542,7 +518,7 @@ store_user_avatar(Server, User, AvatarInfo, Group, Data) ->
     sub_els = [Event],
     meta = #{}
   },
-  notificate_all(GroupJID, Message).
+  notify_all(GroupJID, Message).
 
 store_user_avatar(Server, User, ID, AvaType, AvaSize, Data) ->
   FileName = make_user_string(jid:from_string(User), salt),
@@ -615,7 +591,7 @@ notification_message(User, Server, Chat) ->
 %%  mod_groups_system_message:form_message(ChatJID,Body,SubEls).
 
 get_chat_meta_nodeid(Server,Chat)->
-  Node = <<"urn:xmpp:avatar:metadata">>,
+  Node = ?NS_AVATAR_METADATA,
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(nodeid)s from pubsub_node
@@ -640,9 +616,15 @@ get_chat_meta(Server,_Chat,Nodeid)->
   end.
 
 make_chat_notification_message(Server,Chat,To) ->
-
-  Nodeid = get_chat_meta_nodeid(Server,Chat),
-  maybe_send(Server,Chat,Nodeid,To).
+  case mod_groups_chats:get_info(Chat, [parent, p2pusers]) of
+    [<<"0">>, _] ->
+      Nodeid = get_chat_meta_nodeid(Server,Chat),
+      maybe_send(Server,Chat,Nodeid,To);
+    [_, P2PUsers] ->
+      send_p2p_avatar(Server, Chat, To, P2PUsers);
+    _ ->
+      ok
+  end.
 
 maybe_send(_Server,_Chat,no_avatar,_To) ->
   ok;
@@ -652,21 +634,45 @@ maybe_send(Server,Chat,Nodeid,To) ->
 
 parse_and_send(_Server,_Chat,no_avatar,_To) ->
   ok;
-parse_and_send(_Server,Chat,{Payload,Nodeid},To) ->
+parse_and_send(_Server, Group, {Payload, NodeId}, To) ->
   Metadata = xmpp:decode(fxml_stream:parse_element(Payload)),
-  ChatJID = jid:remove_resource(jid:from_string(Chat)),
-  Item = #ps_item{id = Nodeid, sub_els = [Metadata]},
-  Node = <<"urn:xmpp:avatar:metadata">>,
-  Items = #ps_items{node = Node, items = [Item]},
+  GroupJID = jid:remove_resource(jid:from_string(Group)),
+  send_avatar_meta(GroupJID, To, NodeId, Metadata).
+
+send_p2p_avatar(Server, Group, User, Names)->
+  UserS = jid:to_string(jid:remove_resource(User)),
+  {User2S, _} = hd(lists:keydelete(UserS, 1, Names)),
+  Metadata = get_photo_meta(Server, User2S , Group),
+  AvatarID = case Metadata#avatar_meta.info of
+               [] -> <<>>;
+               L ->
+                 AvaInfo = hd(L),
+                 AvaInfo#avatar_info.id
+               end,
+  GroupJID = jid:from_string(Group),
+  send_avatar_meta(GroupJID, User, AvatarID, Metadata).
+
+send_avatar_meta(GroupJID, UserJID, AvatarID, Metadata)->
+  Item = #ps_item{id = AvatarID, sub_els = [Metadata]},
+  Items = #ps_items{node = ?NS_AVATAR_METADATA, items = [Item]},
   Event = #ps_event{items = Items},
   M = #message{type = headline,
-    from = ChatJID,
-    to = To,
+    from = GroupJID,
+    to = UserJID,
     id = randoms:get_string(),
     sub_els = [Event],
     meta = #{}
   },
   ejabberd_router:route(M).
+
+get_group_avatar_metadata(Server, Group)->
+  case get_chat_meta_nodeid(Server, Group) of
+    no_avatar ->
+      #avatar_meta{};
+    NodeId ->
+      {Payload, _} = get_chat_meta(Server, Group, NodeId),
+      xmpp:decode(fxml_stream:parse_element(Payload))
+  end.
 
 get_photo_meta(Server,User,Chat)->
   Meta = get_image_metadata_f(Server, User, Chat),
@@ -698,7 +704,7 @@ get_avatar_data(Server, Hash, User, Node, Chat) ->
   end.
 
 get_vcard_avatar(Server, Hash, User, Node, Chat) ->
-  case mod_groups_chats:is_anonim(Server,Chat) of
+  case mod_groups_chats:is_anonim(Chat) of
     false ->
       get_vcard_avatar_data(Server, User, Hash,Node);
     _ ->
@@ -815,7 +821,7 @@ get_image_metadata_by_id(Server, UserID, Chat) ->
   end.
 
 get_vcard_avatar(Server, Chat, User) ->
-  case mod_groups_chats:is_anonim(Server,Chat) of
+  case mod_groups_chats:is_anonim(Chat) of
     false ->
       do_get_vcard_avatar(Server, User);
     _ -> error
@@ -1106,7 +1112,7 @@ del_dir_r(File) ->
 get_vcard(LUser,Server) ->
   Chat = jid:to_string(jid:make(LUser,Server)),
   {Name, Privacy, Index, Membership, Desc, _ChatMessage, _Contacts,
-    _Domains, ParentChat, Status} = mod_groups_chats:get_info(Chat, Server),
+    _Domains, ParentChat, Status} = mod_groups_chats:get_info(Chat),
   Parent = define_parent_chat(ParentChat),
   Members = mod_groups_chats:count_users(Server,Chat),
   HumanStatus = case ParentChat of

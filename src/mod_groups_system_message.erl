@@ -119,8 +119,8 @@ groupchat_changed(LServer, Chat, User, ChatProperties1, Status) ->
       ok;
     _ ->
       ByUserCard = mod_groups_users:form_user_card(User,Chat),
-      {Name, Anonymous, _Search, _Model, _Desc, Message, _Contacts,
-        _Domains, _Parent, _Status} = mod_groups_chats:get_info(Chat, LServer),
+      [Name, Anonymous, Message] = mod_groups_chats:get_info(Chat,
+        [name, privacy, message]),
       UserID = ByUserCard#groups_user.nickname,
       Txt = if
               IsNameChanged andalso not IsOtherChanged andalso not IsDescChanged
@@ -230,7 +230,7 @@ chat_created(LServer,User,Chat,Lang) ->
                X#groups_user.nickname
            end,
   {Name, Anonymous, Search, Model, Desc, _ChatMessage, _Contacts,
-    _Domains, _Parent, _Status} = mod_groups_chats:get_info(Chat, LServer),
+    _Domains, _Parent, _Status} = mod_groups_chats:get_info(Chat),
   Txt =  <<"created ",Anonymous/binary," group">>,
   MsgTxt = text_for_msg(Lang,Txt,UserID,[],[]),
   Body = [#text{lang = <<>>,data = MsgTxt}],
@@ -539,10 +539,8 @@ new_restriction_text(Restrictions) ->
 
 
 send_presences(Server,Chat) ->
-  To = jid:from_string(Chat),
   Users = mod_groups_users:users_to_send(Server,Chat),
-  FromChat = jid:replace_resource(To,<<"Group">>),
-  mod_groups_presence:send_presence(mod_groups_presence:form_presence(Chat),Users,FromChat).
+  mod_groups_presence:send_presence(Users, Chat, available, [present]).
 
 -spec send_to_all(binary(), binary()) -> ok.
 send_to_all(Chat, Pkt1) ->

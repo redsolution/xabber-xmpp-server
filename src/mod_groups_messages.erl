@@ -183,7 +183,7 @@ send_message(Message, Users, GroupJID) ->
 send_message_to_index(ChatJID, Message) ->
   Server = ChatJID#jid.lserver,
   Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  case mod_groups_chats:is_global_indexed(Server,Chat) of
+  case mod_groups_chats:is_global_indexed(Chat) of
     true ->
       GlobalIndexes = mod_groups:get_option(Server, global_indexs),
       lists:foreach(fun(Index) ->

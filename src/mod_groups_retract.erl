@@ -338,8 +338,8 @@ check_if_message_pinned(Server, Group, ID) ->
   case delete_pinned_message(Server, Group, ID) of
     ok ->
       groups_sm:update_group_session_info(Group,#{message => 0}),
-      Presence = mod_groups_presence:form_presence(Group),
-      notify(Server, Group, Presence);
+      Users = mod_groups_users:users_to_send(Server, Group),
+      mod_groups_presence:send_presence(Users, Group, available, [present]);
     _ -> ok
   end.
 

@@ -401,8 +401,8 @@ CREATE TABLE groupchat_users (
     last_seen timestamp NOT NULL default timezone('utc'::text, now()),
     user_updated_at timestamp NOT NULL default timezone('utc'::text, now()),
     invited_by text,
-    CONSTRAINT UC_groupchat_users UNIQUE (username,chatgroup),
-    CONSTRAINT UC_groupchat_users_id UNIQUE (id)
+    CONSTRAINT uc_groupchat_users_username_chatgroup UNIQUE (username,chatgroup),
+    CONSTRAINT uc_groupchat_users_chatgroup_id UNIQUE (chatgroup,id),
 );
 CREATE INDEX i_groupchat_users_group_subs ON groupchat_users USING btree (chatgroup,subscription);
 
@@ -459,15 +459,6 @@ CREATE TABLE groupchat_block (
     issued_by text NOT NULL,
     issued_at timestamp NOT NULL,
     CONSTRAINT UC_groupchat_block UNIQUE (chatgroup,blocked)
-);
-
-CREATE TABLE groupchat_log (
-    chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
-    username text NOT NULL,
-    log_event text NOT NULL,
-    happend_at timestamp NOT NULL,
-    CONSTRAINT UC_groupchat_log UNIQUE (username,chatgroup,log_event),
-    FOREIGN KEY (username,chatgroup) REFERENCES groupchat_users (username,chatgroup) ON DELETE CASCADE
 );
 
 CREATE TABLE groupchat_default_restrictions(

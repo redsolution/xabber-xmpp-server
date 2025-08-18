@@ -34,16 +34,14 @@
 %% API
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
--export([maybe_delete_group/2, is_anonim/2, is_global_indexed/2, get_all_groups_info/1, get_all_info/3,
-  get_count_chats/1, get_type_and_parent/2, update_user_counter/1]).
+-export([maybe_delete_group/2, is_anonim/1, is_global_indexed/1, get_all_groups_info/1, get_all_info/3,
+  get_count_chats/1, get_type_and_parent/1, update_user_counter/1]).
 
--export([check_creator/4, check_user/4, check_chat/4,
-  create_peer_to_peer/4, send_invite/4, check_if_users_invited/4,
-  check_if_peer_to_peer_exist/4, groupchat_exist/2, create_groupchat/13]).
+-export([create_p2p_group/4, groupchat_exist/2, create_groupchat/13, group_info_query/2]).
 
 -export([check_user_rights/4, decode/3, check_user_permission/5, validate_fs/5, handle_update_query/4,
   change_chat/5, check_create_query/5, create_chat/3, create_chat/5,
-  get_chat_active/2, get_info/2, db_get_info/2, count_users/2,
+  get_chat_active/2, get_info/1, get_info/2, db_get_info/2, count_users/2,
   get_name_desc/2, define_human_status/3]).
 
 -export([parse_status_query/2, filter_fixed_fields/1, define_human_status_and_show/3]).
@@ -67,13 +65,6 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, check_user_permission, 10),
   ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, validate_fs, 15),
   ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, change_chat, 20),
-  ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_creator, 10),
-  ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_chat, 15),
-  ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_user, 20),
-  ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_if_peer_to_peer_exist, 25),
-  ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, check_if_users_invited, 27),
-  ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, create_peer_to_peer, 30),
-  ejabberd_hooks:add(groupchat_peer_to_peer, Host, ?MODULE, send_invite, 40),
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, maybe_delete_group, 35).
 
 stop(Host) ->
@@ -87,13 +78,6 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, check_user_permission, 10),
   ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, validate_fs, 15),
   ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, change_chat, 20),
-  ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_creator, 10),
-  ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_chat, 15),
-  ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_user, 20),
-  ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_if_peer_to_peer_exist, 25),
-  ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, check_if_users_invited, 27),
-  ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, create_peer_to_peer, 30),
-  ejabberd_hooks:delete(groupchat_peer_to_peer, Host, ?MODULE, send_invite, 40),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, maybe_delete_group, 35).
 
 depends(_Host, _Opts) ->  [].
@@ -209,10 +193,10 @@ create_chat(Server, Creator, SubEls) ->
       exist
   end.
 
-check_user_rights(_Acc,User,Chat,Server) ->
+check_user_rights(_Acc, User, Chat, _Server) ->
   case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
     true ->
-      {stop, {ok,form_chat_information(Chat,Server,form)}};
+      {stop, {ok,form_chat_information(Chat, form)}};
     _ ->
       {stop, {error,xmpp:err_not_allowed(<<"You are not allowed to change group properties">>, <<"en">>)}}
   end.
@@ -304,173 +288,34 @@ change_chat(Acc,_User,Chat,Server,_FS) ->
         contacts => NewContacts, domains => NewDomains},
       sql_update_groupchat(Server, Chat, NewInfo),
       groups_sm:update_group_session_info(Chat, NewInfo),
-      {stop, {ok,form_chat_information(Chat,Server,result),Status,ChangeDiff}}
+      {stop, {ok,form_chat_information(Chat, result),Status,ChangeDiff}}
   end.
 
-check_creator(_Acc, LServer, Creator,  #groups_ptp{jid = ChatJID}) ->
-  ?DEBUG("start fold ~p ~p ~p", [LServer,Creator, ChatJID]),
-  Chat = jid:to_string(ChatJID),
-  case mod_groups_users:check_user(LServer, Creator, Chat) of
-    not_exist ->
-      ?DEBUG("User not exist ~p",[Creator]),
-      {stop,not_exist};
-    _ ->
-      ?DEBUG("User exist ~p",[Creator]),
-      ok
+create_p2p_group(LServer, Creator, InvitedID, ParentGroup) ->
+  case mod_groups_users:check_user(LServer, Creator, ParentGroup) of
+    CSub when is_binary(CSub) ->
+      create_p2p_cpg(LServer, Creator, InvitedID, ParentGroup);
+      _ ->
+      {error, not_allowed}
   end.
 
-check_chat(_Acc, LServer, _Creator,  #groups_ptp{jid = ChatJID}) ->
-  Chat = jid:to_string(ChatJID),
-  case get_type_and_parent(LServer,Chat) of
-    {ok, <<"incognito">>, <<>>} -> ok;
-    _ -> {stop, notallowed}
+group_info_query(User, Group) ->
+  {_, Server, _} = jid:tolower(jid:from_string(Group)),
+  [Membership] = get_info(Group, [membership]),
+  IsAllowed = case Membership of
+                <<"open">> -> true;
+                _ ->
+                  mod_groups_users:is_in_chat(Server, Group, User)
+              end,
+  case IsAllowed of
+    true -> {ok, group_info_element(Server, User, Group)};
+    _ -> {error, xmpp:err_not_allowed()}
   end.
-
-check_user(_Acc, LServer, Creator,  #groups_ptp{jid = ChatJID, id = UserID}) ->
-  Chat = jid:to_string(ChatJID),
-  case mod_groups_users:get_user_by_id_and_allow_to_invite(LServer,Chat,UserID) of
-    none ->
-      ?DEBUG("User to invite not exist ~p",[UserID]),
-      {stop,not_exist};
-    Creator ->
-      {stop, not_ok};
-    User ->
-      User
-  end.
-
-check_if_peer_to_peer_exist(User, LServer, Creator,  #groups_ptp{jid = ChatJID}) ->
-  Chat = jid:to_string(ChatJID),
-  case get_p2p_chat(LServer,Chat,Creator,User) of
-    notexist ->
-      User;
-    ExistedChat ->
-      {exist,ExistedChat,User}
-  end.
-
-check_if_users_invited(Acc, LServer, Creator,  #groups_ptp{jid = ChatJID}) ->
-  case Acc of
-    {exist,ExistedChat,User} ->
-      Chat = jid:to_string(ChatJID),
-      CreatorSubscription = mod_groups_users:check_user_if_exist(LServer,Creator,ExistedChat),
-      UserSubscription = mod_groups_users:check_user_if_exist(LServer,User,ExistedChat),
-      if
-        UserSubscription == <<"none">>; UserSubscription == <<"wait">> ->
-          send_invite_to_p2p(LServer,Creator,User,ExistedChat,Chat);
-        true ->
-          ok
-      end,
-      if
-        CreatorSubscription == <<"none">>; CreatorSubscription == <<"wait">> ->
-          {LocalPart, _, _} = jid:tolower(jid:from_string(ExistedChat)),
-          Created = create_result_query(LocalPart,<<"Private chat">>,<<"Private chat">>,
-            <<"incognito">>,<<"member-only">>,<<"none">>,[],[]),
-          {stop,{ok,Created}};
-        true ->
-          {stop,{exist,ExistedChat}}
-      end;
-    _ ->
-      Acc
-  end.
-
-create_peer_to_peer(User, LServer, Creator, #groups_ptp{jid = ChatJID}) ->
-  Localpart = create_localpart(),
-  OldChat = jid:to_string(jid:remove_resource(ChatJID)),
-  Chat = jid:to_string(jid:make(Localpart,LServer)),
-  User1Nick = mod_groups_users:get_nick_in_chat(LServer,Creator,OldChat),
-  User2Nick = mod_groups_users:get_nick_in_chat(LServer,User,OldChat),
-  ChatName = <<User1Nick/binary," and ",User2Nick/binary, " chat">>,
-  Desc = <<"Private chat">>,
-  Privacy = <<"incognito">>,
-  Membership = <<"member-only">>,
-  Index = <<"none">>,
-  create_groupchat(LServer, Localpart, Creator, ChatName, Chat,
-    Privacy, Index, Membership, Desc, 0, <<"">>, <<"">>, OldChat),
-  Info = #{name => ChatName, description => Desc, privacy => Privacy,
-    membership => Membership, index => Index, message => 0,
-    contacts => <<>>, domains => <<>>, parent => OldChat, user_count => <<"0">>,
-    gstatus => ?DEFAULT_GROUP_STATUS},
-  groups_sm:activate(LServer, Localpart, Info),
-  Info1 = add_user_to_peer_to_peer_chat(LServer, User, Chat, OldChat),
-  Info2 = add_user_to_peer_to_peer_chat(LServer, Creator, Chat, OldChat),
-  Expires = <<"0">>,
-  IssuedBy = <<"server">>,
-  Rule = <<"send-invitations">>,
-  mod_groups_restrictions:insert_rule(LServer,Chat,User,Rule,Expires,IssuedBy),
-  mod_groups_restrictions:insert_rule(LServer,Chat,Creator,Rule,Expires,IssuedBy),
-  mod_groups_vcard:create_p2p_avatar(LServer,Chat,element(3,Info1),element(3,Info2)),
-  {User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, ChatJID}.
-
-send_invite({User,Chat, ChatName, Desc, User1Nick, User2Nick, OldChat, OldChatJID}, LServer, _Creator, _X) ->
-  Anonymous = <<"incognito">>,
-  Search = <<"none">>,
-  Model = <<"member-only">>,
-  OldChatName = get_chat_name(OldChat,LServer),
-  BareOldChatJID = jid:remove_resource(OldChatJID),
-  Privacy = #groups_privacy{cdata = Anonymous},
-  Membership = #groups_membership{cdata = Model},
-  Description = #groups_description{cdata = Desc},
-  Index = #groups_index{cdata = Search},
-  SubEls = [Privacy, Membership, Description, Index],
-  ChatInfo = #groups_x{parent = BareOldChatJID, sub_els = SubEls},
-  ChatJID = jid:from_string(Chat),
-  Text = <<"You was invited to ",Chat/binary," Please add it to the contacts to join a group chat">>,
-  Reason = <<User1Nick/binary,
-  " from ",OldChatName/binary, " invited you to chat privately."
-  " If you accept this invitation, you won't see each other's real XMPP IDs."
-  " You will be known as ", User2Nick/binary
-  >>,
-  Invite = #groups_invite{reason = Reason, jid = ChatJID},
-  Message = #message{
-    type = chat,
-    id = randoms:get_string(),
-    from = jid:replace_resource(ChatJID,<<"Group">>),
-    to = jid:from_string(User),
-    body = [#text{lang = <<>>,data = Text}],
-    sub_els = [Invite,ChatInfo]},
-  ejabberd_router:route(Message),
-  SubEls1 = [#groups_localpart{cdata = ChatJID#jid.luser},
-    #groups_name{cdata = ChatName}],
-  Created = #groups_query{xmlns = ?NS_GROUPS_CREATE,sub_els = SubEls ++ SubEls1},
-  {ok, Created}.
-
-send_invite_to_p2p(LServer,Creator,User,Chat,OldChat) ->
-  User1Nick = mod_groups_users:get_nick_in_chat(LServer,Creator,OldChat),
-  User2Nick = mod_groups_users:get_nick_in_chat(LServer,User,OldChat),
-  ChatName = <<User1Nick/binary," and ",User2Nick/binary, " chat">>,
-  Desc = <<"Private chat">>,
-  OldChatJID = jid:from_string(OldChat),
-  Anonymous = <<"incognito">>,
-  Search = <<"none">>,
-  Model = <<"member-only">>,
-  OldChatName = get_chat_name(OldChat,LServer),
-  BareOldChatJID = jid:remove_resource(OldChatJID),
-  Name = #groups_name{cdata = ChatName},
-  Privacy = #groups_privacy{cdata = Anonymous},
-  Membership = #groups_membership{cdata = Model},
-  Description = #groups_description{cdata = Desc},
-  Index = #groups_index{cdata = Search},
-  ChatInfo = #groups_x{parent = BareOldChatJID, sub_els = [Name, Privacy, Membership, Description, Index]},
-  ChatJID = jid:from_string(Chat),
-  Text = <<"You was invited to ",Chat/binary," Please add it to the contacts to join a group chat">>,
-  Reason = <<User1Nick/binary,
-    " from ",OldChatName/binary, " invited you to chat privately."
-    " If you accept this invitation, you won't see each other's real XMPP IDs."
-    " You will be known as ", User2Nick/binary
-  >>,
-  Invite = #groups_invite{reason = Reason, jid = ChatJID},
-  Message = #message{
-    type = chat,
-    id = randoms:get_string(),
-    from = jid:replace_resource(ChatJID,<<"Group">>),
-    to = jid:from_string(User),
-    body = [#text{lang = <<>>,data = Text}],
-    sub_els = [Invite,ChatInfo]},
-  ejabberd_router:route(Message).
 
 maybe_delete_group(_Acc,{LServer, _User, Group, _UserCard, _Lang})->
   Result =
-    case get_type_and_parent(LServer, Group) of
-      {ok, _, Parent} when Parent /= <<>> ->
+    case get_info(Group, [parent]) of
+      [Parent] when Parent /= <<"0">> ->
         delete_group(Group, true);
       _ ->
         case mod_groups:get_option(LServer, remove_empty) of
@@ -494,28 +339,26 @@ maybe_delete_group(_Acc,{LServer, _User, Group, _UserCard, _Lang})->
   end,
   ok.
 
-is_anonim(LServer,Chat) ->
-  case get_type_and_parent(LServer, Chat) of
-    {ok, <<"incognito">>, _} -> true;
+is_anonim(Group) ->
+  case get_info(Group, [privacy]) of
+    [<<"incognito">>] -> true;
     _ -> false
   end.
 
-get_type_and_parent(LServer,Chat) ->
-  case get_info(Chat, LServer) of
-    {_, Privacy, _, _, _, _, _, _, <<"0">>, _} ->
+get_type_and_parent(Group) ->
+  case get_info(Group, [privacy, parent]) of
+    [Privacy, <<"0">>] ->
       {ok, Privacy, <<>>};
-    {_, Privacy, _, _, _, _, _, _, Parent, _} ->
+    [Privacy, Parent] ->
       {ok, Privacy, Parent};
     _ ->
       {error, notexist}
   end.
 
-is_global_indexed(LServer,Chat) ->
-  try element(3,get_info(Chat, LServer)) of
-    <<"global">> -> true;
+is_global_indexed(Group) ->
+  case get_info(Group, [index]) of
+    [<<"global">>] -> true;
     _ -> false
-  catch
-    _:_ -> false
   end.
 
 get_all_groups_info(LServer) ->
@@ -525,18 +368,26 @@ get_all_groups_info(LServer) ->
     " @(model)s, @(description)s, @(message)d, @(contacts)s, "
     " @(domains)s, @(parent_chat)s,@(status)s, @(owner)s, "
     " @((select count(*) from groupchat_users "
-    " where chatgroup = t.jid and subscription = 'both'))s"
+    " where chatgroup = t.jid and subscription = 'both'))s,"
+    " (select @(STRING_AGG(username||'::'||nickname,';;'))s from groupchat_users "
+    " where chatgroup = t.jid and t.parent_chat != '0')"
     " from groupchats t where %(LServer)H")) of
     {selected, List} ->
       lists:map(fun(Item)->
         {LocalPart, Name, Privacy, Index, Membership, Desc, Message,
-          Contacts, Domains, Parent, Status, Owner, Count} = Item,
+          Contacts, Domains, Parent, Status, Owner, Count, P2PUsers} = Item,
+        P2PUsers1 = case P2PUsers of
+                      null -> [];
+                      _ ->
+                        [list_to_tuple(binary:split(I,<<"::">>)) ||
+                        I <- binary:split(P2PUsers, <<";;">>)]
+                end,
         {{LocalPart, LServer, <<"Group">>},
           #{name => Name, description => Desc, privacy => Privacy,
             membership => Membership, index => Index,
             message => Message, contacts => Contacts,
             domains => Domains, parent => Parent, owner => Owner,
-            gstatus => Status, user_count => Count}
+            gstatus => Status, user_count => Count, p2pusers => P2PUsers1}
         }
                 end, List);
     _ -> error
@@ -658,6 +509,122 @@ item_chat(ChatJidQ,NameQ,AnonymousQ,ModelQ,DescQ,_ContactListQ,_DomainListQ,Coun
 
 % Internal functions
 
+create_p2p_cpg(LServer, Creator, InvitedID, ParentGroup) ->
+  case get_type_and_parent(ParentGroup) of
+    {ok, <<"incognito">>, <<>>} ->
+      create_p2p_ciu(LServer, Creator, InvitedID, ParentGroup);
+    _ -> {error, not_allowed}
+  end.
+
+create_p2p_ciu(LServer, Creator, InvitedID, ParentGroup) ->
+  case mod_groups_users:get_user_by_id_and_allow_to_invite(LServer,
+    ParentGroup, InvitedID) of
+    none ->
+      {error, not_exist};
+    Creator ->
+      {error, bad_request};
+    User ->
+      create_p2p_cp2p(LServer, Creator, User, ParentGroup)
+  end.
+
+create_p2p_cp2p(LServer, Creator, Invited, ParentGroup) ->
+  P2PGroup = get_p2p_chat(LServer, ParentGroup, Creator, Invited),
+  create_p2p_exists(P2PGroup, LServer, Creator, Invited, ParentGroup).
+
+create_p2p_exists(notexist, LServer, Creator, Invited, ParentGroup) ->
+  do_create_p2p_group(LServer, Creator, Invited, ParentGroup);
+create_p2p_exists(P2PGroup, LServer, Creator, Invited, ParentGroup) ->
+  CreatorSub = mod_groups_users:check_user_if_exist(LServer, Creator, P2PGroup),
+  InvitedSub = mod_groups_users:check_user_if_exist(LServer, Invited, P2PGroup),
+  if
+    InvitedSub == <<"none">>; InvitedSub == <<"wait">> ->
+      send_invite_to_p2p(LServer, Creator, Invited, P2PGroup, ParentGroup);
+    true ->
+      ok
+  end,
+  if
+    CreatorSub == <<"none">>; CreatorSub == <<"wait">> ->
+      {LocalPart, _, _} = jid:tolower(jid:from_string(P2PGroup)),
+      GroupName = case get_info(P2PGroup, [p2pusers, name]) of
+                    [undefined, undefined ] -> <<"Private chat">>;
+                    [[], Name] -> Name;
+                    [Users, _] ->
+                      proplists:get_value(Invited, Users);
+                    _ -> <<"Private chat">>
+                  end,
+      Created = create_result_query(LocalPart, GroupName,
+        <<"Private chat">>, <<"incognito">>, <<"member-only">>,
+        <<"none">>, [], []),
+      {ok, Created};
+    true ->
+      {exists, P2PGroup}
+  end.
+
+do_create_p2p_group(LServer, Creator, Invited, ParentGroup) ->
+%%  Create group.
+  LocalPart = create_localpart(),
+  Group = <<LocalPart/binary,"@",LServer/binary>>,
+  CreatorNick = mod_groups_users:get_nick_in_chat(LServer, Creator, ParentGroup),
+  InvitedNick = mod_groups_users:get_nick_in_chat(LServer, Invited, ParentGroup),
+  GroupName = <<CreatorNick/binary," and ", InvitedNick/binary, " chat">>,
+  P2PUsers = [{Creator, CreatorNick}, {Invited, InvitedNick}],
+  Desc = <<"Private chat">>,
+  Privacy = <<"incognito">>,
+  Membership = <<"member-only">>,
+  Index = <<"none">>,
+  create_groupchat(LServer, LocalPart, Creator, GroupName, Group,
+    Privacy, Index, Membership, Desc, 0, <<"">>, <<"">>, ParentGroup),
+  Info = #{name => GroupName, description => Desc, privacy => Privacy,
+    membership => Membership, index => Index, message => 0,
+    contacts => <<>>, domains => <<>>, parent => ParentGroup, user_count => <<"0">>,
+    gstatus => ?DEFAULT_GROUP_STATUS, p2pusers => P2PUsers},
+  groups_sm:activate(LServer, LocalPart, Info),
+  Info1 = add_user_to_peer_to_peer_chat(LServer, Invited, Group, ParentGroup),
+  Info2 = add_user_to_peer_to_peer_chat(LServer, Creator, Group, ParentGroup),
+  mod_groups_vcard:create_p2p_avatar(LServer, Group, element(3,Info1), element(3,Info2)),
+%%  Send invite.
+  send_invite_to_p2p(LServer, Creator, Group, ParentGroup, Invited,
+    CreatorNick, InvitedNick),
+%%  Return response.
+  Created = create_result_query(LocalPart, InvitedNick, Desc,
+    Privacy, Membership, Index, [], []),
+  Created1= Created#groups_query{sub_els = Created#groups_query.sub_els ++
+  [mod_groups_vcard:get_photo_meta(LServer, Invited, ParentGroup)] },
+  {ok, Created1}.
+
+send_invite_to_p2p(LServer, Creator, Invited, Group, ParentGroup) ->
+  CreatorNick = mod_groups_users:get_nick_in_chat(LServer, Creator, ParentGroup),
+  InvitedNick = mod_groups_users:get_nick_in_chat(LServer, Invited, ParentGroup),
+  send_invite_to_p2p(LServer, Creator, Group, ParentGroup, Invited, CreatorNick,
+    InvitedNick).
+
+send_invite_to_p2p(LServer, Creator, Group, ParentGroup, Invited,
+    CreatorNick, InvitedNick) ->
+  GroupInfo = [#groups_privacy{cdata = <<"incognito">>},
+    #groups_membership{cdata = <<"member-only">>},
+    #groups_description{cdata = <<"Private chat">>},
+    #groups_index{cdata = <<"none">>},
+    #groups_name{cdata = CreatorNick},
+    mod_groups_vcard:get_photo_meta(LServer, Creator, ParentGroup)],
+  GroupX = #groups_x{parent = jid:from_string(ParentGroup), sub_els = GroupInfo},
+  GroupJID = jid:from_string(Group),
+  [ParentGroupName] = get_info(ParentGroup, [name]),
+  Text = <<"You was invited to ",Group/binary," Please add it to the contacts to join a group chat">>,
+  Reason = <<CreatorNick/binary,
+    " from ",ParentGroupName/binary, " invited you to chat privately."
+    " If you accept this invitation, you won't see each other's real XMPP IDs."
+    " You will be known as ", InvitedNick/binary
+  >>,
+  Invite = #groups_invite{reason = Reason, jid = GroupJID},
+  Message = #message{
+    type = chat,
+    id = randoms:get_string(),
+    from = jid:replace_resource(GroupJID, <<"Group">>),
+    to = jid:from_string(Invited),
+    body = [#text{lang = <<>>,data = Text}],
+    sub_els = [Invite, GroupX]},
+  ejabberd_router:route(Message).
+
 get_p2p_chat(LServer,ParentChat,User1,User2) ->
   case ejabberd_sql:sql_query(
     LServer,
@@ -677,6 +644,35 @@ add_user_to_peer_to_peer_chat(LServer, User, NewChat,OldChat) ->
   mod_groups_users:add_user_to_peer_to_peer_chat(LServer,User,NewChat, Info),
   Info.
 
+group_info_element(Server, User, Group) ->
+  {Name, Privacy, Index, Membership, Desc, _, _,
+    _, Parent, _} = mod_groups_chats:get_info(Group),
+  {ParentJID, Name1, Avatar} = get_parent_name_avatar(Server, Group,
+    User, Parent, Name),
+  Els = [
+    #groups_name{cdata = Name1},
+    #groups_description{cdata = Desc},
+    #groups_privacy{cdata = Privacy},
+    #groups_membership{cdata = Membership},
+    #groups_index{cdata = Index},
+    Avatar
+  ],
+  #groups_x{xmlns = ?NS_GROUPS, parent = ParentJID,
+    members = mod_groups_chats:count_users(Server, Group),
+    sub_els = Els}.
+
+get_parent_name_avatar(Server, Group, User, Parent, Name)->
+  case Parent of
+    <<"0">> ->
+      {undefined, Name,
+        mod_groups_vcard:get_group_avatar_metadata(Server, Group)};
+    _ ->
+      ParentJID = jid:from_string(Parent),
+      [Users] = get_info(Group, [p2pusers]),
+      {User2, Name1} = hd(lists:keydelete(User, 1, Users)),
+      Avatar = mod_groups_vcard:get_photo_meta(Server, User2, Group),
+      {ParentJID, Name1, Avatar}
+  end.
 
 delete_group(Chat, IsP2P) ->
   {LocalPart, LServer,_} = jid:tolower(jid:from_string(Chat)),
@@ -738,17 +734,6 @@ sql_delete_group(LServer, Chat) ->
     ?SQL("delete from groupchats where jid=%(Chat)s and %(LServer)H")
   ).
 
-get_chat_name(Chat,Server) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(name)s
-    from groupchats where jid=%(Chat)s and %(Server)H")) of
-    {selected,[{Name}]} ->
-      Name;
-    _ ->
-      <<>>
-  end.
-
 db_get_info(Group, Server) ->
   case ejabberd_sql:sql_query(
     Server,
@@ -760,7 +745,7 @@ db_get_info(Group, Server) ->
     _ -> error
   end.
 
-get_info(Group, _Server) ->
+get_info(Group)->
   {LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
   case ejabberd_sm:get_user_info(LUser, LServer, <<"Group">>) of
     offline -> error;
@@ -774,21 +759,38 @@ get_info(Group, _Server) ->
         Domains, Parent, Status}
   end.
 
-form_chat_information(Chat,LServer,Type) ->
-  Fields = get_chat_fields(Chat,LServer),
-  #xdata{type = Type, title = <<"Group change">>, instructions = [<<"Fill out this form to change the group properties">>], fields = Fields}.
+get_info(Group, Keys) ->
+  {LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
+  case ejabberd_sm:get_user_info(LUser, LServer, <<"Group">>) of
+    offline -> error;
+    Info ->
+      [proplists:get_value(Key, Info, undefined) || Key <- Keys]
+  end.
 
-get_chat_fields(Chat,LServer) ->
+
+form_chat_information(Chat, Type) ->
+  Fields = get_chat_fields(Chat),
+  #xdata{type = Type, title = <<"Group change">>,
+    instructions = [<<"Fill out this form to change the group properties">>],
+    fields = Fields}.
+
+get_chat_fields(Group) ->
   {Name, _Anonymous, Search, Model, Desc, _ChatMessage, ContactList,
-    DomainList, _Parent, _Status} = get_info(Chat, LServer),
+    DomainList, _Parent, _Status} = get_info(Group),
   [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS]},
-    #xdata_field{var = <<"name">>, type = 'text-single', values = [Name], label = <<"Name">>},
-    #xdata_field{var = <<"description">>, type = 'text-multi', values = [Desc], label = <<"Description">>},
-    #xdata_field{var = <<"index">>, type = 'list-single', values = [Search], label = <<"Index">>, options = index_options()},
-    #xdata_field{var = <<"membership">>, type = 'list-single', values = [Model], label = <<"Membership">>, options = membership_options()},
-    #xdata_field{var = <<"contacts">>, type = 'jid-multi', values = [form_list(ContactList)], label = <<"Contacts">>},
-    #xdata_field{var = <<"domains">>, type = 'jid-multi', values = [form_list(DomainList)], label = <<"Domains">>}
+    #xdata_field{var = <<"name">>, type = 'text-single', values = [Name],
+      label = <<"Name">>},
+    #xdata_field{var = <<"description">>, type = 'text-multi', values = [Desc],
+      label = <<"Description">>},
+    #xdata_field{var = <<"index">>, type = 'list-single', values = [Search],
+      label = <<"Index">>, options = index_options()},
+    #xdata_field{var = <<"membership">>, type = 'list-single', values = [Model],
+      label = <<"Membership">>, options = membership_options()},
+    #xdata_field{var = <<"contacts">>, type = 'jid-multi', values = [form_list(ContactList)],
+      label = <<"Contacts">>},
+    #xdata_field{var = <<"domains">>, type = 'jid-multi', values = [form_list(DomainList)],
+      label = <<"Domains">>}
     ].
 
 -spec decode(binary(),binary(),list()) -> list().

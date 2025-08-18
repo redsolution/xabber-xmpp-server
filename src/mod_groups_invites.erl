@@ -117,9 +117,14 @@ sql_get_invited(Server,Chat, User) ->
   end.
 
 invite_right(_Acc, {Admin, Chat, _Server, _Invite}) ->
-  case mod_groups_restrictions:is_restricted(<<"send-invitations">>, Admin, Chat) of
-    true -> {stop,forbidden};
-    _ -> ok
+  case mod_groups_chats:get_info(Chat, [parent]) of
+    [<<"0">>] ->
+      case mod_groups_restrictions:is_restricted(<<"send-invitations">>, Admin, Chat) of
+        true -> {stop,forbidden};
+        _ -> ok
+      end;
+    _ ->
+      {stop,forbidden}
   end.
 
 check_user(_Acc, {_A, Chat, Server, #groups_invite{invite_jid = User}}) ->
@@ -164,12 +169,11 @@ send_invite(_Acc, {Admin, Chat, _Server,
 message_invite(User,Chat,Admin,Reason) ->
   U = #groups_invite_user{jid = Admin},
   ChatJID = jid:from_string(Chat),
-  LServer = ChatJID#jid.lserver,
-  {ok, Anonymous, _} = mod_groups_chats:get_type_and_parent(LServer,Chat),
+  [Privacy] = mod_groups_chats:get_info(Chat, [privacy]),
   Text = <<"Add ",Chat/binary," to the contacts to join a group chat">>,
     #message{type = chat,to = jid:from_string(User), from = jid:from_string(Chat), id = randoms:get_string(),
       sub_els = [#groups_invite{user = U, reason = Reason, jid = ChatJID},
-        #groups_x{sub_els = [#groups_privacy{cdata = Anonymous}]}],
+        #groups_x{sub_els = [#groups_privacy{cdata = Privacy}]}],
       body = [#text{lang = <<>>,data = Text}], meta = #{}}.
 
 %% internal functions
@@ -190,11 +194,11 @@ remove_invite_result(Result, User, Chat) ->
   case Result of
     {updated,1} ->
       From = jid:from_string(Chat),
-      Users = [jid:from_string(User)],
-      Unsubscribe = #presence{type = unsubscribe},
-      Unavailable = #presence{type = unavailable},
-      mod_groups_presence:send_presence(Unsubscribe, Users, From),
-      mod_groups_presence:send_presence(Unavailable, Users, From),
+      To = jid:from_string(User),
+      Unsubscribe = #presence{type = unsubscribe, from = From, to= To},
+      Unavailable = #presence{type = unavailable,from = From, to= To},
+      ejabberd_router:route(Unavailable),
+      ejabberd_router:route(Unsubscribe),
       ok;
     _ ->
       {error, not_found}

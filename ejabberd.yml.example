@@ -866,9 +866,9 @@ modules:
     ## remove_empty: true
   mod_panel: {}
     ## cronjob_token: "strongpassword"
-  ## nick_generator:
-    ## pre_generated_images: "@HOME@/pre_images"
-    ## pre_generated_images_count: 20
+  ## mod_nick_avatar:
+    ## store_path: "@HOME@/pre_images"
+    ## amount: 20
   mod_block_users: {}
   mod_ws_proxy_detect: {}
   mod_xabber_push:

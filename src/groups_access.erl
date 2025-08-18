@@ -54,9 +54,8 @@ mod_options(_) -> [].
 check_access(_Acc, #presence{to = To, from = From}) ->
   Group = jid:to_string(jid:remove_resource(To)),
   UserJID = jid:remove_resource(From),
-  Server = To#jid.lserver,
-  case mod_groups_chats:get_info(Group, Server) of
-    {_, _, _, Membership, _, _, _, Domains, _, _} ->
+  case mod_groups_chats:get_info(Group, [membership, domains]) of
+    [Membership, Domains] ->
       case check_access(UserJID, Group, Membership, Domains) of
         ok -> ok;
         Why -> {stop, Why}

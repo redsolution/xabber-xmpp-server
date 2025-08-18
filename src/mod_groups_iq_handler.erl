@@ -99,14 +99,14 @@ process_groupchat(#iq{type = set,
 process_groupchat(#iq{type = set, lang = Lang, to = To, from = From,
   sub_els = [#groups_query{xmlns = ?NS_GROUPS_CREATE,
     sub_els = SubEls} = Create]} = IQ) ->
-  Creator = From#jid.luser,
+  Username = From#jid.luser,
   Server = To#jid.lserver,
   Host = From#jid.lserver,
   DecodedCreate = xmpp:decode_els(Create),
   PeerToPeer = xmpp:get_subtag(DecodedCreate, #groups_ptp{}),
   case PeerToPeer of
     false ->
-      Result = ejabberd_hooks:run_fold(create_groupchat, Server, [], [Server,Creator,Host,SubEls]),
+      Result = ejabberd_hooks:run_fold(create_groupchat, Server, [], [Server,Username,Host,SubEls]),
       case Result of
         {ok,Query,Chat,User} ->
           Proc = gen_mod:get_module_proc(Server, ?MODULE),
@@ -117,24 +117,27 @@ process_groupchat(#iq{type = set, lang = Lang, to = To, from = From,
         _ ->
           xmpp:make_error(IQ, xmpp:err_bad_request())
       end;
-    #groups_ptp{} ->
-      Result = ejabberd_hooks:run_fold(groupchat_peer_to_peer,
-        Server, [], [Server,jid:to_string(jid:remove_resource(From)),PeerToPeer]),
+    #groups_ptp{jid = ParentGroupJID, id = InvitedID} ->
+      Creator = jid:to_string(jid:remove_resource(From)),
+      ParentGroup =  jid:to_string(jid:remove_resource(ParentGroupJID)),
+      Result = mod_groups_chats:create_p2p_group(Server, Creator,
+        InvitedID, ParentGroup),
       case Result of
-        {ok,Created} ->
+        {ok, Created} ->
           xmpp:make_iq_result(IQ, Created);
-        {exist,ExistedChat} ->
-          ExistedChatJID = jid:from_string(ExistedChat),
-          NewSub = [#groups_x{jid = ExistedChatJID}],
-          NewIq = xmpp:set_els(IQ,NewSub),
+        {exists, Group} ->
+          GroupJID = jid:from_string(Group),
+          NewIq = xmpp:set_els(IQ, [#groups_x{jid = GroupJID}]),
           xmpp:make_error(NewIq, xmpp:err_conflict());
-        stop ->
-          ok;
+        {error, not_allowed} ->
+          xmpp:make_error(IQ, xmpp:err_not_allowed());
+        {error, bad_request} ->
+          xmpp:make_error(IQ, xmpp:err_bad_request());
         _ ->
-          xmpp:make_error(IQ, xmpp:serr_internal_server_error(<<"Internal server error">>,<<"en">>))
+          xmpp:make_error(IQ, xmpp:err_internal_server_error())
       end;
     _ ->
-      xmpp:make_error(IQ, xmpp:serr_internal_server_error(<<"Internal server error">>,<<"en">>))
+      xmpp:make_error(IQ, xmpp:err_internal_server_error())
   end;
 process_groupchat(#iq{type=get, to= To, from = From,
   sub_els = [#groups_search{name = Name, anonymous = Anon,
@@ -201,8 +204,7 @@ make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   ejabberd_router:route(xmpp:make_iq_result(Iq,Result));
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"jabber:iq:last">>}]}]} = Iq) ->
-  Result = mod_groups_vcard:iq_last(),
-  ejabberd_router:route(xmpp:make_iq_result(Iq,Result));
+  ejabberd_router:route(xmpp:make_iq_result(Iq,#last{seconds = 0}));
 make_action(#iq{type = get, sub_els = [#xmlel{name = <<"time">>,
   attrs = [{<<"xmlns">>,<<"urn:xmpp:time">>}]}]} = Iq) ->
   R = mod_time:process_local_iq(Iq),
@@ -306,9 +308,8 @@ make_action(#iq{type = set, sub_els = [#xmlel{name = <<"revoke">>,
 make_action(#iq{to = To,type = get, sub_els = [#xmlel{name = <<"query">>,
   attrs = [{<<"xmlns">>,<<"http://jabber.org/protocol/disco#info">>}]}]} = Iq) ->
   ChatJID = jid:to_string(jid:tolower(jid:remove_resource(To))),
-  Server = To#jid.lserver,
-  {Name, Anonymous, _Search, Model, Desc, _ChatMessage, _Contacts,
-    _Domains, _Parent, _Status} = mod_groups_chats:get_info(ChatJID, Server),
+  [Name, Anonymous, Model, Desc] = mod_groups_chats:get_info(ChatJID,
+    [name, privacy, membership, description]),
   Identity = #xmlel{name = <<"identity">>,
   attrs = [{<<"category">>,<<"conference">>},{<<"type">>,<<"groupchat">>},{<<"name">>,Name}]},
   FeatureList = [<<"urn:xmpp:avatar:metadata">>,<<"urn:xmpp:avatar:data">>,
@@ -661,34 +662,12 @@ process_groupchat_iq(#iq{lang = Lang, type = set, from = From, to = To,
 process_groupchat_iq(#iq{type = get, from = From, to = To,
   sub_els = [#groups_query{xmlns = ?NS_GROUPS_INFO}]} = IQ) ->
   Group = jid:to_string(jid:remove_resource(To)),
-  Server = To#jid.lserver,
   User = jid:to_string(jid:remove_resource(From)),
-  {Name, Privacy, Index, Membership, Desc, _, _,
-    _, Parent, _} = mod_groups_chats:get_info(Group, Server),
-  IsAllowed = case Membership of
-                <<"open">> -> true;
-                _ ->
-                  mod_groups_users:is_in_chat(Server, Group, User)
-              end,
-  case IsAllowed of
-    true ->
-      ParentJID = case Parent of
-                    <<"0">> -> undefined;
-                    _ ->jid:from_string(Parent)
-                  end,
-      Els = [
-        #groups_name{cdata = Name},
-        #groups_description{cdata = Desc},
-        #groups_privacy{cdata = Privacy},
-        #groups_membership{cdata = Membership},
-        #groups_index{cdata = Index}
-      ],
-      Info = #groups_x{xmlns = ?NS_GROUPS, parent = ParentJID,
-        members = mod_groups_chats:count_users(Server, Group),
-        sub_els = Els},
+  case mod_groups_chats:group_info_query(User, Group) of
+    {ok, Info} ->
       ejabberd_router:route(xmpp:make_iq_result(IQ, Info));
-    _ ->
-      ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_not_allowed()))
+    {error, Err} ->
+      ejabberd_router:route(xmpp:make_error(IQ, Err))
   end;
 process_groupchat_iq(#iq{type = get, from = From, to = To,
   sub_els = [#groups_query{xmlns = ?NS_GROUPS}]} = IQ) ->
@@ -775,7 +754,7 @@ process_mam_iq(#iq{from = From, to = To, lang = Lang,
                    Indexes = mod_groups:get_option(Server, global_indexs),
                    case lists:member(User, Indexes) of
                       true ->
-                        mod_groups_chats:is_global_indexed(Server, Chat);
+                        mod_groups_chats:is_global_indexed(Chat);
                      _ -> false
                    end;
                  _ -> true

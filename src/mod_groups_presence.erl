@@ -32,11 +32,9 @@
 -export([init/1, handle_call/3, handle_cast/2, terminate/2, handle_info/2]).
 -export([start/2, stop/1, depends/2, mod_options/1]).
 -export([
-  form_presence/1,
-  form_presence/3,
   check_in_subscription/2,
   groupchat_changed/5,
-  send_presence/3,
+  send_presence/4,
   change_present_state/3,
   revoke_invite/2]).
 -export([
@@ -140,15 +138,13 @@ revoke_invite(Chat,User) ->
   ejabberd_router:route(Presence).
 
 groupchat_changed(LServer, Chat, _User, ChatProperties, Status) ->
-  ChatJID = jid:from_string(Chat),
-  FromChat = jid:replace_resource(ChatJID,<<"Group">>),
   Users = mod_groups_users:users_to_send(LServer,Chat),
   case Status of
     <<"inactive">> ->
       delete_all_sessions(Chat),
-      send_presence(form_presence(Chat, unavailable, []),Users,FromChat);
+      send_presence(Users, Chat, unavailable, []);
     _ ->
-      send_presence(form_presence(Chat),Users,FromChat)
+      send_presence(Users, Chat, available, [])
   end,
   maybe_send_to_index(LServer, Chat, ChatProperties).
 
@@ -160,12 +156,90 @@ maybe_send_to_index(LServer, Chat, ChatProperties) ->
       ok
   end.
 
-send_presence(_Message,[],_From) ->
+send_presence(Users, Group, Type, Opts) ->
+  GroupJID = jid:replace_resource(jid:from_string(Group), <<"Group">>),
+  case mod_groups_chats:get_info(Group) of
+    error ->
+      %% Happens when deleting a group
+      P = #presence{type = Type, id = randoms:get_string(),
+        sub_els = [#groups_x{xmlns = ?NS_GROUPS}],
+        status = [], show = undefined},
+      lists:foreach(fun(User) ->
+        ejabberd_router:route(GroupJID, User , P)
+                    end, Users);
+    Info ->
+      {GroupX, HumanStatus, Show, NameEl, IsP2P} =
+        group_info(GroupJID#jid.lserver, Group, Info, Opts),
+      Name = case IsP2P of
+               true ->
+                 hd(mod_groups_chats:get_info(Group, [p2pusers]));
+               _-> NameEl
+             end,
+      send_presence(IsP2P, Users, GroupJID, Type, GroupX,
+        Name, HumanStatus, Show)
+  end.
+
+send_presence(From, To, Type, GroupX, HumanStatus, Show) ->
+  P = #presence{type = Type, id = randoms:get_string(),
+    sub_els = [GroupX], status = HumanStatus, show = Show},
+  ejabberd_router:route(From, To , P).
+
+send_presence(_, [], _, _, _, _, _, _)  ->
   ok;
-send_presence(Message,Users,From) ->
-  [User|RestUsers] = Users,
-  ejabberd_router:route(From, User ,Message),
-  send_presence(Message,RestUsers,From).
+send_presence(false, [User|RestUsers], GroupJID, Type,
+    GroupX, NameEl, HumanStatus, Show) ->
+  GroupX1 = GroupX#groups_x{sub_els = GroupX#groups_x.sub_els ++ [NameEl]},
+  send_presence(GroupJID, User, Type, GroupX1, HumanStatus, Show),
+  send_presence(false, RestUsers, GroupJID, Type,
+    GroupX, NameEl, HumanStatus, Show);
+send_presence(true, [User|RestUsers], GroupJID, Type,
+    GroupX, Names, HumanStatus, Show) ->
+  UserS = jid:to_string(jid:remove_resource(User)),
+  {_, Name} = hd(lists:keydelete(UserS, 1, Names)),
+  NameEl = #groups_name{cdata = Name},
+  GroupX1 = GroupX#groups_x{sub_els = GroupX#groups_x.sub_els ++ [NameEl]},
+  send_presence(GroupJID, User, Type, GroupX1, HumanStatus, Show),
+  send_presence(true, RestUsers, GroupJID, Type,
+    GroupX, Names, HumanStatus, Show).
+
+
+group_info(Server, Group,  {Name, Anonymous, Search, Model,
+  Desc, Message, _Contacts, _Domains, ParentChat, Status}, Opts) ->
+  Present = case proplists:get_value(present, Opts) of
+              true when Status == <<"inactive">> -> <<"0">>;
+              true -> get_present(Group);
+              _ -> undefined
+            end,
+  {Parent, HumanStatus, Show, IsP2P} =
+    case ParentChat of
+      <<"0">> ->
+        {HS, Sh} = mod_groups_chats:define_human_status_and_show(
+          Server, Group, Status),
+        {undefined, HS, Sh, false};
+      _ ->
+        {jid:from_string(ParentChat),
+          [#text{data = <<"Private chat">>}], undefined, true}
+    end,
+  NameEl = #groups_name{cdata = Name},
+  SubEls = [
+    #groups_privacy{cdata = Anonymous},
+    #groups_pinned_message{cdata = integer_to_binary(Message)}
+  ],
+  SubElsFull = case  proplists:get_value(full, Opts) of
+                 true ->
+                   [#groups_index{cdata = Search},
+                     #groups_membership{cdata = Model},
+                     #groups_description{cdata = Desc}];
+                 _ -> []
+               end,
+  X = #groups_x{
+    xmlns = ?NS_GROUPS,
+    members = mod_groups_chats:count_users(Server, Group),
+    present = Present,
+    parent = Parent,
+    sub_els = SubEls ++ SubElsFull
+  },
+  {X, HumanStatus, Show, NameEl, IsP2P}.
 
 check_in_subscription(Acc, #presence{to=To} = Packet) ->
   Server = To#jid.lserver,
@@ -229,10 +303,10 @@ answer_presence(#presence{to=To, from = From, type = subscribe, sub_els = Sub} =
     _ ->
       UserBare = jid:remove_resource(From),
       GroupS = jid:to_string(jid:remove_resource(To)),
-      ejabberd_router:route(FromChat, UserBare, form_presence(GroupS, subscribed, [])),
-      ejabberd_router:route(FromChat, UserBare, form_presence(GroupS, subscribe, [])),
+      send_presence([UserBare], GroupS, subscribed, []),
+      send_presence([UserBare], GroupS, subscribe, []),
       Decoded = lists:map(fun(N)-> xmpp:decode(N) end, Sub),
-      case mod_groups_chats:is_anonim(Server, GroupS) of
+      case mod_groups_chats:is_anonim(GroupS) of
         false ->
           ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta());
         _ -> ok
@@ -255,7 +329,7 @@ answer_presence(#presence{to=To, from = From, lang = Lang, type = subscribed}) -
   case Result of
     ok ->
       Users = mod_groups_users:users_to_send(Server,Chat),
-      send_presence(form_presence(Chat, available, [present]), Users, FromChat),
+      send_presence(Users, Chat, available, [present]),
       ejabberd_router:route(FromChat,From, mod_groups_vcard:get_pubsub_meta());
     _ ->
       ok
@@ -271,7 +345,7 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
     ok ->
       delete_all_user_sessions(User, Chat),
       Users = mod_groups_users:users_to_send(Server, Chat),
-      send_presence(form_presence(Chat, available, [present]), Users, ChatJIDRes),
+      send_presence(Users, Chat, available, [present]),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
       ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
     alone ->
@@ -292,7 +366,7 @@ answer_presence(#presence{lang = Lang,to = ChatJID, from = UserJID, type = unsub
         ok ->
           delete_all_user_sessions(User, Chat),
           Users = mod_groups_users:users_to_send(Server, Chat),
-          send_presence(form_presence(Chat, available, [present]), Users, ChatJID),
+          send_presence(Users, Chat, available, [present]),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
           ejabberd_router:route(ChatJIDRes,UserJID,#presence{type = unavailable, id = randoms:get_string()});
         alone ->
@@ -309,7 +383,7 @@ answer_presence(Presence) ->
   ?DEBUG("Drop presence ~p",[Presence]).
 
 answer_presence(From, To, SubEls)->
-  ChatJid = jid:to_string(jid:make(To#jid.luser,To#jid.lserver,<<>>)),
+  ChatJid = jid:to_string(jid:remove_resource(To)),
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
   NewHash = case lists:keyfind(vcard_xupdate,1, SubEls) of
@@ -317,7 +391,7 @@ answer_presence(From, To, SubEls)->
               Hash -> Hash#vcard_xupdate.hash
             end,
   OldHash = mod_groups_vcard:get_vcard_avatar_hash(Server,User),
-  IsAnon = mod_groups_chats:is_anonim(Server,ChatJid),
+  IsAnon = mod_groups_chats:is_anonim(ChatJid),
   case NewHash of
     OldHash -> ok;
     <<>> -> delete_photo_if_exist;
@@ -333,9 +407,8 @@ answer_presence(From, To, SubEls)->
       mod_groups_users:change_peer_to_peer_invitation_state(Server,User,ChatJid,PeerState);
     _ -> ok
   end,
-  FromChat = jid:replace_resource(To,<<"Group">>),
   mod_groups_vcard:make_chat_notification_message(Server,ChatJid,From),
-  ejabberd_router:route(FromChat,From,form_presence(ChatJid)),
+  send_presence([From], ChatJid, available, []),
   case IsAnon of
     false ->
       mod_groups_vcard:maybe_update_avatar(From,To,Server);
@@ -369,7 +442,6 @@ change_present_state(GroupJID, UserJID, PresentType) ->
 
 send_notification(From, To, PresentNum, PresentType) ->
   Chat = jid:to_string(jid:remove_resource(To)),
-  FromChat = jid:replace_resource(To,<<"Group">>),
   ActualPresentNum = get_present(Chat),
   Users =
     case ActualPresentNum of
@@ -383,79 +455,15 @@ send_notification(From, To, PresentNum, PresentType) ->
         %% notify everyone about the counter change
         get_users_with_session(Chat)
   end,
-  send_presence(form_presence(Chat, available, [present]), Users, FromChat).
+  send_presence(Users, Chat, available, [present]).
 
 get_users_with_session(Chat) ->
   SS = select_all_sessions(Chat),
   [jid:make(U,S,R)||{participant_session, _, U, S, R, _} <- SS].
 
 send_presence_to_index(Server, Chat) ->
-  GlobalIndexes = mod_groups:get_option(Server, global_indexs),
-  ChatJID = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
-  Presence = form_presence(Chat, available, [full]),
-  lists:foreach(fun(Index) ->
-    To = jid:from_string(Index),
-    ejabberd_router:route(ChatJID, To, Presence)
-                end, GlobalIndexes).
-
-
-form_presence(Group) ->
-  form_presence(Group, available, []).
-
-form_presence(Group, Type, Opts) ->
-  {Groupchat_x, HumanStatus, Show} = info_about_chat(Group, Opts),
-  #presence{type = Type, id = randoms:get_string(), sub_els = [Groupchat_x], status = HumanStatus, show = Show}.
-
-
-
-info_about_chat(ChatJid, Opts) ->
-  S = jid:from_string(ChatJid),
-  Server = S#jid.lserver,
-  case mod_groups_chats:get_info(ChatJid,Server) of
-    error ->
-      %% Happens when deleting a group
-      {#groups_x{xmlns = ?NS_GROUPS}, [],undefined};
-    Info ->
-      info_about_chat(Server, ChatJid, Info, Opts)
-  end.
-info_about_chat(Server, ChatJid,  {Name, Anonymous, Search, Model,
-  Desc, Message, _Contacts, _Domains, ParentChat, Status}, Opts) ->
-  Present = case proplists:get_value(present, Opts) of
-              true when Status == <<"inactive">> -> <<"0">>;
-              true -> get_present(ChatJid);
-              _ -> undefined
-            end,
-  {Parent, HumanStatus, Show} =
-    case ParentChat of
-      <<"0">> ->
-        {HS, Sh} = mod_groups_chats:define_human_status_and_show(
-          Server, ChatJid, Status),
-        {undefined, HS, Sh};
-      _ ->
-        {jid:from_string(ParentChat),
-          [#text{data = <<"Private chat">>}], undefined}
-    end,
-  SubEls = [
-    #groups_name{cdata = Name},
-    #groups_privacy{cdata = Anonymous},
-    #groups_pinned_message{cdata = integer_to_binary(Message)}
-  ],
-  SubElsFull = case  proplists:get_value(full, Opts) of
-              true ->
-                [#groups_index{cdata = Search},
-                  #groups_membership{cdata = Model},
-                  #groups_description{cdata = Desc}];
-              _ -> []
-            end,
-  X = #groups_x{
-    xmlns = ?NS_GROUPS,
-    members = mod_groups_chats:count_users(Server,ChatJid),
-    present = Present,
-    parent = Parent,
-    sub_els = SubEls ++ SubElsFull
-  },
-  {X , HumanStatus, Show}.
-
+  GlobalIndexes = [jid:from_string(I) || I <- mod_groups:get_option(Server, global_indexs)],
+  send_presence(GlobalIndexes, Chat, available, [full]).
 
 %%%===================================================================
 %%% present functions

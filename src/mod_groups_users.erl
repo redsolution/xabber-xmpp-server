@@ -53,7 +53,7 @@
   update_last_seen/3,
   get_user_id/3,
   get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/4,
-  update_user_status/3, user_no_read/2, get_nick_in_chat/3, get_user_by_id_and_allow_to_invite/3,
+  update_user_status/3, user_no_read/2, get_nick_in_chat/3, check_invited_to_p2p/3,
   process_subscribed/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2,
   change_peer_to_peer_invitation_state/4,
   get_users_from_p2p/2
@@ -799,11 +799,12 @@ get_existed_user_by_id(Server,Chat,Id) ->
       false
   end.
 
-get_user_by_id_and_allow_to_invite(Server,Chat,Id) ->
+check_invited_to_p2p(Server, Group, Id) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(username)s from groupchat_users "
-    " where chatgroup=%(Chat)s and id=%(Id)s and p2p_state ='true' ")) of
+    " where chatgroup=%(Group)s and id=%(Id)s "
+    " and p2p_state ='true' and subscription='both'")) of
     {selected,[{User}]} ->
       User;
     _ ->

@@ -778,12 +778,16 @@ process_mam_iq(#iq{from = From, to = To, lang = Lang,
 change_query(QueryEl, Server, Chat, Lang) ->
   case mod_mam:parse_query(QueryEl, Lang) of
     {ok, Query} ->
-      Q1 = replace_id_to_jid(Query, Server, Chat),
-      %% Messages in archive are stored with "urn:xabber:chat" type.
-      Q2 = lists:keydelete('conversation-type', 1, Q1),
-      Fields = mam_query:encode(Q2),
-      [QueryEl#mam_query{xdata =
-      #xdata{type = 'submit', fields = Fields}}];
+      case replace_id_to_jid(Query, Server, Chat) of
+        error ->
+          {error, xmpp:err_bad_request()};
+        Q1 ->
+          %% Messages in archive are stored with "urn:xabber:chat" type.
+          Q2 = lists:keydelete('conversation-type', 1, Q1),
+          Fields = mam_query:encode(Q2),
+          [QueryEl#mam_query{xdata =
+          #xdata{type = 'submit', fields = Fields}}]
+      end;
     Err ->
       Err
   end.
@@ -792,8 +796,11 @@ replace_id_to_jid(Query, Server, Chat) ->
   case lists:keyfind('with', 1, Query) of
     {_, Value} ->
       ID = jid:to_string(Value),
-      JS = mod_groups_users:get_user_by_id(Server, Chat , ID),
-      lists:keyreplace('with', 1, Query,
-        {'with', jid:from_string(JS)});
+      case mod_groups_users:get_user_by_id(Server, Chat , ID) of
+        none -> error;
+        JS ->
+          lists:keyreplace('with', 1, Query,
+            {'with', jid:from_string(JS)})
+      end;
     _ -> Query
   end.

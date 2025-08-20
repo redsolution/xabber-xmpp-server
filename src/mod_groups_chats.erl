@@ -517,10 +517,10 @@ create_p2p_cpg(LServer, Creator, InvitedID, ParentGroup) ->
   end.
 
 create_p2p_ciu(LServer, Creator, InvitedID, ParentGroup) ->
-  case mod_groups_users:get_user_by_id_and_allow_to_invite(LServer,
+  case mod_groups_users:check_invited_to_p2p(LServer,
     ParentGroup, InvitedID) of
     none ->
-      {error, not_exist};
+      {error, not_allowed};
     Creator ->
       {error, bad_request};
     User ->

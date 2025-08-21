@@ -34,7 +34,7 @@
 %% API
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
--export([maybe_delete_group/2, is_anonim/1, is_global_indexed/1, get_all_groups_info/1, get_all_info/3,
+-export([is_anonim/1, is_global_indexed/1, get_all_groups_info/1, get_all_info/3,
   get_count_chats/1, get_type_and_parent/1, update_user_counter/1]).
 
 -export([create_p2p_group/4, groupchat_exist/2, create_groupchat/13, group_info_query/2]).
@@ -45,17 +45,18 @@
   get_name_desc/2, define_human_status/3]).
 
 -export([parse_status_query/2, filter_fixed_fields/1, define_human_status_and_show/3]).
+% Delete group
+-export([delete_group/1, delete_group_query/3]).
+% Presence unsubscribed hook
+-export([maybe_delete_group/2, delete_user_p2p_groups/2]).
 % Status hooks
 -export([check_user_rights_to_change_status/4, check_user_rights_to_change_status/5, check_status/5]).
-% Delete chat hook
--export([delete_chat_hook/4]).
 %% Search
 -export([search/7]).
 
 -define(DEFAULT_GROUP_STATUS, <<"discussion">>).
 
 start(Host, _Opts) ->
-  ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, delete_chat_hook, 30),
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, check_create_query, 10),
   ejabberd_hooks:add(create_groupchat, Host, ?MODULE, create_chat, 50),
   ejabberd_hooks:add(groupchat_info, Host, ?MODULE, check_user_rights, 10),
@@ -65,29 +66,43 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, check_user_permission, 10),
   ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, validate_fs, 15),
   ejabberd_hooks:add(groupchat_info_change, Host, ?MODULE, change_chat, 20),
-  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, maybe_delete_group, 35).
+  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, maybe_delete_group, 35),
+  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user_p2p_groups, 40).
 
 stop(Host) ->
   ejabberd_hooks:delete(group_status_info, Host, ?MODULE, check_user_rights_to_change_status, 10),
   ejabberd_hooks:delete(group_status_change, Host, ?MODULE, check_user_rights_to_change_status, 10),
   ejabberd_hooks:delete(group_status_change, Host, ?MODULE, check_status, 20),
-  ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, delete_chat_hook, 30),
   ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, check_create_query, 10),
   ejabberd_hooks:delete(create_groupchat, Host, ?MODULE, create_chat, 50),
   ejabberd_hooks:delete(groupchat_info, Host, ?MODULE, check_user_rights, 10),
   ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, check_user_permission, 10),
   ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, validate_fs, 15),
   ejabberd_hooks:delete(groupchat_info_change, Host, ?MODULE, change_chat, 20),
-  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, maybe_delete_group, 35).
+  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, maybe_delete_group, 35),
+  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user_p2p_groups, 40).
 
 depends(_Host, _Opts) ->  [].
 
 mod_options(_Host) -> [].
 
-% delete chat hook
-delete_chat_hook(_Acc, _LServer, _User, Chat) ->
-  delete_group(Chat, false),
-  {stop, ok}.
+delete_group_query(_LServer, _UserJID, error) ->
+  {error, xmpp:err_bad_request()};
+delete_group_query(LServer, UserJID, GroupJID) ->
+  {GUser, GServer, _} = jid:tolower(GroupJID),
+  case mod_xabber_entity:is_group(GUser, GServer) of
+    true ->
+      Group = jid:to_string(GroupJID),
+      User = jid:to_string(jid:remove_resource(UserJID)),
+      case mod_groups_restrictions:is_owner(LServer, Group, User) of
+        yes ->
+          delete_group(Group);
+        _ ->
+          {error, xmpp:err_not_allowed()}
+      end;
+    _ ->
+      {error, xmpp:err_item_not_found()}
+  end.
 
 check_create_query(_Acc,Server,_CreatorLUser,_CreatorLServer,SubEls) ->
   LocalPart = case get_value(groups_localpart,SubEls) of
@@ -674,27 +689,35 @@ get_parent_name_avatar(Server, Group, User, Parent, Name)->
       {ParentJID, Name1, Avatar}
   end.
 
-delete_group(Chat, IsP2P) ->
-  {LocalPart, LServer,_} = jid:tolower(jid:from_string(Chat)),
+delete_group(Group) ->
+  case get_info(Group, [parent]) of
+    [<<"0">>] ->
+      delete_group(Group, false);
+    _ ->
+      delete_group(Group, true)
+  end.
+
+delete_group(Group, IsP2P) ->
+  {LocalPart, LServer,_} = jid:tolower(jid:from_string(Group)),
   case IsP2P of
     false ->
       lists:foreach(fun(G)->
         delete_group(G, true)
                     end,
-        get_dependent_groups(LServer, Chat));
+        get_dependent_groups(LServer, Group));
     _ -> ok
   end,
   groups_sm:deactivate(LServer,LocalPart),
-  AllUserMeta = mod_groups_vcard:get_all_image_metadata(LServer,Chat),
-  mod_groups_users:unsubscribe_all_for_delete(LServer, Chat),
-  mod_groups_presence:delete_all_sessions(Chat),
-  sql_delete_group(LServer, Chat),
+  AllUserMeta = mod_groups_vcard:get_all_image_metadata(LServer, Group),
+  mod_groups_users:unsubscribe_all_for_delete(LServer, Group),
+  mod_groups_presence:delete_all_sessions(Group),
+  sql_delete_group(LServer, Group),
 %%  delete archive
   mod_mam:remove_user(LocalPart, LServer),
 %%  delete user avatars
   mod_groups_vcard:maybe_delete_file(LServer,AllUserMeta),
 %%  delete group avatar
-  mod_groups_vcard:delete_group_avatar_file(Chat).
+  mod_groups_vcard:delete_group_avatar_file(Group).
 
 create_localpart() ->
   S = list_to_binary(
@@ -702,6 +725,25 @@ create_localpart() ->
   case jid:nodeprep(S) of
     error -> create_localpart();
     LP -> LP
+  end.
+
+
+delete_user_p2p_groups(_Acc,{Server, User, ParentChat, _UserCard, _Lang}) ->
+  P2PGroups = get_user_p2p_groups(Server, ParentChat, User),
+  lists:foreach(fun(G)->
+    delete_group(G, true)
+                end, P2PGroups).
+
+get_user_p2p_groups(LServer, ParentChat, User)->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(jid)s from groupchats where parent_chat = %(ParentChat)s "
+    " and (select true from groupchat_users where "
+    " username =%(User)s and chatgroup = jid) "
+    " and %(LServer)H")) of
+    {selected, Groups} -> [G || {G} <- Groups];
+    _ ->
+      []
   end.
 
 

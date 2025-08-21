@@ -148,19 +148,18 @@ process_groupchat(#iq{type=get, to= To, from = From,
   Query = mod_groups_chats:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
   xmpp:make_iq_result(Iq,Query);
 process_groupchat(#iq{from = From, to = To, type = set,
-  sub_els = [#groups_query{xmlns = ?NS_GROUPS_DELETE, cdata = Localpart}]} = IQ) ->
-  %% todo: Change query payload to <jid>group@domain.com</jid>
+  sub_els = [#groups_query{xmlns = ?NS_GROUPS_DELETE, cdata = Data}]} = IQ) ->
   Server = To#jid.lserver,
-  User = jid:to_string(jid:remove_resource(From)),
-  Chat = jid:to_string(jid:make(Localpart,Server)),
-  Result = ejabberd_hooks:run_fold(delete_groupchat, Server, [], [Server, User, Chat]),
-  case Result of
-    ok ->
-      xmpp:make_iq_result(IQ);
-    {error,Error} ->
-      xmpp:make_error(IQ, Error);
-    _ ->
-      xmpp:make_error(IQ, xmpp:err_internal_server_error())
+  GroupJID = case jid:from_string(Data) of
+               error -> error;
+               #jid{luser = <<"">>} -> jid:make(Data, Server);
+               JID -> JID
+             end,
+  case mod_groups_chats:delete_group_query(Server, From, GroupJID) of
+        {error, Err} ->
+          xmpp:make_error(IQ, Err);
+        _ ->
+          xmpp:make_iq_result(IQ)
   end;
 process_groupchat(IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).

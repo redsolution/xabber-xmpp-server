@@ -89,12 +89,12 @@
 -export([get_commands_spec/0, set_admin/2, make_jwt/3, add_group/8,
   revoke_tokens/0]).
 
-%% internal
-%%-export([create_user/1]).
+%% hooks
+-export([remove_admin/2]).
 
 
 %% gen_mod
-start(_Host, _Opts) ->
+start(Host, _Opts) ->
   ejabberd_mnesia:create(?MODULE, panel_opts,
     [{disc_copies, [node()]},
       {attributes, [key, val]}]),
@@ -106,9 +106,11 @@ start(_Host, _Opts) ->
       ok
   end,
   ejabberd_commands:register_commands(get_commands_spec()),
+  ejabberd_hooks:add(remove_user, Host, ?MODULE, remove_admin, 80),
   ok.
 
-stop(_Host) ->
+stop(Host) ->
+  ejabberd_hooks:delete(remove_user, Host, ?MODULE, remove_admin, 80),
   ok.
 
 depends(_Host, _Opts) -> [].
@@ -120,6 +122,11 @@ mod_opt_type(cronjob_token) ->
   fun(undefined) -> undefined;
     (Token) -> iolist_to_binary(Token)
   end.
+
+%%hooks
+remove_admin(User, Server) ->
+  remove_admin([{username,User}, {host, Server}]),
+  ok.
 
 %%%
 %%% Register commands
@@ -548,20 +555,20 @@ check_host(Host) ->
       end
   end.
 
-check_user(User, Host) when User == undefined orelse Host == undefined ->
-  badrequest_response();
 check_user(User, Host) ->
   JID = try
           jid:make(User, Host)
         catch
-          _:_  -> undefined
+          _:_  -> error
         end,
   check_user(JID).
 
+check_user(error) ->
+  {error, badarg};
 check_user(#jid{luser = LUser, lserver = LServer} = JID) ->
   case ejabberd_auth:user_exists(LUser, LServer) of
-    true -> JID;
-    _ -> {404,<<"Account does not exist">>}
+    true -> {ok, JID};
+    _ -> {error, notfound}
   end.
 
 convert_vcard([]) -> [];
@@ -731,16 +738,18 @@ remove_user(Args) ->
 set_password(Args) ->
   {Username, Host} = extract_user_host(Args),
   Password = proplists:get_value(password, Args),
-  case ejabberd_auth:user_exists(Username, Host) of
-    true ->
+  case check_user(Username, Host) of
+    {ok, _} ->
       case catch ejabberd_auth:set_password(Username, Host, Password) of
         ok -> {200, <<>>};
         Error ->
           ?ERROR_MSG("Command returned: ~p", [Error]),
           {500, <<>>}
       end;
-    false ->
-      {404, <<"unknown user">>}
+    {error, notfound} ->
+      {404, <<"unknown user">>};
+    _ ->
+      badrequest_response()
   end.
 
 block_user(Args) ->
@@ -974,10 +983,10 @@ add_group(GroupHost, OwnerUsername, OwnerDomain, GroupName,
 remove_group(Args) ->
   LUser = jid:nodeprep(proplists:get_value(localpart,Args)),
   LServer = extract_host(Args),
-  JID = jid:make(LUser, LServer),
+  Group = jid:to_string(jid:make(LUser, LServer)),
   case mod_xabber_entity:is_group(LUser, LServer) of
     true ->
-      mod_groups_chats:delete_chat_hook([], LServer, <<>>, jid:to_string(JID)),
+      mod_groups_chats:delete_group(Group),
       {200, <<>>};
     _ ->
       {404, <<"Group does not exist">>}
@@ -1018,13 +1027,15 @@ update_vcard(Username, Host, Ancestor, {List}) ->
 get_vcard(Args) ->
   {Username, Host} = extract_user_host(Args),
   case check_user(Username, Host) of
-    #jid{luser = LUser, lserver = LServer} ->
+    {ok, #jid{luser = LUser, lserver = LServer}} ->
       case convert_vcard(mod_vcard:get_vcard(LUser, LServer)) of
         [] -> {204, {[]}};
         VCard -> {200, {[{vcard,VCard}]}}
       end;
-    Result ->
-      Result
+    {error, notfound} ->
+      {404,<<"Account does not exist">>};
+    _ ->
+      badrequest_response()
   end.
 
 add_circle(Args)->
@@ -1112,49 +1123,28 @@ verify_jwt(Token) ->
   JWK = #{<<"kty">> => <<"oct">>, <<"k">> => base64url:encode(Key)},
   try jose_jwt:verify(JWK, Token) of
     {true, {jose_jwt, JWT}, _} ->
-      verify_jwt_payload(JWT);
+      Exp = maps:get(<<"exp">>, JWT, undefined),
+      Host = maps:get(<<"iss">>, JWT, undefined),
+      User  = maps:get(<<"sub">>, JWT, undefined),
+      check_jwt_payload(Exp, User, Host);
     _ ->
       false
   catch  _:_  -> false
   end.
 
-verify_jwt_payload(JWT) ->
-  Exp = maps:get(<<"exp">>, JWT, undefined),
-  verify_jwt_payload({exp, Exp}, JWT).
-
-verify_jwt_payload({_, undefined}, _) ->
-  false;
-verify_jwt_payload({exp , Exp}, JWT) when is_integer(Exp) ->
+check_jwt_payload(Exp, User, Host) when is_integer(Exp) ->
   case Exp > erlang:system_time(second) of
     true ->
-      Host = maps:get(<<"iss">>, JWT, undefined),
-      verify_jwt_payload({iss , Host}, JWT);
-    _ ->
-      false
-  end;
-verify_jwt_payload({iss , Host}, JWT) ->
-  case check_host(Host) of
-    {ok, LServer} ->
-      JWT1 = maps:update(<<"iss">>, LServer, JWT),
-      User  = maps:get(<<"sub">>, JWT, undefined),
-      verify_jwt_payload({sub , User}, JWT1);
-    _ ->
-      false
-  end;
-verify_jwt_payload({sub , User}, JWT) ->
-  Host = maps:get(<<"iss">>, JWT),
-  case jid:nodeprep(User) of
-    error ->
-      false;
-    LUser ->
-      case ejabberd_auth:user_exists(LUser, Host) of
-        true ->
-          {ok, {LUser, Host}};
+      case check_user(User, Host) of
+        {ok, #jid{luser = U, lserver = S}} ->
+          {ok, {U, S}};
         _ ->
           false
-      end
+      end;
+    _ ->
+      false
   end;
-verify_jwt_payload(_, _) ->
+check_jwt_payload(_, _, _) ->
   false.
 
 extract_user_host(PropList)->

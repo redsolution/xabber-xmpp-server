@@ -163,34 +163,12 @@ send_received(
         sub_els = [NewUniqueReceived]},
     ejabberd_router:route(jid:make(LServer), JID, Confirmation).
 
-%%store_origin_id(LServer, LUser, StanzaID, OriginID) ->
-%%    case ejabberd_sql:sql_query(
-%%           LServer,
-%%           ?SQL_INSERT(
-%%              "origin_id",
-%%              ["id=%(OriginID)s",
-%%                "username=%(LUser)s",
-%%                "server_host=%(LServer)s",
-%%               "stanza_id=%(StanzaID)d"])) of
-%%	{updated, _} ->
-%%	    ok;
-%%	Err ->
-%%	    Err
-%%    end.
-%% todo: get stanza id from archive
-get_stanza_id_by_origin_id(LServer,OriginID, LUser) ->
-  OriginIDLike = <<"%<origin-id %",
-    (ejabberd_sql:escape(ejabberd_sql:escape_like_arg_circumflex(OriginID)))/binary,
-    "%/>%">>,
-  TS = integer_to_binary(misc:now_to_usec(erlang:now()) - (24 * 3600000000)), %% last 24 hour
+get_stanza_id_by_origin_id(LServer, OriginID, LUser) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select
-    coalesce(max(@(timestamp)d),0)
-    from archive
-    where username=%(LUser)s and timestamp > %(TS)d
-    and xml like %(OriginIDLike)s
-    and %(LServer)H")) of
+    ?SQL("select @(timestamp)d from archive "
+    " where username=%(LUser)s and origin_id = %(OriginID)s "
+    " and %(LServer)H")) of
     {selected,[<<>>]} ->
       0;
     {selected,[{StanzaID}]} ->

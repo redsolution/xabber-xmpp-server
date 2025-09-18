@@ -402,7 +402,7 @@ CREATE TABLE groupchat_users (
     user_updated_at timestamp NOT NULL default timezone('utc'::text, now()),
     invited_by text,
     CONSTRAINT uc_groupchat_users_username_chatgroup UNIQUE (username,chatgroup),
-    CONSTRAINT uc_groupchat_users_chatgroup_id UNIQUE (chatgroup,id),
+    CONSTRAINT uc_groupchat_users_chatgroup_id UNIQUE (chatgroup,id)
 );
 CREATE INDEX i_groupchat_users_group_subs ON groupchat_users USING btree (chatgroup,subscription);
 

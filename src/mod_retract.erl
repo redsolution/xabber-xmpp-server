@@ -443,7 +443,6 @@ retract_message(LUser, LServer, StanzaID, IQ, RetractAsk, Version) ->
   ?DEBUG("Start retact ~p~nIQ ~p~n USER ~p~n StanzaID ~p~n Server ~p",[RetractAsk,IQ,LUser,StanzaID,LServer]),
   case do_retract_message(RetractAsk, LUser, LServer, StanzaID, Version) of
     ok ->
-      ?DEBUG("SUCCESS RETRACT ~p~n IQ ~p ",[StanzaID,IQ]),
       xmpp:make_iq_result(IQ);
     {error, not_found} ->
       xmpp:make_error(IQ, xmpp:err_item_not_found());
@@ -454,7 +453,6 @@ retract_message(LUser, LServer, StanzaID, IQ, RetractAsk, Version) ->
 retract_all_messages(LUser, LServer, IQ, RetractAsk, Version) ->
   case delete_all_messages(RetractAsk, LUser, LServer, Version) of
     ok ->
-      ?DEBUG("retract all ~p",[RetractAsk]),
       xmpp:make_iq_result(IQ);
     _ ->
       xmpp:make_error(IQ, xmpp:err_internal_server_error())
@@ -514,6 +512,7 @@ delete_all_messages(RewriteAsk, LUser, LServer, Ver) ->
     " and bare_peer=%(BarePeer)s and username=%(LUser)s "
     " and %(LServer)H")) of
     {updated,_} ->
+      ejabberd_hooks:run(retract_all_messages, LServer, [LUser, LServer, Conv]),
       store_event(RewriteAsk, LUser, LServer, Ver),
       notify(RewriteAsk, LUser, LServer),
       ok;
@@ -536,6 +535,7 @@ get_message(LUser, LServer, StanzaID) ->
 do_retract_message(RewriteAsk, LUser, LServer, StanzaID, Ver) ->
   case delete_message(LServer, LUser, StanzaID) of
     ok ->
+      ejabberd_hooks:run(retract_message, LServer, [LUser, LServer, StanzaID]),
       store_event(RewriteAsk, LUser, LServer, Ver),
       notify(RewriteAsk, LUser, LServer),
       ok;

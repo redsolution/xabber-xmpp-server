@@ -442,11 +442,14 @@ init_stanza_id(Pkt, LServer) ->
 	xmpp:put_meta(Pkt2, stanza_id, ID).
 
 -spec init_stanza_id_incoming(stanza(), binary()) -> stanza().
-init_stanza_id_incoming(Pkt, _LServer) ->
+init_stanza_id_incoming(#message{from = From, to = To} = Pkt, _LServer) ->
 	TimeStamp = misc:now_to_usec(erlang:now()),
 	ID = TimeStamp,
-	To = xmpp:get_from(Pkt),
-	case mod_xabber_entity:is_group(To#jid.luser, To#jid.lserver) of
+  IsMyself = (jid:remove_resource(To) == jid:remove_resource(From)
+    andalso From#jid.resource /= <<>>),
+	case mod_xabber_entity:is_group(From#jid.luser, From#jid.lserver) of
+    false when IsMyself ->
+      Pkt;
 		false ->
 			Receiver = jid:remove_resource(xmpp:get_to(Pkt)),
 			Pkt1 = strip_my_stanza_id_new_incoming(Pkt, Receiver),
@@ -826,10 +829,9 @@ should_archive_in(#message{type = groupchat}, _LServer) ->
 	false;
 should_archive_in(#message{meta = #{from_offline := true}}, _LServer) ->
 	false;
-should_archive_in(#message{to = To,from = From, body = Body, subject = Subject,
+should_archive_in(#message{to = To, body = Body, subject = Subject,
 	type = Type} = Pkt, _LServer) ->
 	By = jid:remove_resource(To),
-	FromBare = jid:remove_resource(From),
 	case is_archived_by(Pkt, By) of
 		true ->
 			false;
@@ -840,8 +842,6 @@ should_archive_in(#message{to = To,from = From, body = Body, subject = Subject,
 				no_store ->
 					false;
 				none when Type == headline ->
-					false;
-				none when By == FromBare andalso From#jid.resource /= <<>> ->
 					false;
 				none ->
 					xmpp:get_text(Body) /= <<>> orelse

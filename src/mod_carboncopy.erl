@@ -192,18 +192,34 @@ remove_connection(User, Server, Resource, _Status)->
 %%% Internal
 %% Direction = received | sent <received xmlns='urn:xmpp:carbons:1'/>
 -spec send_copies(jid(), jid(), message(), direction()) -> ok.
+send_copies(_JID, #jid{luser = U, lserver = S},
+		#message{from=#jid{luser = U, lserver = S, lresource = <<_>>}}, received) ->
+    %% Do not send copies of received messages if the message is from yourself.
+    ok;
 send_copies(JID, To, Packet, Direction)->
     {U, S, R} = jid:tolower(JID),
     PrioRes = ejabberd_sm:get_user_present_resources(U, S),
     {_, AvailRs0} = lists:unzip(PrioRes),
-    AvailRs = case Direction of
+    From = xmpp:get_from(Packet),
+    IsToYourself = (jid:remove_resource(To) == jid:remove_resource(From)
+      andalso From#jid.resource /= <<>>),
+    AvailRs1 = case Direction of
                 sent -> lists:usort(AvailRs0 ++ ejabberd_sm:get_user_resources(U, S));
                 _ -> AvailRs0
               end,
     {MaxPrio, _MaxRes} = case catch lists:max(PrioRes) of
-	{Prio, Res} -> {Prio, Res};
-	_ -> {0, undefined}
-    end,
+                           {Prio, Res} -> {Prio, Res};
+                           _ -> {0, undefined}
+                         end,
+    %% If the message is intended for yourself,
+    %% exclude the recipients of the original message.
+    AvailRs = case {Direction, IsToYourself, To} of
+                {sent, true, #jid{lresource = <<>>}} ->
+                  AvailRs1 -- [R1 || {P, R1} <- PrioRes, P == MaxPrio];
+                {sent, true, #jid{lresource = R2}} ->
+                  AvailRs1 -- [R2];
+                _ -> AvailRs1
+              end,
 
     %% unavailable resources are handled like bare JIDs
     IsBareTo = case {Direction, To} of
@@ -222,7 +238,7 @@ send_copies(JID, To, Packet, Direction)->
 	    %% duplicates.
 	    [];
 	{true, _} ->
-	    OrigTo = fun(Res) -> lists:member({MaxPrio, Res}, PrioRes) end,
+	    OrigTo = fun(CCR) -> lists:member({MaxPrio, CCR}, PrioRes) end,
 	    [ {jid:make({U, S, CCRes}), CC_Version}
 	     || {CCRes, CC_Version} <- list(U, S),
 		lists:member(CCRes, AvailRs), not OrigTo(CCRes) ];

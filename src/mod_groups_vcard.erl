@@ -175,8 +175,8 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  Permission = mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat),
-  CanChangeAva = mod_groups_restrictions:is_permitted(<<"change-users">>,User,Chat),
+  Permission = mod_groups_permissions:is_permitted(<<"change-group-settings">>, User, Chat),
+  CanChangeAva = mod_groups_permissions:is_permitted(<<"change-user-info">>,User,Chat),
   Pubsub = lists:keyfind(pubsub,1,Decoded),
   #pubsub{publish = Publish} = Pubsub,
   #ps_publish{node = Node, items = Items} = Publish,
@@ -252,7 +252,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
       not_allowed_result(Iq, To, From);
     <<"urn:xmpp:avatar:data#",SomeUserId/binary>> when CanChangeAva == true ->
       SomeUser = mod_groups_users:get_user_by_id(Server,Chat,SomeUserId),
-      case mod_groups_restrictions:validate_users(Server,Chat,User,SomeUser) of
+      case mod_groups_permissions:validate_users(Server, Chat, User, SomeUser) of
         ok when SomeUser =/= none ->
           #ps_item{id = ItemId,sub_els = [Sub]} = Item,
           #avatar_data{data = Data} = xmpp:decode(Sub),
@@ -265,7 +265,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
       SomeUser = case mod_groups_users:get_user_by_id(Server,Chat,SomeUserId) of
                    none -> none;
                    SU ->
-                     case mod_groups_restrictions:validate_users(
+                     case mod_groups_permissions:validate_users(
                        Server, Chat, User, SU) of
                        ok -> SU;
                        _ -> none

@@ -297,8 +297,8 @@ check_special_perms(user_exist, _, _, _, _) ->
   ok.
 
 is_permitted(User, Group) ->
-  case mod_groups_restrictions:is_permitted(<<"delete-messages">>,
-    User, Group) of
+  case mod_groups_permissions:is_permitted(
+    <<"delete-messages">>, User, Group) of
     true -> ok;
     _ -> {error, not_allowed}
   end.

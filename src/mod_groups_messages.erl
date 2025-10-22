@@ -155,8 +155,8 @@ check_permission_write(User,Chat) ->
   Server = ChatJID#jid.lserver,
   case mod_groups_users:check_if_exist(Server,Chat,User) of
     true ->
-      case mod_groups_restrictions:is_restricted(<<"send-messages">>,User,Chat) of
-        true -> restricted;
+      case mod_groups_permissions:fast_is_permitted(<<"send-messages">>, User, Chat) of
+        false -> restricted;
         _ -> allowed
       end;
     _ ->
@@ -201,7 +201,7 @@ send_notifications(Message, GroupJID, AuthorJID, Users) ->
   case xmpp:get_subtag(Message, #groups_mentions{}) of
     #groups_mentions{members = []} ->
       Author = jid:to_string(jid:remove_resource(AuthorJID)),
-      case mod_groups_users:calculate_role(Server, Author, Group) of
+      case mod_groups_users:user_role(Server, Author, Group) of
         <<"member">> -> {error, not_allowed};
         _ ->
           send_notifications(Message, GroupJID, Users)

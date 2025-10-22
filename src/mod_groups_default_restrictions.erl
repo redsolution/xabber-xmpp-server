@@ -60,8 +60,8 @@ depends(_Host, _Opts) ->  [].
 mod_options(_Opts) -> [].
 
 check_permission(_Acc, User, Chat, LServer, Lang) ->
-  case mod_groups_restrictions:
-  is_permitted(<<"change-group">>,User,Chat) of
+  %%  todo: adjust to the new permissions
+  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
     true ->
       {stop, {ok, create_right_form(Chat, LServer, Lang, form)}};
     _ ->
@@ -69,8 +69,8 @@ check_permission(_Acc, User, Chat, LServer, Lang) ->
   end.
 
 check_permission_and_values(Acc, User, Chat, LServer, _Lang) ->
-  case mod_groups_restrictions:
-  is_permitted(<<"change-group">>, User, Chat) of
+  %%  todo: adjust to the new permissions
+  case mod_groups_restrictions:is_permitted(<<"change-group">>, User, Chat) of
     true ->
       case decode(LServer, Acc) of
         {ok, Values} ->
@@ -91,6 +91,7 @@ set_values(Acc, _User, Chat, LServer, Lang) ->
 
 -spec decode(binary(),list()) -> list().
 decode(LServer, FS) ->
+  %%  todo: adjust to the new permissions
   Restrictions1 = mod_groups_restrictions:get_all_restrictions(LServer),
   Restrictions = [ R || {R,_, _} <- Restrictions1],
   Decoded = lists:map(
@@ -242,6 +243,7 @@ set_restrictions(Server, User, Chat) ->
     {selected,Restrictions} ->
       lists:foreach(fun({Rule,Time} ) ->
         ActionTime = set_time(Time),
+        %%  todo: adjust to the new permissions
          mod_groups_restrictions:upsert_rule(Server,
            Chat, User, Rule, ActionTime, <<"server">>)
                     end, Restrictions);

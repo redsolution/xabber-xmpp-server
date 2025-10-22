@@ -53,13 +53,15 @@
   update_last_seen/3,
   get_user_id/3,
   get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/4,
-  update_user_status/3, user_no_read/2, get_nick_in_chat/3, check_invited_to_p2p/3,
+  update_user_status/4, user_no_read/2, get_nick_in_chat/3, check_invited_to_p2p/3,
   process_subscribed/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2,
   change_peer_to_peer_invitation_state/4,
   get_users_from_p2p/2
 ]).
 
--export([is_exist/2, set_default_restrictions/2]).
+-export([is_exist/2
+%%  set_default_restrictions/2
+]).
 
 %% Change user settings hook export
 -export([check_if_exist/6, get_user_rights/6, validate_request/6, change_user_rights/6, user_rights/3, check_if_request_user_exist/6, user_rights_and_time/3]).
@@ -79,7 +81,7 @@
 % Decline hook
 -export([decline_hook_check_if_exist/4, decline_hook_delete_invite/4]).
 
--export([calculate_role/3]).
+-export([user_role/3]).
 start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_decline_invite, Host, ?MODULE, decline_hook_check_if_exist, 10),
   ejabberd_hooks:add(groupchat_decline_invite, Host, ?MODULE, decline_hook_delete_invite, 20),
@@ -102,7 +104,7 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, update_user, 20),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 30),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, process_subscribed, 20),
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, set_default_restrictions, 40),
+%%  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, set_default_restrictions, 40),
   ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
 
@@ -127,7 +129,7 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, update_user, 20),
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 30),
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, process_subscribed, 20),
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, set_default_restrictions, 40),
+%%  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, set_default_restrictions, 40),
   ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20),
   ejabberd_hooks:delete(groupchat_presence_hook, Host, ?MODULE, subscribe_user, 60).
@@ -163,7 +165,8 @@ decline_hook_delete_invite(_Acc, User, Chat, Server) ->
 
 % kick hook
 check_if_user_can(_Acc,_LServer,Chat,Admin,_Kick,_Lang) ->
-  case mod_groups_restrictions:is_permitted(<<"set-restrictions">>,Admin,Chat) of
+  case mod_groups_permissions:is_permitted(
+    <<"block-users">>, Admin, Chat) of
     true ->
       ok;
     _ ->
@@ -190,21 +193,25 @@ check_kick(_Acc, LServer, Chat, Admin, Kick, _Lang) ->
 kick_user(Acc, LServer, Chat, _Admin, _Kick, _Lang) ->
   lists:foreach(fun(User) -> kick_user_from_chat(LServer,Chat,User) end, Acc),
   mod_groups_chats:update_user_counter(Chat),
+  ejabberd_hooks:run(groupchat_users_kicked, LServer, [LServer, Chat, Acc]),
   Acc.
 
-validate_kick_request(LServer,Chat, User1, User2) when User1 =/= User2 ->
-  mod_groups_restrictions:validate_users(LServer,Chat,User1,User2);
-validate_kick_request(_LServer,_Chat, _User1, _User2) ->
-  not_ok.
+validate_kick_request(_LServer,_Chat, User, User) ->
+  not_ok;
+validate_kick_request(LServer,Chat, _, User2) ->
+  IsManager = mod_groups_permissions:is_manager(LServer, Chat, User2),
+  if IsManager -> not_ok;
+    true -> ok
+  end.
 
 kick_user_from_chat(LServer,Chat,User) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc') where
-         username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
+    ?SQL("update groupchat_users set subscription = 'none', role = 'member', "
+    " user_updated_at = (now() at time zone 'utc') where "
+    " username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
     {updated,1} ->
       mod_groups_presence:delete_all_user_sessions(User,Chat),
-      mod_groups_restrictions:delete_permissions(LServer, Chat, User),
       update_last_seen(LServer,User,Chat),
       UserJID = jid:from_string(User),
       ChatJID = jid:from_string(Chat),
@@ -216,11 +223,9 @@ kick_user_from_chat(LServer,Chat,User) ->
 
 % delete groupchat hook
 check_if_user_owner(_Acc, LServer, User, Chat) ->
-  case mod_groups_restrictions:is_owner(LServer,Chat,User) of
-    yes ->
-      ok;
-    _ ->
-      {stop,{error, xmpp:err_not_allowed()}}
+  case mod_groups_permissions:is_owner(LServer, Chat, User) of
+    true -> ok;
+    _ -> {stop,{error, xmpp:err_not_allowed()}}
   end.
 
 unsubscribe_all_for_delete(LServer,Chat) ->
@@ -275,6 +280,7 @@ check_if_request_user_exist(Acc, LServer, _User, Chat, ID, _Lang) ->
       Acc
   end.
 
+%%  todo: delete (new permissions)
 get_user_rights(_Acc, LServer, User, Chat, ID, Lang) ->
   RequestUser = get_user_by_id(LServer,Chat,ID),
   case mod_groups_restrictions:validate_users(LServer,Chat,User,RequestUser) of
@@ -284,6 +290,7 @@ get_user_rights(_Acc, LServer, User, Chat, ID, Lang) ->
       {stop,{ok,create_empty_form(ID)}}
   end.
 
+%%  todo: delete (new permissions)
 validate_request(Acc, LServer, _User, Chat, ID, _Lang) ->
   RequestUser = get_user_by_id(LServer,Chat,ID),
   case decode(LServer,Acc) of
@@ -295,6 +302,7 @@ validate_request(Acc, LServer, _User, Chat, ID, _Lang) ->
       {stop,bad_request}
   end.
 
+%%  todo: delete (new permissions)
 change_user_rights(Acc, LServer, User, Chat, ID, Lang) ->
   RequestUser = get_user_by_id(LServer,Chat,ID),
   case mod_groups_restrictions:validate_users(LServer,Chat,User,RequestUser) of
@@ -407,7 +415,6 @@ delete_user(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
     user_updated_at = (now() at time zone 'utc') where
     username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
     {updated,1} when Subscription == <<"both">> ->
-      mod_groups_restrictions:delete_permissions(Server, Chat, User),
       mod_groups_chats:update_user_counter(Chat),
       ok;
     _ ->
@@ -427,15 +434,17 @@ is_exist(_Acc,{Server,To,Chat,_Lang}) ->
       ok
   end.
 
-set_default_restrictions(_Acc,{Server,To,Chat,_Lang}) ->
-  User = jid:to_string(jid:remove_resource(To)),
-  case mod_groups_restrictions:is_owner(Server,Chat,User) of
-    yes ->
-      {stop,owner};
-    _ ->
-      mod_groups_default_restrictions:set_restrictions(Server,User,Chat),
-      ok
-  end.
+%%%%      todo: adjust to the new permissions
+%%set_default_restrictions(_Acc,{Server,To,Chat,_Lang}) ->
+%%  User = jid:to_string(jid:remove_resource(To)),
+%%  case mod_groups_restrictions:is_owner(Server,Chat,User) of
+%%    yes ->
+%%      {stop,owner};
+%%    _ ->
+%%      %%  todo: adjust to the new permissions
+%%      mod_groups_default_restrictions:set_restrictions(Server,User,Chat),
+%%      ok
+%%  end.
 
 is_anon_card(UserCard) ->
   case UserCard#groups_user.jid of
@@ -572,8 +581,7 @@ get_user_info(Server, Group, User, UserID) ->
            end,
    case get_user_info_t(User1, Group) of
      {selected, [Info]} ->
-       Role = get_user_role_t(User1, Group),
-       tuple_to_list(Info) ++ [Role];
+       tuple_to_list(Info);
      _ ->
        {error, not_exist}
    end end,
@@ -590,29 +598,30 @@ get_user_info_t(User, Group) ->
         THEN nickname
       ELSE auto_nickname
      END as @(r_nickname)s,
-    to_char(last_seen, 'YYYY-MM-DDThh24:mi:ssZ') as @(last)s
+    to_char(last_seen, 'YYYY-MM-DDThh24:mi:ssZ') as @(last)s,
+    @(role)s
     from groupchat_users where
     username = %(User)s and chatgroup = %(Group)s"
   )).
 
-get_user_role_t(User, Group) ->
-  TS = now_to_timestamp(now()),
-  Rights =  case ejabberd_sql:sql_query_t(
-    ?SQL("select @(right_name)s,@(type)s from groupchat_policy "
-    " left join groupchat_rights on groupchat_rights.name = right_name "
-    " where username=%(User)s and chatgroup=%(Group)s "
-    " and (valid_until = 0 or valid_until > %(TS)d )")) of
-              {selected, Res} -> Res;
-              _ -> []
-            end,
-  case lists:keyfind(<<"owner">>, 1, Rights) of
-    false ->
-      case lists:keyfind(<<"permission">>, 2, Rights) of
-        false -> <<"member">>;
-        _ -> <<"admin">>
-      end;
-    _ -> <<"owner">>
-  end.
+%%get_user_role_t(User, Group) ->
+%%  TS = now_to_timestamp(now()),
+%%  Rights =  case ejabberd_sql:sql_query_t(
+%%    ?SQL("select @(right_name)s,@(type)s from groupchat_policy "
+%%    " left join groupchat_rights on groupchat_rights.name = right_name "
+%%    " where username=%(User)s and chatgroup=%(Group)s "
+%%    " and (valid_until = 0 or valid_until > %(TS)d )")) of
+%%              {selected, Res} -> Res;
+%%              _ -> []
+%%            end,
+%%  case lists:keyfind(<<"owner">>, 1, Rights) of
+%%    false ->
+%%      case lists:keyfind(<<"permission">>, 2, Rights) of
+%%        false -> <<"member">>;
+%%        _ -> <<"admin">>
+%%      end;
+%%    _ -> <<"owner">>
+%%  end.
 
 
 get_chat_version(Server,Chat) ->
@@ -687,11 +696,12 @@ check_if_exist_by_id(Server,Chat,ID) ->
       false
   end.
 
-update_user_status(Server,User,Chat) ->
+update_user_status(Server, User, Group, Role) ->
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchat_users set user_updated_at = (now() at time zone 'utc')
-    where chatgroup=%(Chat)s and username=%(User)s")).
+    ?SQL("update groupchat_users set "
+    " user_updated_at = (now() at time zone 'utc'), role=%(Role)s "
+    " where chatgroup=%(Group)s and username=%(User)s")).
 
 update_last_seen(Server,User,Chat) ->
   ejabberd_sql:sql_query(
@@ -880,8 +890,7 @@ check_user(User) when is_binary(User) ->
 validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
   validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
 validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
-  SetNick = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
-  case SetNick of
+  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
     true ->
       validate_unique(LServer,Chat,Admin,undefined,Badge,Lang);
     _ ->
@@ -889,8 +898,7 @@ validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
-  SetNick = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
-  case SetNick of
+  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
     true ->
       validate_unique(LServer,Chat,Admin,Nickname,Badge,Lang);
     _ ->
@@ -898,31 +906,44 @@ validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickname =/= undefined ->
-  SetNick = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
-  IsValid = mod_groups_restrictions:validate_users(LServer,Chat,Admin,User),
-  case SetNick of
-    true when IsValid == ok ->
-      validate_unique(LServer,Chat,User,Nickname,undefined,Lang);
+  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
+    true ->
+      case mod_groups_permissions:validate_users(LServer, Chat, Admin, User) of
+        true ->
+          validate_unique(LServer,Chat,User,Nickname,undefined,Lang);
+        _ ->
+          Message = <<"You have no rights to change a nickname">>,
+          {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
+      end;
     _ ->
       Message = <<"You have no rights to change a nickname">>,
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/= undefined ->
-  SetBadge = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
-  IsValid = mod_groups_restrictions:validate_users(LServer,Chat,Admin,User),
-  case SetBadge of
-    true when IsValid == ok ->
-      validate_unique(LServer,Chat,User,undefined,Badge,Lang);
+  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
+    true ->
+      case mod_groups_permissions:validate_users(LServer, Chat, Admin, User) of
+        true ->
+          validate_unique(LServer,Chat,User,undefined,Badge,Lang);
+        _ ->
+          Message = <<"You have no rights to change a badge">>,
+          {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
+      end;
     _ ->
       Message = <<"You have no rights to change a badge">>,
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
-validate_rights(User, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) when Badge =/= undefined andalso Nickname =/= undefined ->
-  SetBadge = mod_groups_restrictions:is_permitted(<<"change-users">>,Admin,Chat),
-  IsValid = mod_groups_restrictions:validate_users(LServer,Chat,Admin,User),
-  case SetBadge of
-    true when IsValid == ok ->
-      validate_unique(LServer,Chat,User,Nickname,Badge,Lang);
+validate_rights(User, LServer,Chat,Admin,_ID,Nickname,Badge,Lang)
+  when Badge =/= undefined andalso Nickname =/= undefined ->
+  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
+    true ->
+      case mod_groups_permissions:validate_users(LServer, Chat, Admin, User) of
+        true ->
+          validate_unique(LServer,Chat,User,undefined,Badge,Lang);
+        _ ->
+          Message = <<"You have no rights to change a nickname and a badge">>,
+          {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
+      end;
     _ ->
       Message = <<"You have no rights to change a nickname and a badge">>,
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
@@ -1097,6 +1118,7 @@ user_rights_and_time(LServer,Chat,User) ->
       []
   end.
 
+%%  todo: delete (new permissions)
 create_right_form(LServer,User,Chat,RequestUser,ID, Lang) ->
   UserRights = user_rights(LServer,Chat,User),
   IsOwner = lists:member({<<"owner">>},UserRights),
@@ -1186,7 +1208,9 @@ create_empty_form(ID) ->
         fields = Fields}
     ]}.
 
+%%  todo: delete (new permissions)
 make_fields_owner(LServer,RightsAndTime,Lang) ->
+  %%  todo: adjust to the new permissions
   AllRights = mod_groups_restrictions:get_all_rights(LServer),
   ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
   Permissions = [{R,D}||{R,T,D} <- AllRights, T == <<"permission">>],
@@ -1213,7 +1237,9 @@ make_fields_owner(LServer,RightsAndTime,Lang) ->
   RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
   PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
 
+%%  todo: delete (new permissions)
 make_fields_owner_no_options(LServer,RightsAndTime,Lang,Type) ->
+  %%  todo: adjust to the new permissions
   AllRights = mod_groups_restrictions:get_all_rights(LServer),
   ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
   Permissions = [{R,D}||{R,T,D} <- AllRights, T == <<"permission">>],
@@ -1238,7 +1264,9 @@ make_fields_owner_no_options(LServer,RightsAndTime,Lang,Type) ->
   RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
   PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
 
+%%  todo: delete (new permissions)
 make_fields_admin(LServer,RightsAndTime,Lang) ->
+  %%  todo: adjust to the new permissions
   AllRights = mod_groups_restrictions:get_all_rights(LServer),
   ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
   Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
@@ -1254,7 +1282,9 @@ make_fields_admin(LServer,RightsAndTime,Lang) ->
   RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
   RestrictionSection ++ RestrictionsFields.
 
+%%  todo: delete (new permissions)
 make_fields_admin_no_options(LServer,RightsAndTime,Lang) ->
+  %%  todo: adjust to the new permissions
   AllRights = mod_groups_restrictions:get_all_rights(LServer),
   ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
   ?INFO_MSG("Rights ~p~n",[ExistingRights]),
@@ -1307,6 +1337,7 @@ form_options() ->
 %%      <<"0">>
 %%  end.
 
+%%  todo: delete (new permissions)
 -spec decode(binary(),list()) -> list().
 decode(LServer, FS) ->
   Decoded = decode(LServer, [],filter_fixed_fields(FS)),
@@ -1317,6 +1348,7 @@ decode(LServer, FS) ->
       {ok,Decoded}
   end.
 
+%%  todo: delete (new permissions)
 -spec decode(binary(),list(),list()) -> list().
 decode(LServer, Acc,[#xdata_field{var = Var, values = Values} | RestFS]) ->
   decode(LServer,[get_and_validate(LServer,Var,Values)| Acc], RestFS);
@@ -1337,8 +1369,10 @@ filter_fixed_fields(FS) ->
     end
                end, FS).
 
+%%  todo: delete (new permissions)
 -spec get_and_validate(binary(),binary(),list()) -> binary().
 get_and_validate(LServer,RightName,Value) ->
+  %%  todo: adjust to the new permissions
   AllRights = mod_groups_restrictions:get_all_rights(LServer),
   case lists:keyfind(RightName,1,AllRights) of
     {RightName,Type,_Desc} ->
@@ -1373,6 +1407,7 @@ validate(FS) ->
       {stop, bad_request}
   end.
 
+%%  todo: delete (new permissions)
 change_rights(LServer,Chat,Admin,RequestUser,Rights) ->
   lists:foreach(fun(Right) ->
     {Rule,_Type,ExpireOption} = Right,
@@ -1390,7 +1425,9 @@ set_expires(ExpireOption) ->
   Sum = TS + ExpireInteger,
   integer_to_binary(Sum).
 
+%%  todo: delete (new permissions)
 current_values(LServer,User,Chat) ->
+  %%  todo: adjust to the new permissions
   AllRights = mod_groups_restrictions:get_all_rights(LServer),
   RightsAndTime = user_rights_and_time(LServer,Chat,User),
   lists:map(fun(El) ->
@@ -1419,7 +1456,7 @@ get_user_from_chat(LServer, Chat, User, ID) ->
                   [] -> LastSeen;
                   _ -> undefined
                 end,
-      RequesterRole = calculate_role(LServer,User,Chat),
+      RequesterRole = user_role(LServer,User,Chat),
       JID = if
               IsAnon andalso RequesterRole /= <<"owner">> -> undefined;
               true -> jid:from_string(Username)
@@ -1482,14 +1519,14 @@ make_sql_query(SChat,RSM,Version) ->
 
   Users = [<<"WITH group_members AS (SELECT username, id, badge,
   to_char(last_seen,'YYYY-MM-DDThh24:mi:ssZ') as last,
-  subscription,
+  subscription, role,
   CASE
   WHEN nickname != '' and nickname is not null
    THEN groupchat_users.nickname
   ELSE groupchat_users.auto_nickname
   END AS r_nickname
   FROM groupchat_users  WHERE chatgroup = '">>,Chat, <<"'">>, VersionClause, SubsClause,<<")
-  SELECT username, id, badge, last, subscription, r_nickname
+  SELECT username, id, badge, last, subscription, r_nickname, role
   from group_members where 0=0 ">>],
   PageClause =
     case Item of
@@ -1536,11 +1573,10 @@ get_max_direction_item(RSM) ->
 
 make_query(LServer,RawData,RequesterUser,Chat) ->
   IsAnon = mod_groups_chats:is_anonim(Chat),
-  RequesterUserRole = calculate_role(LServer,RequesterUser,Chat),
+  RequesterUserRole = user_role(LServer,RequesterUser,Chat),
   lists:map(
     fun(UserInfo) ->
-      [Username, Id, Badge, LastSeen, Subs, Nick] = UserInfo,
-      Role = calculate_role(LServer,Username,Chat),
+      [Username, Id, Badge, LastSeen, Subs, Nick, Role] = UserInfo,
       AvatarEl = mod_groups_vcard:get_photo_meta(LServer,Username,Chat),
       S = mod_groups_presence:select_sessions(Username,Chat),
       L = length(S),
@@ -1564,30 +1600,39 @@ make_query(LServer,RawData,RequesterUser,Chat) ->
 get_users_from_p2p(Server, Group)->
  sql_users_from_p2p(Server, Group).
 
-calculate_role(LServer,Username,Chat) ->
-  TS = now_to_timestamp(now()),
-  Rights =  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(right_name)s,@(type)s from groupchat_policy left join groupchat_rights on groupchat_rights.name = right_name where username=%(Username)s
-     and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d )")) of
-              {selected, Res} ->
-                Res;
-              _ ->
-                []
-            end,
-  IsOwner = [R||{R,_T} <- Rights, R == <<"owner">>],
-  case length(IsOwner) of
-    0 ->
-      IsAdmin = [T||{_R,T} <- Rights, T == <<"permission">>],
-      case length(IsAdmin) of
-        0 ->
-          <<"member">>;
-        _ ->
-          <<"admin">>
-      end;
-    _ ->
-      <<"owner">>
+user_role(Server, User, Group) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(role)s from groupchat_users "
+    " where chatgroup=%(Group)s and username=%(User)s")) of
+    {selected,[{Role}]} -> Role;
+    _ -> <<"member">>
   end.
+
+%%calculate_role(LServer,Username,Chat) ->
+%%  TS = now_to_timestamp(now()),
+%%  Rights =  case ejabberd_sql:sql_query(
+%%    LServer,
+%%    ?SQL("select @(right_name)s,@(type)s from groupchat_policy left join groupchat_rights on groupchat_rights.name = right_name where username=%(Username)s
+%%     and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d )")) of
+%%              {selected, Res} ->
+%%                Res;
+%%              _ ->
+%%                []
+%%            end,
+%%  IsOwner = [R||{R,_T} <- Rights, R == <<"owner">>],
+%%  case length(IsOwner) of
+%%    0 ->
+%%      IsAdmin = [T||{_R,T} <- Rights, T == <<"permission">>],
+%%      case length(IsAdmin) of
+%%        0 ->
+%%          <<"member">>;
+%%        _ ->
+%%          <<"admin">>
+%%      end;
+%%    _ ->
+%%      <<"owner">>
+%%  end.
 
 %% Participants for notification of group deletion
 get_all_participants(LServer,Chat) ->

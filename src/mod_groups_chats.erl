@@ -94,11 +94,9 @@ delete_group_query(LServer, UserJID, GroupJID) ->
     true ->
       Group = jid:to_string(GroupJID),
       User = jid:to_string(jid:remove_resource(UserJID)),
-      case mod_groups_restrictions:is_owner(LServer, Group, User) of
-        yes ->
-          delete_group(Group);
-        _ ->
-          {error, xmpp:err_not_allowed()}
+      case mod_groups_permissions:is_owner(LServer, Group, User) of
+        true -> delete_group(Group);
+        _ -> {error, xmpp:err_not_allowed()}
       end;
     _ ->
       {error, xmpp:err_item_not_found()}
@@ -193,14 +191,8 @@ create_chat(Server, Creator, SubEls) ->
         user_count => <<"1">>, gstatus => Status},
       groups_sm:activate(Server, LocalPart, Info),
       mod_groups_users:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
-      Expires = <<"0">>,
-      IssuedBy = <<"server">>,
-      Permissions = get_permissions(Server),
-      lists:foreach(fun(N)->
-        {Rule} = N,
-        mod_groups_restrictions:insert_rule(Server,Chat,Creator,Rule,Expires,IssuedBy) end,
-        Permissions
-      ),
+      mod_groups_permissions:set_permission(Chat, Creator, <<"owner">>,
+        true, 0, Creator),
       Result = create_result_query(LocalPart, Name, Desc, Privacy, Membership, Index,
         ContactList, DomainList),
       {ok, Result, Chat, Creator};
@@ -209,7 +201,7 @@ create_chat(Server, Creator, SubEls) ->
   end.
 
 check_user_rights(_Acc, User, Chat, _Server) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,User,Chat) of
     true ->
       {stop, {ok,form_chat_information(Chat, form)}};
     _ ->
@@ -257,7 +249,8 @@ change_pinned_msg(Server, Group, User, MsgID) ->
 
 %% groupchat_info_change hook
 check_user_permission(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  %%  todo: adjust to the new permissions
+  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,User,Chat) of
     true ->
       ok;
     _ ->
@@ -346,7 +339,7 @@ maybe_delete_group(_Acc,{LServer, _User, Group, _UserCard, _Lang})->
     end,
   case Result of
     pass ->
-      case mod_groups_restrictions:get_owners(LServer, Group) of
+      case mod_groups_permissions:get_owners(LServer, Group) of
         [] -> delete_group(Group, false);
         _ -> ok
       end;
@@ -1072,7 +1065,7 @@ get_name_desc(Server,Chat) ->
   end.
 
 check_user_rights_to_change_status(_Acc,User,Chat,Server) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,User,Chat) of
     true ->
       {stop, {ok, status_form(Chat,Server,'text-single')}};
     _ ->
@@ -1139,7 +1132,7 @@ parse_status_query(FS, Lang) ->
 
 %% Change status hook
 check_user_rights_to_change_status(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,User,Chat) of
     true ->
       ok;
     _ ->

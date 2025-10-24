@@ -6,7 +6,7 @@ CREATE TABLE groupchat_permissions(
     status boolean NOT NULL DEFAULT true,
     valid_until bigint NOT NULL DEFAULT 0,
     issued_by text NOT NULL,
-    CONSTRAINT uc_groupchat_permissions_group_member_perm UNIQUE (groupchat, gmember, permission)
+    CONSTRAINT uc_groupchat_permissions_group_member_perm UNIQUE (groupchat, member, permission)
     );
 CREATE TABLE groupchat_default_permissions(
     groupchat text NOT NULL,

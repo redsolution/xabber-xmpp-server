@@ -33,7 +33,7 @@
 -include("ejabberd_sql_pt.hrl").
 
 %% gen_mod
--export([start/2, stop/1, mod_options/1, depends/2, reload/3, mod_opt_type/1, decode_iq_subel/1]).
+-export([start/2, stop/1, mod_options/1, depends/2, reload/3, mod_opt_type/1]).
 
 %% Hooks
 -export([copy_newbies_perms/2, user_left/2, kick_users/3]).
@@ -54,11 +54,11 @@
   is_permitted/3
  ]).
 
--record(permission,{name, display_name, role, status, expires, seconds, fixed, tag, issued_by}).
--record(fast_group_perms, {gup, status,  expires}).
--define(NS_GROUPS_PERMS, <<"https://xabber.com/protocol/groups/perms">>).
--define(NS_GROUPS_PERMS_DEFAULT, <<"https://xabber.com/protocol/groups/perms#default">>).
--define(NS_GROUPS_PERMS_NEWBIES, <<"https://xabber.com/protocol/groups/perms#newbies">>).
+-record(fast_group_perms, {
+  gup = {<<>>,<<>>,<<>>} :: {binary(),binary(),binary()},
+  status =  false        :: boolean(),
+  expires = undefined    :: 'undefined' | non_neg_integer()
+}).
 
 %% gen_mod
 start(Host, _Opts) ->
@@ -98,10 +98,9 @@ mod_opt_type(_) ->
 
 
 %% IQ handlers
-
 process_iq(#iq{from = From, to = To, sub_els = [Query]} = Iq) ->
   {GUser, GServer, _} = jid:tolower(To),
-  NS = xmpp_codec:get_attr(<<"xmlns">>, Query#xmlel.attrs, <<>>),
+  NS = xmpp:get_ns(Query),
   case mod_xabber_entity:get_entity_type(GUser, GServer) of
     group ->
       Group = jid:to_string(jid:remove_resource(To)),
@@ -169,7 +168,7 @@ get_owners(Server, Group) ->
 is_manager(Server, Group, Member) ->
   Perms = personal_perms(Server, Group, Member),
   P1 = filter_by_role(Perms, [<<"admin">>, <<"owner">>]),
-  case [P || P <- P1, P#permission.status] of
+  case [P || P <- P1, P#groups_perm.status] of
     [] -> false;
     _ -> true
   end.
@@ -181,7 +180,7 @@ validate_users(Server, Group, Admin, User) ->
   if
     IsOwner -> false;
     IsAdmin ->
-      case get_promoter(Server, Group, User) of
+      case get_actor(Server, Group, User) of
         Admin -> true;
         _ -> false
       end;
@@ -202,7 +201,8 @@ get_permissions(Group, UserId)->
 get_permissions(Server, Group, Member) ->
   GroupDefaults = group_perms(Server, Group),
   Personal = personal_perms(Server, Group, Member),
-  calculate_perms(GroupDefaults, Personal).
+  {_Role, Perms } = calculate_perms(GroupDefaults, Personal),
+  Perms.
 
 fast_is_permitted(<<"send-messages">>, User, Group)->
   fast_is_permitted(member, <<"send-messages">>, User, Group);
@@ -251,7 +251,7 @@ is_permitted(Action, User, Group)->
 
 set_permissions(Group, Member, Perms, IssuedBy) ->
   lists:foreach(
-    fun(#permission{name = Name, seconds = Secs, status = Status})->
+    fun(#groups_perm{name = Name, seconds = Secs, status = Status})->
     set_permission(Group, Member, Name, Status, Secs, IssuedBy)
     end, Perms).
 
@@ -262,58 +262,60 @@ set_permission(Group, Member, PermName, Status, Seconds, IssuedBy) ->
               0 -> 0;
               _ -> erlang:system_time(second) + Seconds
             end,
-  case lists:keyfind(PermName, #permission.name, defaults()) of
+  case lists:keyfind(PermName, #groups_perm.name, defaults()) of
     false -> error;
     Perm ->
-      sql_add_perm(Server, Group, Member, PermName, Perm#permission.role,
+      sql_add_perm(Server, Group, Member, PermName, Perm#groups_perm.role,
         Status, Expires, IssuedBy)
   end.
 
 
 %% Internal
+
 defaults() ->
   [
-    #permission{name = <<"send-messages">>, display_name = <<"Send messages">>,
+    #groups_perm{name = <<"send-messages">>, display_name = <<"Send messages">>,
       role = <<"member">>, status = true},
-    #permission{name = <<"send-media">>, display_name = <<"Send media">>,
+    #groups_perm{name = <<"send-media">>, display_name = <<"Send media">>,
       role = <<"member">>, status = true},
-    #permission{name = <<"add-members">>, display_name = <<"Add members">>,
+    #groups_perm{name = <<"add-members">>, display_name = <<"Add members">>,
       role = <<"member">>, status = true},
-    #permission{name = <<"pin-messages">>, display_name = <<"Pin messages">>,
+    #groups_perm{name = <<"pin-messages">>, display_name = <<"Pin messages">>,
       role = <<"member">>, status = false},
-    #permission{name = <<"change-group-info">>, display_name = <<"Change group info">>,
+    #groups_perm{name = <<"change-group-info">>, display_name = <<"Change group info">>,
       role = <<"member">>, status = false},
-    #permission{name = <<"owner">>, display_name = <<"Owner">>,
+    #groups_perm{name = <<"owner">>, display_name = <<"Owner">>,
       role = <<"owner">>, status = false},
-    #permission{name = <<"change-group-settings">>, display_name = <<"Edit group settings">>,
+    #groups_perm{name = <<"change-group-settings">>, display_name = <<"Edit group settings">>,
       role = <<"admin">>, status = false},
-    #permission{name = <<"change-user-info">>, display_name = <<"Edit users' info">>,
+    #groups_perm{name = <<"change-user-info">>, display_name = <<"Edit users' info">>,
       role = <<"admin">>, status = false},
-    #permission{name = <<"delete-messages">>, display_name = <<"Delete messages">>,
+    #groups_perm{name = <<"delete-messages">>, display_name = <<"Delete messages">>,
       role = <<"admin">>, status = false},
-    #permission{name = <<"change-permissions">>, display_name = <<"Change users' permissions">>,
+    #groups_perm{name = <<"change-permissions">>, display_name = <<"Change users' permissions">>,
       role = <<"admin">>, status = false},
-    #permission{name = <<"change-default-permissions">>, display_name = <<"Change default permissions">>,
+    #groups_perm{name = <<"change-default-permissions">>, display_name = <<"Change default permissions">>,
       role = <<"admin">>, status = false},
-    #permission{name = <<"block-users">>, display_name = <<"Kick and block users">>,
+    #groups_perm{name = <<"block-users">>, display_name = <<"Kick and block users">>,
       role = <<"admin">>, status = false},
-    #permission{name = <<"create-admins">>, display_name = <<"Create admins">>,
+    #groups_perm{name = <<"create-admins">>, display_name = <<"Create admins">>,
       role = <<"admin">>, status = false}
   ].
 
 process_iq_personal(#iq{type = get, from = From, to = To,
   sub_els = [Query]}) ->
-  case lists:keyfind(<<"id">>, 1, Query#xmlel.attrs) of
-    {_, Val} when Val /= <<>> ->
-      get_perms_query(To, From, Val);
+  case Query#groups_perms_query.id of
+    UserId when UserId /= <<>> ->
+      get_perms_query(To, From, UserId);
     _ -> {error, bad_request}
   end;
 process_iq_personal(#iq{type = set, from = From, to = To,
   sub_els = [Query]}) ->
-  Perms = decode_query(Query),
-  case lists:keyfind(<<"id">>, 1, Query#xmlel.attrs) of
-    {_, Val} when Val /= <<>> ->
-      set_perms_query(To, From, Val, Perms);
+  case Query#groups_perms_query.id of
+    UserId when UserId /= <<>> ->
+      PermsEl = Query#groups_perms_query.perms,
+      Perms = validate_perms(PermsEl#groups_perms.perms),
+      set_perms_query(To, From, UserId, Perms);
     _ -> {error, bad_request}
   end;
 process_iq_personal(_) ->
@@ -322,8 +324,8 @@ process_iq_personal(_) ->
 process_iq_default(#iq{type = get, from = From, to = To}) ->
   get_default_perms_query(To, From);
 process_iq_default(#iq{type = set, from = From, to = To,
-  sub_els = [Query]} ) ->
-  Perms = decode_query(Query),
+  sub_els = [#groups_perms_query{perms = PermsEl}]} ) ->
+  Perms =  validate_perms(PermsEl#groups_perms.perms),
   set_default_perms_query(To, From, Perms);
 process_iq_default(_) ->
   {error, bad_request}.
@@ -331,8 +333,8 @@ process_iq_default(_) ->
 process_iq_newbies(#iq{type = get, from = From, to = To}) ->
   get_newbies_perms_query(To, From);
 process_iq_newbies(#iq{type = set, from = From, to = To,
-  sub_els = [Query]}) ->
-  Perms = decode_query(Query),
+  sub_els = [#groups_perms_query{perms = PermsEl}]} ) ->
+  Perms = validate_perms(PermsEl#groups_perms.perms),
   set_newbies_perms_query(To, From, Perms);
 process_iq_newbies(_) ->
   {error, bad_request}.
@@ -348,7 +350,7 @@ get_default_perms_query(GroupJID, UserJID) ->
   if
     IsOwner; IsChangePerms ->
       GrPerms = calculate_default_perms(Server, Group),
-      permissions_xmlel(GrPerms);
+      #groups_perms{perms = GrPerms};
     true ->
       {error, not_allowed}
   end.
@@ -374,7 +376,7 @@ add_default_perms(_Server, _Group, []) ->
   ok;
 add_default_perms(Server, Group, [Perm | Perms]) ->
   sql_add_default_perm(Server, Group,
-    Perm#permission.name, Perm#permission.status),
+    Perm#groups_perm.name, Perm#groups_perm.status),
   copy_to_fast_perms(Server,Group, Group, Perm),
   add_default_perms(Server, Group, Perms).
 
@@ -390,25 +392,6 @@ set_perms_query(Group, Requester, UserId, Perms)->
     Member ->
       set_perms_query(Server, GroupS, RequesterS, Member, Perms)
   end.
-
-%%set_perms_query(Server, Group, Requester, Member, Perms)->
-%%  RPerms = get_permissions(Server, Group, Requester),
-%%  Owner = is_permitted(<<"owner">>, RPerms),
-%%  CreateAdmins = is_permitted(<<"create-admins">>, RPerms),
-%%  ChangePerms = is_permitted(<<"change-permissions">>, RPerms),
-%%  MemberPerms = get_permissions(Server, Group, Member),
-%%  MemberIsAdmin = is_admin(MemberPerms),
-%%  MemberIsOwner = is_permitted(<<"owner">>, MemberPerms),
-%%  MPs = check_roles(Perms, [<<"member">>]),
-%%  APs = check_roles(Perms, [<<"admin">>]),
-%%  OPs = check_roles(Perms, [<<"owner">>]),
-%%  case is_allowed(Owner, CreateAdmins, ChangePerms,
-%%    MemberIsOwner, MemberIsAdmin, MPs, APs, OPs) of
-%%    true ->
-%%      add_personal_perms(Server, Group, Requester, Member, Perms);
-%%    false ->
-%%      {error, not_allowed}
-%%  end.
 
 set_perms_query(Server, Group, Requester, Member, Perms) ->
   R = verify_users(Server, Group, Requester, Member),
@@ -434,15 +417,16 @@ set_perms_query(_, _, _, _, _, _) ->
 
 add_personal_perms(Server, Group, IssuedBy, Member, Perms) ->
   lists:foreach(fun(Perm) ->
-    Expires = case Perm#permission.seconds of
+    Expires = case Perm#groups_perm.seconds of
+                undefined -> 0;
                 0 -> 0;
                 S -> erlang:system_time(second) + S
               end,
 
-    sql_add_perm(Server, Group, Member, Perm#permission.name,
-      Perm#permission.role, Perm#permission.status, Expires, IssuedBy),
+    sql_add_perm(Server, Group, Member, Perm#groups_perm.name,
+      Perm#groups_perm.role, Perm#groups_perm.status, Expires, IssuedBy),
     copy_to_fast_perms(Server, Group, Member,
-      Perm#permission{expires = Expires})
+      Perm#groups_perm{expires = Expires})
                 end, Perms),
   ok.
 
@@ -468,7 +452,7 @@ get_perms_query(Server, Group, Requester, Member)->
 
 delete_admin_perms(Server, Group, Member) ->
   sql_delete_admin_perms(Server, Group, Member),
-  sql_delete_promoter(Server, Group, Member),
+  sql_delete_actor(Server, Group, Member),
   ok.
 
 get_newbies_perms_query(GroupJID, UserJID) ->
@@ -481,7 +465,7 @@ get_newbies_perms_query(GroupJID, UserJID) ->
   if
     IsOwner; IsChangePerms ->
       Perms = newbies_perms(Server, Group),
-      permissions_xmlel(Perms);
+      #groups_perms{perms =Perms};
     true ->
       {error, not_allowed}
   end.
@@ -506,57 +490,58 @@ add_newbies_perms(_Server, _Group, []) ->
   ok;
 add_newbies_perms(Server, Group, [Perm | Perms]) ->
   sql_add_newbies_perm(Server, Group,
-    Perm#permission.name, Perm#permission.status, Perm#permission.seconds),
+    Perm#groups_perm.name, Perm#groups_perm.status, Perm#groups_perm.seconds),
   add_newbies_perms(Server, Group, Perms).
 
 delete_newbies_perms(Server, Group) ->
   sql_delete_newbies_perms(Server, Group).
 
-save_promoter(Server, Group, IssuedBy, Member) ->
-  case get_promoter(Server, Group, Member) of
+save_actor(Server, Group, IssuedBy, Member) ->
+  case get_actor(Server, Group, Member) of
     not_found ->
-      sql_save_promoter(Server, Group, IssuedBy, Member);
+      sql_save_actor(Server, Group, IssuedBy, Member);
     _ ->
       ok
   end.
 
-delete_promoter(Server, Group, Member) ->
-  sql_delete_promoter(Server, Group, Member),
+delete_actor(Server, Group, Member) ->
+  sql_delete_actor(Server, Group, Member),
   ok.
 
-get_role(Perm) ->
-  case lists:keyfind(Perm, #permission.role, defaults()) of
-    #permission{role = V} -> V;
-    _ -> <<"member">>
-  end.
-
 group_perms(Server, Group) ->
-  sql_select_default_perms(Server, Group).
+  Perms = sql_select_default_perms(Server, Group),
+  to_records([{N, S, 0} || {N, S} <- Perms]).
 
 personal_perms(Server, Group, Member) ->
   Perms = sql_select_perms(Server, Group, Member),
-  lists:map(fun({Name, Status, Expires}) ->
-    P = lists:keyfind(Name, #permission.name, defaults()),
-    P#permission{status = Status, expires = Expires}
+  to_records(Perms).
+
+to_records(Perms) ->
+  lists:filtermap(fun({Name, Status, Expires}) ->
+    case lists:keyfind(Name, #groups_perm.name, defaults()) of
+      false -> false;
+      P when Expires == 0->
+        {true, P#groups_perm{status = Status}};
+      P ->
+        {true, P#groups_perm{status = Status, expires = Expires}}
+    end
             end, Perms).
 
 
-
-
 copy_to_fast_perms(_Server, Group, Group,
-    #permission{name = <<"send-messages">>} = P) ->
-  Default = is_permitted(P#permission.name, defaults()),
-  case P#permission.status of
+    #groups_perm{name = <<"send-messages">>} = P) ->
+  Default = is_permitted(P#groups_perm.name, defaults()),
+  case P#groups_perm.status of
     Default ->
       del_fast_perm(Group, Group, P);
     _ ->
       add_fast_perm(Group, Group, P)
   end;
 copy_to_fast_perms(Server, Group, Member,
-    #permission{name = <<"send-messages">>} = P) ->
+    #groups_perm{name = <<"send-messages">>} = P) ->
   GroupPerms = calculate_default_perms(Server,Group),
-  Default = is_permitted(P#permission.name, GroupPerms),
-  case P#permission.status of
+  Default = is_permitted(P#groups_perm.name, GroupPerms),
+  case P#groups_perm.status of
     Default ->
       del_fast_perm(Group, Member, P);
     _ ->
@@ -566,28 +551,27 @@ copy_to_fast_perms(_Server, _Group, _Member, _) ->
   ok.
 
 add_fast_perm(Group, Member, P) ->
-  Expires = case P#permission.expires of
-              0 -> infinity;
-              undefined -> infinity;
+  Expires = case P#groups_perm.expires of
+              0 -> undefined;
               V -> V
             end,
   mnesia:dirty_write(#fast_group_perms{
-    gup = {Group, Member, P#permission.name},
-    status = P#permission.status,
+    gup = {Group, Member, P#groups_perm.name},
+    status = P#groups_perm.status,
     expires = Expires}).
 
 del_fast_perm(Group, Member, P) ->
   mnesia:dirty_delete(fast_group_perms,
-    {Group, Member, P#permission.name}).
+    {Group, Member, P#groups_perm.name}).
 
 
 newbies_perms(Server, Group)->
   Values = sql_select_newbies_perms(Server, Group),
   lists:filtermap(
-    fun(#permission{name = Name} = P)->
+    fun(#groups_perm{name = Name} = P)->
       case lists:keyfind(Name, 1, Values) of
         {Name, Status, Secs} ->
-          {true, P#permission{status = Status, seconds = Secs}};
+          {true, P#groups_perm{status = Status, seconds = Secs}};
         _ ->
           false
       end
@@ -597,12 +581,10 @@ newbies_perms(Server, Group)->
 calculate_default_perms(Server, Group) ->
   GroupPerms = group_perms(Server, Group),
   Perms = lists:map(
-    fun(#permission{name = Name} = P)->
-      case lists:keyfind(Name, 1, GroupPerms) of
-        {Name, Status} ->
-          P#permission{status = Status};
-        _ ->
-          P
+    fun(#groups_perm{name = Name} = P)->
+      case lists:keyfind(Name,  #groups_perm.name, GroupPerms) of
+        false -> P;
+        Perm -> Perm
       end
     end, defaults()),
   filter_by_role(Perms, [<<"member">>]).
@@ -610,49 +592,57 @@ calculate_default_perms(Server, Group) ->
 
 calculate_perms(Perms) ->
   Role = lists:foldl(
-    fun(#permission{role = <<"admin">>, status = true}, owner) -> owner;
-      (#permission{role = <<"admin">>, status = true}, _) -> admin;
-      (#permission{role = <<"owner">>, status = true}, _) -> owner;
+    fun(_, <<"owner">>) -> <<"owner">>;
+      (#groups_perm{role = <<"admin">>, status = true}, _) -> <<"admin">>;
+      (#groups_perm{role = <<"owner">>, status = true}, _) -> <<"owner">>;
       (_, Acc) -> Acc
-    end, member, Perms),
-  case Role of
-    owner ->
-      [P#permission{status = true, expires = 0} || P <- Perms];
-    admin ->
-      lists:map(
-        fun(#permission{role = <<"member">>} = P) ->
-          P#permission{status = true, expires = 0};
-          (P) -> P
-        end, Perms);
-    _ ->
-      Perms
-  end.
+    end, <<"member">>, Perms),
+  Perms1 = lists:map(
+    fun(P) when Role == <<"owner">> ->
+        P#groups_perm{status = true, expires = undefined};
+      (#groups_perm{role = <<"member">>} = P) when Role == <<"admin">> ->
+        P#groups_perm{status = true, expires = undefined};
+      (P) -> P
+    end, Perms),
+  {Role, Perms1}.
+
 
 calculate_perms(GroupDefaults, Personal) ->
   Perms =lists:map(
-    fun(#permission{name = Name} = P)->
-      case lists:keyfind(Name, #permission.name, Personal) of
+    fun(#groups_perm{name = Name} = P)->
+      case lists:keyfind(Name, #groups_perm.name, Personal) of
         false ->
-          case lists:keyfind(Name, 1, GroupDefaults) of
-            {Name, Status} ->
-              P#permission{status = Status};
-            _ ->
-              P
+          case lists:keyfind(Name, #groups_perm.name, GroupDefaults) of
+            false -> P;
+            Perm -> Perm
           end;
         Perm -> Perm
       end
     end, defaults()),
   calculate_perms(Perms).
 
+member_info(Server, Group, Member) ->
+  GroupDefaults = group_perms(Server, Group),
+  Personal = personal_perms(Server, Group, Member),
+  {Role, Perms} = calculate_perms(GroupDefaults, Personal),
+  Actor = if
+            Role == <<"member">> -> <<>>;
+            true ->
+              case get_actor(Server, Group, Member) of
+                 not_found -> undefined;
+                        A -> A
+              end
+          end,
+  {Role, Actor, Perms}.
 
 is_permitted(Perm, Perms) ->
-  case lists:keyfind(Perm, #permission.name, Perms) of
-    #permission{status = S} -> S;
+  case lists:keyfind(Perm, #groups_perm.name, Perms) of
+    #groups_perm{status = S} -> S;
     _ -> false
   end.
 
 filter_by_role(Perms, Roles)->
-  [P || P <- Perms, lists:member(P#permission.role, Roles)].
+  [P || P <- Perms, lists:member(P#groups_perm.role, Roles)].
 
 check_roles(Perms, Roles) ->
   case filter_by_role(Perms, Roles) of
@@ -662,8 +652,8 @@ check_roles(Perms, Roles) ->
 
 lock_perms(Perms, Roles) ->
   lists:map(fun(P) ->
-    case  lists:member(P#permission.role, Roles) of
-      true -> P#permission{fixed = true};
+    case  lists:member(P#groups_perm.role, Roles) of
+      true -> P#groups_perm{fixed = true};
       _ -> P
     end
             end, Perms).
@@ -673,9 +663,22 @@ is_owner(Perms) ->
 
 is_admin(Perms) ->
   P1 = filter_by_role(Perms, [<<"admin">>]),
-  case [P || P <- P1, P#permission.status] of
+  case [P || P <- P1, P#groups_perm.status] of
     [] -> false;
     _ -> true
+  end.
+
+validate_perms(Perms) ->
+  validate_perms(defaults(), Perms, []).
+
+validate_perms(_Defaults, [], Acc) -> Acc;
+validate_perms(Defaults,[Perm | Perms], Acc) ->
+  #groups_perm{name = Name, status = Status, seconds = Secs} = Perm,
+  case lists:keyfind(Name, #groups_perm.name, Defaults) of
+    false -> validate_perms(Defaults, Perms, Acc);
+    DP ->
+      Acc1 = Acc ++ [DP#groups_perm{status = Status, seconds = Secs}],
+      validate_perms(Defaults, Perms, Acc1)
   end.
 
 verify_users(Server, Group, Requester, User) ->
@@ -700,7 +703,7 @@ verify_users(Server, Group, Requester, ReqOpts, User) ->
     UserIsOwner -> false;
     ReqIsOwner -> {true, ReqOpts, UserOpts};
     UserIsAdmin ->
-       case get_promoter(Server, Group, User) of
+       case get_actor(Server, Group, User) of
          Requester -> {true, ReqOpts, UserOpts};
          _ -> false
        end;
@@ -714,9 +717,9 @@ update_user(Server, Group, IssuedBy, Member, {WasOwner, WasAdmin})->
   if
     (not WasOwner and IsOwner) orelse
       (not WasAdmin and IsAdmin) ->
-      save_promoter(Server, Group, IssuedBy, Member);
+      save_actor(Server, Group, IssuedBy, Member);
     WasAdmin and not IsAdmin ->
-      delete_promoter(Server, Group, Member);
+      delete_actor(Server, Group, Member);
     true -> ok
   end,
   Role = if
@@ -727,9 +730,9 @@ update_user(Server, Group, IssuedBy, Member, {WasOwner, WasAdmin})->
   mod_groups_users:update_user_status(Server, Member, Group, Role),
   ok.
 
-get_promoter(Server, Group, Protege) ->
+get_actor(Server, Group, Protege) ->
   {_, Server, _ } = jid:tolower(jid:from_string(Group)),
-  case sql_get_promoter(Server, Group, Protege) of
+  case sql_get_actor(Server, Group, Protege) of
     not_found -> not_found;
     P -> P
   end.
@@ -777,156 +780,36 @@ make_result(Result,Iq) when is_tuple(Result) ->
 make_result(_,Iq) ->
   xmpp:make_iq_result(Iq).
 
-%%set_perms_query(Server, Group, Requester, Member, Perms)->
-%%  RPerms = get_permissions(Server, Group, Requester),
-%%  Owner = is_permitted(<<"owner">>, RPerms),
-%%  CreateAdmins = is_permitted(<<"create-admins">>, RPerms),
-%%  ChangePerms = is_permitted(<<"change-permissions">>, RPerms),
-%%  IsAllowed =
-%%    if
-%%      Owner; ChangePerms; CreateAdmins ->
-%%        MemberPerms = get_permissions(Server, Group, Member),
-%%        MemberAdmin = is_admin(MemberPerms),
-%%        case {MemberAdmin, check_roles(Perms, [<<"member">>])} of
-%%          {true, true} ->
-%%            false;
-%%          _ ->
-%%            true
-%%        end;
-%%     true ->
-%%        false
-%%    end,
-%%  if
-%%    IsAllowed ->
-%%      set_perms_query({Owner, ChangePerms, CreateAdmins},
-%%      Server, Group, Requester, Member, Perms);
-%%    true ->
-%%      {error, not_allowed}
-%%  end.
-
-%% owner
-%%set_perms_query({true, _, _}, Server, Group, IssuedBy, Member, Perms) ->
-%%  add_personal_perms(Server, Group, IssuedBy, Member, Perms);
-%%%% change-permissions and create-admins
-%%set_perms_query({_, true, true}, Server, Group, IssuedBy, Member, Perms) ->
-%%  case lists:keyfind(<<"owner">>, #permission.name, Perms) of
-%%    false ->
-%%      add_personal_perms(Server, Group, IssuedBy, Member, Perms);
-%%    _ ->
-%%      {error, not_allowed}
-%%  end;
-%%%% change-permissions
-%%set_perms_query({_, true, _}, Server, Group, IssuedBy, Member, Perms) ->
-%%  Forbidden = check_forbidden(Perms, [<<"owner">>, <<"admin">>]),
-%%  set_perms_query(Forbidden, Server, Group, IssuedBy, Member, Perms);
-%%%% create-admins
-%%set_perms_query({_, _, true}, Server, Group, IssuedBy, Member, Perms) ->
-%%  Forbidden = check_forbidden(Perms, [<<"owner">>, <<"member">>]),
-%%  set_perms_query(Forbidden, Server, Group, IssuedBy, Member, Perms);
-%%set_perms_query(true, Server, Group, IssuedBy, Member, Perms) ->
-%%  add_personal_perms(Server, Group, IssuedBy, Member, Perms);
-%%set_perms_query(_, _Server, _Group, _IssuedBy, _Member, _Perms) ->
-%%  {error, not_allowed}.
-
-
 %% owner
 perms_query_result({true, _, _}, Server, Group, Member) ->
-  Perms = get_permissions(Server, Group, Member),
-  permissions_xmlel(Perms);
+  {Role, Actor, Perms} = member_info(Server, Group, Member),
+  perms_element(Role, Actor, Perms, []);
 %% create-admins and change-permissions
 perms_query_result({_, true, true}, Server, Group, Member) ->
-  Perms = get_permissions(Server, Group, Member),
-  permissions_xmlel(lock_perms(Perms,[<<"owner">>]));
+  {Role, Actor, Perms} = member_info(Server, Group, Member),
+  perms_element(Role, Actor, Perms, [<<"owner">>]);
 %% change-permissions
 perms_query_result({_, true, _}, Server, Group, Member) ->
-  Perms = get_permissions(Server, Group, Member),
-  permissions_xmlel(lock_perms(Perms,[<<"owner">>, <<"admin">>]));
+  {Role, Actor, Perms} = member_info(Server, Group, Member),
+  perms_element(Role, Actor, Perms, [<<"owner">>, <<"admin">>]);
 %% create-admins
 perms_query_result({_, _, true}, Server, Group, Member) ->
-  Perms = get_permissions(Server, Group, Member),
-  permissions_xmlel(lock_perms(Perms,[<<"owner">>, <<"member">>]));
+  {Role, Actor, Perms} = member_info(Server, Group, Member),
+  perms_element(Role, Actor, Perms, [<<"owner">>, <<"member">>]);
 perms_query_result(my_perms, Server, Group, Member) ->
-  Perms = get_permissions(Server, Group, Member),
-  Locked = lock_perms(Perms,[<<"owner">>, <<"admin">>, <<"member">>]),
-  permissions_xmlel(Locked);
+  {Role, Actor, Perms} = member_info(Server, Group, Member),
+  perms_element(Role, Actor, Perms,
+    [<<"owner">>, <<"admin">>, <<"member">>]);
 %% not allowed
 perms_query_result(_, _Server, _Group, _Member) ->
   {error, not_allowed}.
 
+perms_element(Role, Actor, Perms, []) ->
+  #groups_perms{role = Role, actor = Actor, perms = Perms};
+perms_element(Role, Actor, Perms, LockedRoles) ->
+  Locked = lock_perms(Perms, LockedRoles),
+  #groups_perms{role = Role, actor = Actor, perms = Locked}.
 
-permissions_xmlel(Perms) ->
-  PermsELs = lists:map(
-    fun(Perm) ->
-      Expires = case Perm#permission.expires of
-                  undefined -> [];
-                  0 -> [];
-                  V -> [{<<"expires">>, integer_to_binary(V)}]
-                end,
-      Fixed = case Perm#permission.fixed of
-                true -> [{<<"fixed">>, <<"true">>}];
-                _ -> []
-              end,
-      Seconds = case Perm#permission.seconds of
-                  undefined -> [];
-                  0 -> [];
-                  S -> [{<<"seconds">>, integer_to_binary(S)}]
-                end,
-
-      #xmlel{name = <<"permission">>, attrs = [
-        {<<"xmlns">>, ?NS_GROUPS_PERMS},
-        {<<"name">>, Perm#permission.name},
-        {<<"role">>, Perm#permission.role},
-        {<<"status">>, atom_to_binary(Perm#permission.status, latin1)}
-        ] ++ Expires ++ Fixed ++ Seconds,
-        children = [{xmlcdata, Perm#permission.display_name}]}
-    end, Perms),
-  #xmlel{name = <<"permissions">>,
-    attrs = [{<<"xmlns">>, ?NS_GROUPS_PERMS}],
-    children = PermsELs}.
-
--spec decode_iq_subel(xmpp_element() | xmlel()) -> xmpp_element() | xmlel().
-%% Tell gen_iq_handler not to auto-decode IQ payload
-decode_iq_subel(El) ->
-  Els = El#xmlel.children,
-  Perms = lists:filter(
-    fun({xmlcdata, _}) -> false;
-      (_) -> true
-    end, Els),
-  El#xmlel{children = Perms}.
-
-decode_query(Query) ->
-  PermsEl = decode_iq_subel(hd(Query#xmlel.children)),
-  Els = PermsEl#xmlel.children,
-  Perms = lists:filtermap(
-    fun(#xmlel{} = P) ->
-      Name = xmpp:get_name(P),
-      if
-        Name == <<"permission">> ->
-          validate_perm_el(P);
-        true ->
-          false
-      end;
-      (_) -> false
-    end, Els),
-  Perms.
-
-validate_perm_el(El) ->
-  Name = xmpp_codec:get_attr(<<"name">>, El#xmlel.attrs, undefined),
-  Perm = lists:keyfind(Name, #permission.name, defaults()),
-  Status = xmpp_codec:get_attr(<<"status">>, El#xmlel.attrs, undefined),
-  Seconds = xmpp_codec:get_attr(<<"seconds">>, El#xmlel.attrs, <<"0">>),
-  if
-    Perm == false orelse Status == undefined ->
-      false;
-    true ->
-      {true, Perm#permission{status = dec_bool(Status),
-        seconds = binary_to_integer(Seconds)}}
-  end.
-
-dec_bool(<<"1">>) -> true;
-dec_bool(<<"0">>) -> false;
-dec_bool(<<"true">>) -> true;
-dec_bool(<<"false">>) -> false.
 
 init_fast_perms(Host) ->
   ejabberd_mnesia:create(?MODULE, fast_group_perms,
@@ -967,22 +850,6 @@ sql_select_default_perms(Server, Group) ->
     {selected, Result} -> Result ;
     _ -> []
   end.
-
-%%sql_select_perm(Server, Group, User, Perm) ->
-%%  Now = erlang:system_time(second),
-%%  case ejabberd_sql:sql_query(
-%%    Server,
-%%    ?SQL("select @(status)b from groupchat_permissions "
-%%    " where groupchat=%(Group)s and member=%(User)s and permission=%(Perm)s"
-%%    " and (valid_until = 0 or valid_until > %(Now)d) and "
-%%    " (select subscription from groupchat_users where chatgroup=%(Group)s "
-%%    " and username=%(User)s)='both'")) of
-%%    {selected, []} -> undefined;
-%%    {selected, [Result | _]} -> Result ;
-%%    _ -> false
-%%  end.
-
-
 
 sql_add_perm(Server, Group, Member, Perm, Role,
     Status, Expires, IssuedBy) ->
@@ -1049,29 +916,29 @@ sql_select_owners(Server, Group) ->
   end.
 
 
-sql_get_promoter(Server, Group, Protege)->
+sql_get_actor(Server, Group, Protege)->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(promoter)s from groupchat_permissions_promoter "
+    ?SQL("select @(actor)s from groupchat_permissions_actors "
     " where groupchat=%(Group)s and protege=%(Protege)s")) of
     {selected, [{Result}]} -> Result;
     _ ->
       not_found
   end.
 
-sql_save_promoter(Server, Group, Promoter, Protege) ->
+sql_save_actor(Server, Group, Actor, Protege) ->
   ejabberd_sql:sql_query(
     Server,
     ?SQL_INSERT(
-      "groupchat_permissions_promoter",
+      "groupchat_permissions_actors",
       ["groupchat=%(Group)s",
-        "promoter=%(Promoter)s",
+        "actor=%(Actor)s",
         "protege=%(Protege)s"])).
 
-sql_delete_promoter(Server, Group, Protege)->
+sql_delete_actor(Server, Group, Protege)->
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("delete from groupchat_permissions_promoter "
+    ?SQL("delete from groupchat_permissions_actors "
     " where groupchat=%(Group)s and protege=%(Protege)s")).
 
 sql_get_users_with_perm(Server, Perm, Status) ->

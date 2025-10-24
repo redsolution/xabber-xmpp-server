@@ -22,9 +22,9 @@ CREATE TABLE groupchat_newbies_permissions(
     CONSTRAINT uc_groupchat_newbies_permissions_group_perm UNIQUE (groupchat, permission)
     );
 
-CREATE TABLE groupchat_permissions_promoter(
+CREATE TABLE groupchat_permissions_actors(
     groupchat text NOT NULL,
-    promoter text NOT NULL,
+    actor text NOT NULL,
     protege text NOT NULL,
-    CONSTRAINT uc_groupchat_permissions_promoter_groupchat_perm UNIQUE (groupchat, promoter, protege)
+    CONSTRAINT uc_groupchat_permissions_promoter_groupchat_perm UNIQUE (groupchat, actor, protege)
     );

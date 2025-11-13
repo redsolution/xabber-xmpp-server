@@ -306,16 +306,28 @@ process_iq_personal(#iq{type = get, from = From, to = To,
   sub_els = [Query]}) ->
   case Query#groups_perms_query.id of
     UserId when UserId /= <<>> ->
-      get_perms_query(To, From, UserId);
+      case get_perms_query(To, From, UserId) of
+        #groups_perms{} = P ->
+          Query#groups_perms_query{perms = P};
+        Err ->
+          Err
+      end;
     _ -> {error, bad_request}
   end;
 process_iq_personal(#iq{type = set, from = From, to = To,
-  sub_els = [Query]}) ->
+  sub_els = [#groups_perms_query{} = Query]}) ->
   case Query#groups_perms_query.id of
     UserId when UserId /= <<>> ->
       PermsEl = Query#groups_perms_query.perms,
       Perms = validate_perms(PermsEl#groups_perms.perms),
       set_perms_query(To, From, UserId, Perms);
+    _ -> {error, bad_request}
+  end;
+process_iq_personal(#iq{type = set, from = From, to = To,
+  sub_els = [#groups_perms_delete{} = Delete]}) ->
+  case Delete#groups_perms_delete.id of
+    UserId when UserId /= <<>> ->
+      perms_delete(To, From, UserId);
     _ -> {error, bad_request}
   end;
 process_iq_personal(_) ->
@@ -327,6 +339,9 @@ process_iq_default(#iq{type = set, from = From, to = To,
   sub_els = [#groups_perms_query{perms = PermsEl}]} ) ->
   Perms =  validate_perms(PermsEl#groups_perms.perms),
   set_default_perms_query(To, From, Perms);
+process_iq_default(#iq{type = set, from = From, to = To,
+  sub_els = [#groups_perms_delete{}]} ) ->
+  perms_delete(To, From, default);
 process_iq_default(_) ->
   {error, bad_request}.
 
@@ -336,6 +351,9 @@ process_iq_newbies(#iq{type = set, from = From, to = To,
   sub_els = [#groups_perms_query{perms = PermsEl}]} ) ->
   Perms = validate_perms(PermsEl#groups_perms.perms),
   set_newbies_perms_query(To, From, Perms);
+process_iq_newbies(#iq{type = set, from = From, to = To,
+  sub_els = [#groups_perms_delete{}]} ) ->
+  perms_delete(To, From, newbies);
 process_iq_newbies(_) ->
   {error, bad_request}.
 
@@ -346,11 +364,13 @@ get_default_perms_query(GroupJID, UserJID) ->
   User = jid:to_string(jid:remove_resource(UserJID)),
   UserPerms = get_permissions(Server, Group, User),
   IsOwner = is_permitted(<<"owner">>, UserPerms),
-  IsChangePerms =is_permitted(<<"change-default-permissions">>, UserPerms),
+  IsChangePerms = is_permitted(<<"change-default-permissions">>, UserPerms)
+    orelse is_permitted(<<"change-permissions">>, UserPerms),
   if
     IsOwner; IsChangePerms ->
       GrPerms = calculate_default_perms(Server, Group),
-      #groups_perms{perms = GrPerms};
+      #groups_perms_query{xmlns = ?NS_GROUPS_PERMS_DEFAULT,
+        perms = #groups_perms{perms = GrPerms}};
     true ->
       {error, not_allowed}
   end.
@@ -379,6 +399,9 @@ add_default_perms(Server, Group, [Perm | Perms]) ->
     Perm#groups_perm.name, Perm#groups_perm.status),
   copy_to_fast_perms(Server,Group, Group, Perm),
   add_default_perms(Server, Group, Perms).
+
+delete_default_perms(Server, Group) ->
+  sql_delete_default_perms(Server, Group).
 
 set_perms_query(_Group, _Requester, _UserId, [])->
   {error, bad_request};
@@ -450,6 +473,45 @@ get_perms_query(Server, Group, Requester, Member)->
   perms_query_result(
     {IsOwner, AllowChangePerms, AllowCreateAdmins}, Server, Group, Member).
 
+perms_delete(Group, Requester, UserId) when is_binary(UserId) ->
+  Server = Group#jid.lserver,
+  GroupS = jid:to_string(jid:remove_resource(Group)),
+  RequesterS = jid:to_string(jid:remove_resource(Requester)),
+  case mod_groups_users:get_user_by_id(Server, GroupS, UserId) of
+    none -> {error, not_found};
+    RequesterS -> {error, not_allowed};
+    Member ->
+      perms_delete(Server, GroupS, RequesterS, Member)
+  end;
+perms_delete(GroupJID, UserJID, PermsType) ->
+  Server = GroupJID#jid.lserver,
+  Group = jid:to_string(jid:remove_resource(GroupJID)),
+  User = jid:to_string(jid:remove_resource(UserJID)),
+  UserPerms = get_permissions(Server, Group, User),
+  IsOwner = is_permitted(<<"owner">>, UserPerms),
+  IsChangePerms =is_permitted(<<"change-default-permissions">>, UserPerms),
+  if
+    IsOwner orelse IsChangePerms->
+      case PermsType of
+        default -> delete_default_perms(Server, Group);
+        newbies -> delete_newbies_perms(Server, Group);
+        _ -> ok
+      end,
+      ok;
+    true ->
+      {error, not_allowed}
+  end.
+
+perms_delete(Server, Group, Requester, Member) ->
+  case verify_users(Server, Group, Requester, Member) of
+    {true, _, _} ->
+      sql_delete_perms(Server, Group, Member),
+      sql_delete_actor(Server, Group, Member),
+      ok;
+    _ ->
+      {error, not_allowed}
+  end.
+
 delete_admin_perms(Server, Group, Member) ->
   sql_delete_admin_perms(Server, Group, Member),
   sql_delete_actor(Server, Group, Member),
@@ -465,7 +527,8 @@ get_newbies_perms_query(GroupJID, UserJID) ->
   if
     IsOwner; IsChangePerms ->
       Perms = newbies_perms(Server, Group),
-      #groups_perms{perms =Perms};
+      #groups_perms_query{xmlns = ?NS_GROUPS_PERMS_NEWBIES,
+        perms = #groups_perms{perms = Perms}};
     true ->
       {error, not_allowed}
   end.
@@ -619,19 +682,24 @@ calculate_perms(GroupDefaults, Personal) ->
         Perm -> Perm
       end
     end, defaults()),
-  calculate_perms(Perms).
+  {Role, Perms1} = calculate_perms(Perms),
+  if
+    Role == <<"member">> andalso Personal /= [] ->
+      {<<"custom">>, Perms1};
+    true -> {Role, Perms1}
+  end.
 
 member_info(Server, Group, Member) ->
   GroupDefaults = group_perms(Server, Group),
   Personal = personal_perms(Server, Group, Member),
   {Role, Perms} = calculate_perms(GroupDefaults, Personal),
   Actor = if
-            Role == <<"member">> -> <<>>;
-            true ->
+            Role == <<"admin">> ->
               case get_actor(Server, Group, Member) of
-                 not_found -> undefined;
-                        A -> A
-              end
+                 not_found -> <<>>;
+                 A -> A
+              end;
+            true -> <<>>
           end,
   {Role, Actor, Perms}.
 
@@ -711,22 +779,17 @@ verify_users(Server, Group, Requester, ReqOpts, User) ->
   end.
 
 update_user(Server, Group, IssuedBy, Member, {WasOwner, WasAdmin})->
-  Perms = get_permissions(Server, Group, Member),
-  IsOwner = is_permitted(<<"owner">>, Perms),
-  IsAdmin = is_admin(Perms),
+  GroupDefaults = group_perms(Server, Group),
+  Personal = personal_perms(Server, Group, Member),
+  {Role, _Perms} = calculate_perms(GroupDefaults, Personal),
   if
-    (not WasOwner and IsOwner) orelse
-      (not WasAdmin and IsAdmin) ->
+    (not WasOwner and Role == <<"owner">>) orelse
+      (not WasAdmin and Role == <<"admin">>) ->
       save_actor(Server, Group, IssuedBy, Member);
-    WasAdmin and not IsAdmin ->
+    WasAdmin and Role /= <<"admin">> ->
       delete_actor(Server, Group, Member);
     true -> ok
   end,
-  Role = if
-           IsOwner -> <<"owner">>;
-           IsAdmin -> <<"admin">>;
-           true -> <<"member">>
-         end,
   mod_groups_users:update_user_status(Server, Member, Group, Role),
   ok.
 
@@ -863,6 +926,12 @@ sql_add_perm(Server, Group, Member, Perm, Role,
       "issued_by=%(IssuedBy)s"
     ]).
 
+sql_delete_perms(Server, Group, Member) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("delete from groupchat_permissions "
+    " where groupchat=%(Group)s and member=%(Member)s")).
+
 sql_delete_admin_perms(Server, Group, Member) ->
   ejabberd_sql:sql_query(
     Server,
@@ -876,6 +945,12 @@ sql_add_default_perm(Server, Group, Perm, Status) ->
     ["!groupchat=%(Group)s",
       "!permission=%(Perm)s",
       "status=%(Status)b"]).
+
+sql_delete_default_perms(Server, Group) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("delete from groupchat_default_permissions "
+    " where groupchat=%(Group)s")).
 
 sql_select_newbies_perms(Server, Group)->
   case ejabberd_sql:sql_query(

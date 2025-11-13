@@ -38,7 +38,7 @@
   check_user_if_exist/3,
 %%  get_user_from_chat/3,
   get_user_from_chat/4,
-  get_users_from_chat/5,
+  get_users_from_chat/6,
   form_user_card/2,
   users_to_send/2,
   add_user/6,
@@ -1444,7 +1444,7 @@ current_values(LServer,User,Chat) ->
 
 get_user_from_chat(LServer, Chat, User, ID) ->
   {User1, ID1} = if
-                   ID == <<>> orelse ID == <<"0">> -> {User, undefined};
+                   ID == <<"0">> -> {User, undefined};
                    true -> {undefined, ID}
                  end,
 
@@ -1469,8 +1469,9 @@ get_user_from_chat(LServer, Chat, User, ID) ->
       []
   end.
 
-get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
-  {QueryChats, QueryCount} = make_sql_query(Chat,RSM,Version),
+get_users_from_chat(LServer, Chat, RequesterUser, RSM, Version, Els) ->
+  Filters = get_filters(Els),
+  {QueryChats, QueryCount} = make_sql_query(Chat, RSM, Version, Filters),
   {selected, _, Res} = ejabberd_sql:sql_query(LServer, QueryChats),
   {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(LServer, QueryCount),
   Users = make_query(LServer,Res,RequesterUser,Chat),
@@ -1491,12 +1492,27 @@ get_users_from_chat(LServer,Chat,RequesterUser,RSM,Version) ->
   VersionNew = convert_from_datetime_to_unix_time(DateNew),
   #groups_query{xmlns = ?NS_GROUPS_MEMBERS, sub_els = SubEls, version = VersionNew}.
 
-make_sql_query(SChat,RSM,Version) ->
+get_filters([#xdata{type = 'submit'} = XData]) ->
+  case  xmpp_util:get_xdata_values(<<"FORM_TYPE">>, XData) of
+    [?NS_GROUPS_MEMBERS] ->
+      Filters = [<<"role">>, <<"badge">>, <<"nickname">>],
+      lists:filtermap(fun(Filter) ->
+        case  xmpp_util:get_xdata_values(Filter, XData) of
+          [Value] -> {true, {Filter, Value}};
+          _ -> false
+        end
+                      end, Filters);
+    _ -> []
+  end;
+get_filters(_) ->
+  [].
+
+make_sql_query(SChat, RSM, Version, Filters) ->
   {Max, Direction, Item} = get_max_direction_item(RSM),
   Chat = ejabberd_sql:escape(SChat),
   SubsClause =
     case Version of
-      0 ->
+      undefined ->
         <<" and subscription = 'both'">>;
       _ ->
         <<" and (subscription = 'both' or subscription = 'none')">>
@@ -1507,15 +1523,23 @@ make_sql_query(SChat,RSM,Version) ->
                     []
                 end,
   VersionClause =
-    case Version of
-      I when is_integer(I) ->
-        Date = convert_from_unix_time_to_datetime(Version),
-        [<<" AND (user_updated_at > ">>,
-          <<"'">>, Date, <<"' OR last_seen > ">>,
-          <<"'">>, Date, <<"')">>];
-      _ ->
-        []
+    if is_integer(Version) ->
+      Date = convert_from_unix_time_to_datetime(Version),
+      [<<" AND (user_updated_at > ">>,
+        <<"'">>, Date, <<"' OR last_seen > ">>,
+        <<"'">>, Date, <<"')">>];
+      true -> []
     end,
+  FiltersClause = lists:map(
+    fun({<<"nickname">>, Value})->
+      V = ejabberd_sql:escape(Value),
+      <<" and (nickname='",V/binary,"' or "
+      "((nickname='' or nickname is null) "
+      "and auto_nickname='",V/binary,"')) ">>;
+      ({Field, Value}) ->
+        V = ejabberd_sql:escape(Value),
+        <<" and ",Field/binary," = '",V/binary,"' ">>
+    end, Filters),
 
   Users = [<<"WITH group_members AS (SELECT username, id, badge,
   to_char(last_seen,'YYYY-MM-DDThh24:mi:ssZ') as last,
@@ -1525,8 +1549,9 @@ make_sql_query(SChat,RSM,Version) ->
    THEN groupchat_users.nickname
   ELSE groupchat_users.auto_nickname
   END AS r_nickname
-  FROM groupchat_users  WHERE chatgroup = '">>,Chat, <<"'">>, VersionClause, SubsClause,<<")
-  SELECT username, id, badge, last, subscription, r_nickname, role
+  FROM groupchat_users  WHERE chatgroup = '">>,Chat, <<"'">>,
+    VersionClause, SubsClause, FiltersClause,
+    <<") SELECT username, id, badge, last, subscription, r_nickname, role
   from group_members where 0=0 ">>],
   PageClause =
     case Item of
@@ -1543,7 +1568,7 @@ make_sql_query(SChat,RSM,Version) ->
         []
     end,
 
-  Query = [Users,PageClause],
+  Query = [Users, PageClause],
   QueryPage =
     case Direction of
       before ->

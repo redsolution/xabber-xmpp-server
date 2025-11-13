@@ -249,8 +249,8 @@ change_pinned_msg(Server, Group, User, MsgID) ->
 
 %% groupchat_info_change hook
 check_user_permission(_Acc,User,Chat,_Server,_FS) ->
-  %%  todo: adjust to the new permissions
-  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,User,Chat) of
+  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,
+    User, Chat) of
     true ->
       ok;
     _ ->

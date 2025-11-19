@@ -242,7 +242,7 @@ get_domains(Users) ->
             end, Users).
 
 check_owners(BlockList, Server, Group) ->
-  OwnerJIDs = mod_groups_permissions:get_owners(Server, Group),
+  OwnerJIDs = mod_groups_users:get_owners(Server, Group),
   OwnerDomains = get_domains(OwnerJIDs),
   Sum = OwnerJIDs ++ OwnerDomains,
   BlockList == BlockList -- Sum.

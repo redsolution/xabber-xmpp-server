@@ -32,7 +32,7 @@
 -include("xmpp.hrl").
 -export([start/2, stop/1, depends/2, mod_options/1,
   init/1, handle_call/3, handle_cast/2, terminate/2]).
--export([process_groupchat/1,make_action/1]).
+-export([process_groupchat/1,make_action/1, process_iq_sm/1]).
 
 
 %% records
@@ -58,11 +58,13 @@ terminate(_Reason, State) ->
   unregister_iq_handlers(Host).
 
 register_iq_handlers(Host) ->
+  gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_GROUPS, ?MODULE, process_iq_sm),
   gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_GROUPS, ?MODULE, process_groupchat),
   gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_GROUPS_DELETE, ?MODULE, process_groupchat),
   gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_GROUPS_CREATE, ?MODULE, process_groupchat).
 
 unregister_iq_handlers(Host) ->
+  gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_GROUPS),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_GROUPS),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_GROUPS_DELETE),
   gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_GROUPS_CREATE).
@@ -84,6 +86,37 @@ handle_cast(#iq{} = Iq, State) ->
   {noreply, State};
 handle_cast(_Request, State) ->
   {noreply, State}.
+
+process_iq_sm(#iq{sub_els = [#groups_owner{id = undefined}]} = Iq) ->
+  xmpp:make_error(Iq, xmpp:err_bad_request());
+process_iq_sm(#iq{sub_els = [#groups_owner{id = <<>>}]} = Iq) ->
+  xmpp:make_error(Iq, xmpp:err_bad_request());
+process_iq_sm(#iq{type = set, from=From, to = To,
+  sub_els = [#groups_owner{id = MemberID}]} = Iq) ->
+  {GUser, GServer, _} = jid:tolower(To),
+  case mod_xabber_entity:get_entity_type(GUser, GServer) of
+    group ->
+      Group = jid:to_string(jid:remove_resource(To)),
+      User = jid:to_string(jid:remove_resource(From)),
+      case mod_groups_users:check_if_exist(GServer, Group, User) of
+        true ->
+          case mod_groups_users:add_owner(To, From, MemberID) of
+            {error, not_allowed} ->
+              xmpp:make_error(Iq, xmpp:err_not_allowed());
+            {error, not_found} ->
+              xmpp:make_error(Iq, xmpp:err_item_not_found());
+            _ ->
+              xmpp:make_iq_result(Iq)
+          end;
+        _ ->
+          xmpp:make_error(Iq, xmpp:err_not_allowed())
+      end;
+    _ ->
+      xmpp:make_error(Iq, xmpp:err_not_allowed())
+  end;
+process_iq_sm(Iq) ->
+  xmpp:make_error(Iq, xmpp:err_feature_not_implemented()).
+
 
 %%process_iq(#iq{to = To} = Iq) ->
 %%  process_iq(mod_groups_sql:search_for_chat(To#jid.server,To#jid.user),Iq).

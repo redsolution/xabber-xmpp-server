@@ -94,7 +94,7 @@ delete_group_query(LServer, UserJID, GroupJID) ->
     true ->
       Group = jid:to_string(GroupJID),
       User = jid:to_string(jid:remove_resource(UserJID)),
-      case mod_groups_permissions:is_owner(LServer, Group, User) of
+      case mod_groups_users:is_owner(LServer, Group, User) of
         true -> delete_group(Group);
         _ -> {error, xmpp:err_not_allowed()}
       end;
@@ -339,7 +339,7 @@ maybe_delete_group(_Acc,{LServer, _User, Group, _UserCard, _Lang})->
     end,
   case Result of
     pass ->
-      case mod_groups_permissions:get_owners(LServer, Group) of
+      case mod_groups_users:get_owners(LServer, Group) of
         [] -> delete_group(Group, false);
         _ -> ok
       end;

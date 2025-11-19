@@ -56,7 +56,10 @@
   update_user_status/4, user_no_read/2, get_nick_in_chat/3, check_invited_to_p2p/3,
   process_subscribed/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2,
   change_peer_to_peer_invitation_state/4,
-  get_users_from_p2p/2
+  get_users_from_p2p/2,
+  add_owner/3,
+  get_owners/2,
+  is_owner/3
 ]).
 
 -export([is_exist/2
@@ -73,7 +76,7 @@
 -export([validate_data/8, validate_rights/8, update_user/8]).
 
 % Delete chat
--export([check_if_user_owner/4, unsubscribe_all_for_delete/2]).
+-export([unsubscribe_all_for_delete/2]).
 
 % Kick user from groupchat
 -export([check_if_user_can/6, check_kick/6, kick_user/6]).
@@ -88,7 +91,6 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
-  ejabberd_hooks:add(delete_groupchat, Host, ?MODULE, check_if_user_owner, 10),
   ejabberd_hooks:add(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
   ejabberd_hooks:add(request_own_rights, Host, ?MODULE, send_user_rights, 20),
   ejabberd_hooks:add(request_change_user_settings, Host, ?MODULE, check_if_exist, 10),
@@ -114,7 +116,6 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
-  ejabberd_hooks:delete(delete_groupchat, Host, ?MODULE, check_if_user_owner, 10),
   ejabberd_hooks:delete(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
   ejabberd_hooks:delete(request_own_rights, Host, ?MODULE, send_user_rights, 20),
   ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, check_if_exist, 10),
@@ -219,13 +220,6 @@ kick_user_from_chat(LServer,Chat,User) ->
       ejabberd_router:route(ChatJID,UserJID,#presence{type = unavailable, id = randoms:get_string()});
     _ ->
       <<>>
-  end.
-
-% delete groupchat hook
-check_if_user_owner(_Acc, LServer, User, Chat) ->
-  case mod_groups_permissions:is_owner(LServer, Chat, User) of
-    true -> ok;
-    _ -> {stop,{error, xmpp:err_not_allowed()}}
   end.
 
 unsubscribe_all_for_delete(LServer,Chat) ->
@@ -478,7 +472,45 @@ add_user(Server, Member, Role, Group, Subs, InvitedBy) ->
       not_allowed
   end.
 
+
+get_owners(Server, Group)->
+  sql_get_owners(Server, Group).
+
+is_owner(Server, Group, Member) ->
+  lists:member(Member, get_owners(Server, Group)).
+
+add_owner(Group, Requester, UserId) ->
+  Server = Group#jid.lserver,
+  GroupS = jid:to_string(jid:remove_resource(Group)),
+  RequesterS = jid:to_string(jid:remove_resource(Requester)),
+  case mod_groups_users:get_user_by_id(Server, GroupS, UserId) of
+    none -> {error, not_found};
+    RequesterS -> {error, not_allowed};
+    Member ->
+      add_owner(Server, GroupS, RequesterS, Member)
+  end.
+
+add_owner(Server, Group, Requester, Member) ->
+  Owners = get_owners(Server, Group),
+  case {lists:member(Requester, Owners), lists:member(Member, Owners)} of
+    {true, false} ->
+      update_user_status(Server, Member, Group, <<"owner">>),
+      ejabberd_hooks:run(groups_add_owner, Server, [Server, Group, Requester, Member]),
+      ok;
+    _ -> {error, not_allowed}
+  end.
+
 % SQL functions
+
+sql_get_owners(Server, Group) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s from groupchat_users "
+    " where chatgroup=%(Group)s and subscription='both'"
+    " and role='owner' ")) of
+    {selected, Users} -> [U || {U} <- Users];
+    _ -> []
+  end.
 
 sql_get_vcard_nickname_t(User)->
   case ejabberd_sql:sql_query_t(

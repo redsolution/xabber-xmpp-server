@@ -191,8 +191,7 @@ create_chat(Server, Creator, SubEls) ->
         user_count => <<"1">>, gstatus => Status},
       groups_sm:activate(Server, LocalPart, Info),
       mod_groups_users:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
-      mod_groups_permissions:set_permission(Chat, Creator, <<"owner">>,
-        true, 0, Creator),
+      ejabberd_hooks:run(groups_add_owner, Server, [Server, Chat, Creator, Creator]),
       Result = create_result_query(LocalPart, Name, Desc, Privacy, Membership, Index,
         ContactList, DomainList),
       {ok, Result, Chat, Creator};

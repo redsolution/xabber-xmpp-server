@@ -45,14 +45,8 @@
   remove_expired_perms/5,
   is_manager/3,
   validate_users/4,
-  get_permissions/2,
-  get_permissions/3,
-  get_perms_query/3,
-  set_permissions/4,
-  set_permission/6,
   fast_is_permitted/3,
-  is_permitted/3,
-  get_members/2
+  is_permitted/3
  ]).
 
 -record(fast_group_perms, {
@@ -330,18 +324,24 @@ process_iq_newbies(_) ->
   {error, bad_request}.
 
 
+check_requester(Server, Group, User) ->
+  Perms = get_permissions(Server, Group, User),
+  IsOwner = is_permitted(<<"owner">>, Perms),
+  AllowCreateAdmins = is_permitted(<<"create-admins">>, Perms),
+  AllowChangePerms = is_permitted(<<"change-permissions">>, Perms),
+  {IsOwner, AllowCreateAdmins, AllowChangePerms}.
+
 get_default_perms_query(GroupJID, UserJID) ->
   Server = GroupJID#jid.lserver,
   Group = jid:to_string(jid:remove_resource(GroupJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
-  UserPerms = get_permissions(Server, Group, User),
-  IsOwner = is_permitted(<<"owner">>, UserPerms),
-  IsChangePerms = is_permitted(<<"change-default-permissions">>, UserPerms)
-    orelse is_permitted(<<"change-permissions">>, UserPerms),
+  {IsOwner, ChangeAdmins, ChangePerms} =
+    check_requester(Server, Group, User),
   if
-    IsOwner; IsChangePerms ->
+    IsOwner; ChangeAdmins; ChangePerms ->
       GrPerms = calculate_default_perms(Server, Group),
-      #perms_defaults{perms = #perms_permissions{perms = GrPerms}};
+      #perms_defaults{perms =
+      #perms_permissions{perms = GrPerms}};
     true ->
       {error, not_allowed}
   end.
@@ -436,12 +436,8 @@ get_perms_query(Group, Requester, UserId)->
 get_perms_query(Server, Group, Requester, Requester)->
   perms_query_result(my_perms, Server, Group, Requester);
 get_perms_query(Server, Group, Requester, Member)->
-  Perms = get_permissions(Server, Group, Requester),
-  IsOwner = is_permitted(<<"owner">>, Perms),
-  AllowCreateAdmins = is_permitted(<<"create-admins">>, Perms),
-  AllowChangePerms = is_permitted(<<"change-permissions">>, Perms),
-  perms_query_result(
-    {IsOwner, AllowChangePerms, AllowCreateAdmins}, Server, Group, Member).
+  Privileges = check_requester(Server, Group, Requester),
+  perms_query_result(Privileges, Server, Group, Member).
 
 perms_delete(_GroupJID, _UserJID, undefined) ->
   {error, bad_request};
@@ -527,21 +523,28 @@ add_newbies_perms(Server, Group, [Perm | Perms]) ->
     Perm#perms_permission.name, Perm#perms_permission.status, Perm#perms_permission.seconds),
   add_newbies_perms(Server, Group, Perms).
 
-get_members(_UserJID, GroupJID) ->
-%%  todo: check user permissions
+get_members(UserJID, GroupJID) ->
   Server = GroupJID#jid.lserver,
   Group = jid:to_string(jid:remove_resource(GroupJID)),
-  List = sql_get_users(Server, Group),
-  Sorted = lists:foldl(fun({ID, P, S, T}, Acc) ->
-    case lists:keyfind(ID, 1, Acc) of
-      false ->
-        [{ID, [{P, S, T}]} | Acc];
-      {ID, Perms} ->
-        Acc1 = Acc -- [{ID, Perms}],
-        [{ID, [{P, S, T} | Perms]} | Acc1]
-    end
-                       end, [], List),
-  get_members(Server, Group, Sorted).
+  User = jid:to_string(jid:remove_resource(UserJID)),
+  {IsOwner, ChangeAdmins, ChangePerms} =
+    check_requester(Server, Group, User),
+  if
+    IsOwner; ChangeAdmins; ChangePerms ->
+      List = sql_get_users(Server, Group),
+      Sorted = lists:foldl(fun({ID, P, S, T}, Acc) ->
+        case lists:keyfind(ID, 1, Acc) of
+          false ->
+            [{ID, [{P, S, T}]} | Acc];
+          {ID, Perms} ->
+            Acc1 = Acc -- [{ID, Perms}],
+            [{ID, [{P, S, T} | Perms]} | Acc1]
+        end
+                           end, [], List),
+      get_members(Server, Group, Sorted);
+    true ->
+     {error, not_allowed}
+ end.
 
 get_members(_Server, _Group, []) ->
   [];
@@ -863,14 +866,14 @@ perms_query_result({true, _, _}, Server, Group, Member) ->
 perms_query_result({_, true, true}, Server, Group, Member) ->
   {Role, Actor, Perms} = member_info(Server, Group, Member),
   perms_element(Role, Actor, Perms, [<<"owner">>]);
-%% change-permissions
+%% create-admins
 perms_query_result({_, true, _}, Server, Group, Member) ->
   {Role, Actor, Perms} = member_info(Server, Group, Member),
-  perms_element(Role, Actor, Perms, [<<"owner">>, <<"admin">>]);
-%% create-admins
+  perms_element(Role, Actor, Perms, [<<"owner">>, <<"member">>]);
+%% change-permissions
 perms_query_result({_, _, true}, Server, Group, Member) ->
   {Role, Actor, Perms} = member_info(Server, Group, Member),
-  perms_element(Role, Actor, Perms, [<<"owner">>, <<"member">>]);
+  perms_element(Role, Actor, Perms, [<<"owner">>, <<"admin">>]);
 perms_query_result(my_perms, Server, Group, Member) ->
   {Role, Actor, Perms} = member_info(Server, Group, Member),
   perms_element(Role, Actor, Perms,

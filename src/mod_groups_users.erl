@@ -67,10 +67,10 @@
 ]).
 
 %% Change user settings hook export
--export([check_if_exist/6, get_user_rights/6, validate_request/6, change_user_rights/6, user_rights/3, check_if_request_user_exist/6, user_rights_and_time/3]).
+%%-export([check_if_exist/6, get_user_rights/6, validate_request/6, change_user_rights/6, user_rights/3, check_if_request_user_exist/6, user_rights_and_time/3]).
 
 % request_own_rights hook export
--export([check_if_user_exist/5, send_user_rights/5]).
+%%-export([check_if_user_exist/5, send_user_rights/5]).
 
 % Change user nick and badge
 -export([validate_data/8, validate_rights/8, update_user/8]).
@@ -91,22 +91,12 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
-  ejabberd_hooks:add(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
-  ejabberd_hooks:add(request_own_rights, Host, ?MODULE, send_user_rights, 20),
-  ejabberd_hooks:add(request_change_user_settings, Host, ?MODULE, check_if_exist, 10),
-  ejabberd_hooks:add(request_change_user_settings, Host, ?MODULE, check_if_request_user_exist, 15),
-  ejabberd_hooks:add(request_change_user_settings, Host, ?MODULE, get_user_rights, 20),
-  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, check_if_exist, 10),
-  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, check_if_request_user_exist, 15),
-  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, validate_request, 20),
-  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, change_user_rights, 30),
   ejabberd_hooks:add(groupchat_presence_hook, Host, ?MODULE, subscribe_user, 60),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, validate_data, 10),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, validate_rights, 15),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, update_user, 20),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 30),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, process_subscribed, 20),
-%%  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, set_default_restrictions, 40),
   ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
   ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
 
@@ -116,21 +106,11 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
-  ejabberd_hooks:delete(request_own_rights, Host, ?MODULE, check_if_user_exist, 10),
-  ejabberd_hooks:delete(request_own_rights, Host, ?MODULE, send_user_rights, 20),
-  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, check_if_exist, 10),
-  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, check_if_request_user_exist, 15),
-  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, validate_request, 20),
-  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, change_user_rights, 30),
-  ejabberd_hooks:delete(request_change_user_settings, Host, ?MODULE, check_if_exist, 10),
-  ejabberd_hooks:delete(request_change_user_settings, Host, ?MODULE, check_if_request_user_exist, 15),
-  ejabberd_hooks:delete(request_change_user_settings, Host, ?MODULE, get_user_rights, 20),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, validate_data, 10),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, validate_rights, 15),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, update_user, 20),
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 30),
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, process_subscribed, 20),
-%%  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, set_default_restrictions, 40),
   ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20),
   ejabberd_hooks:delete(groupchat_presence_hook, Host, ?MODULE, subscribe_user, 60).
@@ -233,82 +213,6 @@ unsubscribe_all_for_delete(LServer,Chat) ->
                 end,
     Users
   ).
-
-% request_own_rights hook
-check_if_user_exist(Acc, LServer, User, Chat,_Lang) ->
-  case check_user_if_exist(LServer,User,Chat) of
-    not_exist ->
-      {stop,{error, xmpp:err_item_not_found()}};
-    _ ->
-      Acc
-  end.
-
-send_user_rights(_Acc, LServer, User, Chat, Lang) ->
-  RightsAndTime = user_rights_and_time(LServer,Chat,User),
-  Fields = [
-    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
-    #xdata_field{var = <<"user-id">>, type = hidden, values = [<<"">>]}| make_fields_owner_no_options(LServer,RightsAndTime,Lang,'fixed')
-  ],
-  {stop,{ok,#groups_query{
-    xmlns = ?NS_GROUPS_RIGHTS,
-    sub_els = [
-      #xdata{type = form,
-        title = <<"Group user's rights">>,
-        instructions = [],
-        fields = Fields}
-    ]}}}.
-
-check_if_exist(Acc, LServer, User, Chat, _ID, _Lang) ->
-  case check_if_exist(LServer,Chat,User) of
-    false ->
-      {stop,not_ok};
-    _ ->
-      Acc
-  end.
-
-check_if_request_user_exist(Acc, LServer, _User, Chat, ID, _Lang) ->
-  case check_if_exist_by_id(LServer,Chat,ID) of
-    false ->
-      {stop,not_exist};
-    _ ->
-      Acc
-  end.
-
-%%  todo: delete (new permissions)
-get_user_rights(_Acc, LServer, User, Chat, ID, Lang) ->
-  RequestUser = get_user_by_id(LServer,Chat,ID),
-  case mod_groups_restrictions:validate_users(LServer,Chat,User,RequestUser) of
-    ok ->
-      {stop,{ok,create_right_form(LServer,User,Chat,RequestUser,ID, Lang)}};
-    _ ->
-      {stop,{ok,create_empty_form(ID)}}
-  end.
-
-%%  todo: delete (new permissions)
-validate_request(Acc, LServer, _User, Chat, ID, _Lang) ->
-  RequestUser = get_user_by_id(LServer,Chat,ID),
-  case decode(LServer,Acc) of
-    {ok,FS} ->
-      CurrentValues = current_values(LServer,RequestUser,Chat),
-      FS1 = FS -- CurrentValues,
-      validate(FS1);
-    _ ->
-      {stop,bad_request}
-  end.
-
-%%  todo: delete (new permissions)
-change_user_rights(Acc, LServer, User, Chat, ID, Lang) ->
-  RequestUser = get_user_by_id(LServer,Chat,ID),
-  case mod_groups_restrictions:validate_users(LServer,Chat,User,RequestUser) of
-    ok ->
-      OldCard = form_user_card(RequestUser,Chat),
-      change_rights(LServer,Chat,User,RequestUser,Acc),
-      Permission = [{Name,Type,Values} || {Name,Type,Values} <- Acc, Type == <<"permission">>],
-      Restriction = [{Name,Type,Values} || {Name,Type,Values} <- Acc, Type == <<"restriction">>],
-      {OldCard,RequestUser,Permission,Restriction,create_right_form_no_options(LServer,User,Chat,RequestUser,ID, Lang)};
-    _ ->
-      {stop,not_ok}
-  end.
 
 choose_name(UserCard) ->
   IsAnon = is_anon_card(UserCard),
@@ -1123,355 +1027,6 @@ change_peer_to_peer_invitation_state(LServer, User, Chat, State)
     ok;
 change_peer_to_peer_invitation_state(_, _, _, _) -> ok.
 
-%% user rights change functions
-user_rights(LServer,Chat,User) ->
-  TS = now_to_timestamp(now()),
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(right_name)s from groupchat_policy where username=%(User)s
-    and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d )")) of
-    {selected,Rights} ->
-      Rights;
-    _ ->
-      []
-  end.
-
-user_rights_and_time(LServer,Chat,User) ->
-  TS = now_to_timestamp(now()),
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(groupchat_policy.right_name)s,@(groupchat_rights.type)s,
-    @(groupchat_policy.valid_until)d
-    from groupchat_policy left join groupchat_rights on groupchat_rights.name = groupchat_policy.right_name where username=%(User)s
-    and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d ) ")) of
-    {selected,Rights} ->
-      Rights;
-    _ ->
-      []
-  end.
-
-%%  todo: delete (new permissions)
-create_right_form(LServer,User,Chat,RequestUser,ID, Lang) ->
-  UserRights = user_rights(LServer,Chat,User),
-  IsOwner = lists:member({<<"owner">>},UserRights),
-  CanRestrictUsers = lists:member({<<"set-restrictions">>},UserRights),
-  ?INFO_MSG("User ~p~nIs owner ~p~nCan restrict ~p~n",[User,IsOwner,CanRestrictUsers]),
-  case IsOwner of
-    true ->
-      RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
-      Fields = [
-        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
-        #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_owner(LServer,RightsAndTime,Lang)
-      ],
-      #groups_query{
-        xmlns = ?NS_GROUPS_RIGHTS,
-        sub_els = [
-          #xdata{type = form,
-            title = <<"Groupchat user's rights change">>,
-            instructions = [<<"Fill out this form to change the rights of user">>],
-            fields = Fields}
-        ]};
-    _ when CanRestrictUsers == true ->
-      RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
-      Fields = [
-        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
-        #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_admin(LServer,RightsAndTime,Lang)
-      ],
-      #groups_query{
-        xmlns = ?NS_GROUPS_RIGHTS,
-        sub_els = [
-          #xdata{type = form,
-            title = <<"Groupchat user's rights change">>,
-            instructions = [<<"Fill out this form to change the rights of user">>],
-            fields = Fields}
-        ]};
-    _ ->
-      create_empty_form(ID)
-  end.
-
-create_right_form_no_options(LServer,User,Chat,RequestUser,ID, Lang) ->
-  UserRights = user_rights(LServer,Chat,User),
-  IsOwner = lists:member({<<"owner">>},UserRights),
-  CanRestrictUsers = lists:member({<<"restrict-participants">>},UserRights),
-  case IsOwner of
-    true ->
-      RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
-      Fields = [
-        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
-        #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_owner_no_options(LServer,RightsAndTime,Lang,'list-single')
-      ],
-      #groups_query{
-        xmlns = ?NS_GROUPS_RIGHTS,
-        sub_els = [
-          #xdata{type = result,
-            title = <<"Groupchat user's rights change">>,
-            instructions = [<<"Fill out this form to change the rights of user">>],
-            fields = Fields}
-        ]};
-    _ when CanRestrictUsers == true ->
-      RightsAndTime = user_rights_and_time(LServer,Chat,RequestUser),
-      Fields = [
-        #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
-        #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}| make_fields_admin_no_options(LServer,RightsAndTime,Lang)
-      ],
-      #groups_query{
-        xmlns = ?NS_GROUPS_RIGHTS,
-        sub_els = [
-          #xdata{type = result,
-            title = <<"Groupchat user's rights change">>,
-            instructions = [<<"Fill out this form to change the rights of user">>],
-            fields = Fields}
-        ]};
-    _ ->
-      create_empty_form(ID)
-  end.
-
-create_empty_form(ID) ->
-  Fields = [
-    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_GROUPS_RIGHTS]},
-    #xdata_field{var = <<"user-id">>, type = hidden, values = [ID]}
-    ],
-  #groups_query{
-    xmlns = ?NS_GROUPS_RIGHTS,
-    sub_els = [
-      #xdata{type = form,
-        title = <<"Groupchat user s rights change">>,
-        instructions = [<<"Fill out this form to change the rights of user">>],
-        fields = Fields}
-    ]}.
-
-%%  todo: delete (new permissions)
-make_fields_owner(LServer,RightsAndTime,Lang) ->
-  %%  todo: adjust to the new permissions
-  AllRights = mod_groups_restrictions:get_all_rights(LServer),
-  ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
-  Permissions = [{R,D}||{R,T,D} <- AllRights, T == <<"permission">>],
-  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
-  PermissionsFields = lists:map(fun(Right) ->
-    {Name,Desc} = Right,
-    Values = get_time(Name,ExistingRights),
-    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
-      values = Values,
-      options = get_options(Values)
-    }
-            end, Permissions
-  ),
-  RestrictionsFields = lists:map(fun(Right) ->
-    {Name,Desc} = Right,
-    Values = get_time(Name,ExistingRights),
-    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
-      values = Values,
-      options = get_options(Values)
-    }
-                                end, Restrictions
-  ),
-  PermissionSection = [#xdata_field{var= <<"permission">>, type = 'fixed', values = [<<"Permissions">>]}],
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
-  PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
-
-%%  todo: delete (new permissions)
-make_fields_owner_no_options(LServer,RightsAndTime,Lang,Type) ->
-  %%  todo: adjust to the new permissions
-  AllRights = mod_groups_restrictions:get_all_rights(LServer),
-  ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
-  Permissions = [{R,D}||{R,T,D} <- AllRights, T == <<"permission">>],
-  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
-  PermissionsFields = lists:map(fun(Right) ->
-    {Name,Desc} = Right,
-    Values = get_time(Name,ExistingRights),
-    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = Type,
-      values = Values
-    }
-                                end, Permissions
-  ),
-  RestrictionsFields = lists:map(fun(Right) ->
-    {Name,Desc} = Right,
-    Values = get_time(Name,ExistingRights),
-    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = Type,
-      values = Values
-    }
-                                 end, Restrictions
-  ),
-  PermissionSection = [#xdata_field{var= <<"permission">>, type = 'fixed', values = [<<"Permissions">>]}],
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
-  PermissionSection ++ PermissionsFields ++ RestrictionSection ++ RestrictionsFields.
-
-%%  todo: delete (new permissions)
-make_fields_admin(LServer,RightsAndTime,Lang) ->
-  %%  todo: adjust to the new permissions
-  AllRights = mod_groups_restrictions:get_all_rights(LServer),
-  ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
-  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
-  RestrictionsFields = lists:map(fun(Right) ->
-    {Name,Desc} = Right,
-    Values = get_time(Name,ExistingRights),
-    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
-      values = Values,
-      options = get_options(Values)
-    }
-                                 end, Restrictions
-  ),
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
-  RestrictionSection ++ RestrictionsFields.
-
-%%  todo: delete (new permissions)
-make_fields_admin_no_options(LServer,RightsAndTime,Lang) ->
-  %%  todo: adjust to the new permissions
-  AllRights = mod_groups_restrictions:get_all_rights(LServer),
-  ExistingRights = [{UR,ExTime}|| {UR,_UT,ExTime} <- RightsAndTime],
-  ?INFO_MSG("Rights ~p~n",[ExistingRights]),
-  Restrictions = [{R,D}||{R,T,D} <- AllRights, T == <<"restriction">>],
-  RestrictionsFields = lists:map(fun(Right) ->
-    {Name,Desc} = Right,
-    Values = get_time(Name,ExistingRights),
-    #xdata_field{var = Name, label = translate:translate(Lang,Desc), type = 'list-single',
-      values = Values
-    }
-                                 end, Restrictions
-  ),
-  RestrictionSection = [#xdata_field{var= <<"restriction">>, type = 'fixed', values = [<<"Restrictions">>]}],
-  RestrictionSection ++ RestrictionsFields.
-
-get_time(Right,RightsList) ->
-  case lists:keyfind(Right,1,RightsList) of
-    {Right,Time} ->
-      [integer_to_binary(Time)];
-    _ ->
-      []
-  end.
-get_options([]) ->
-  form_options();
-get_options([<<"0">>]) ->
-  form_options();
-get_options([Value]) ->
-  [#xdata_option{label = <<"current">>, value = [Value]}| form_options()].
-
-form_options() ->
-  [
-    #xdata_option{label = <<"5 minutes">>, value = [<<"300">>]},
-    #xdata_option{label = <<"10 minutes">>, value = [<<"600">>]},
-    #xdata_option{label = <<"15 minutes">>, value = [<<"900">>]},
-    #xdata_option{label = <<"30 minutes">>, value = [<<"1800">>]},
-    #xdata_option{label = <<"1 hour">>, value = [<<"3600">>]},
-    #xdata_option{label = <<"1 week">>, value = [<<"604800">>]},
-    #xdata_option{label = <<"1 month">>, value = [<<"2592000">>]},
-    #xdata_option{label = <<"Forever">>, value = [<<"0">>]}
-  ].
-
-%%convert_time(Time) ->
-%%  TimeNow = calendar:datetime_to_gregorian_seconds(calendar:universal_time()) - 62167219200,
-%%  UnixTime = convert_from_datetime_to_unix_time(Time),
-%%  Diff = UnixTime - TimeNow,
-%%  case Diff of
-%%    _ when Diff < 3153600000 ->
-%%      integer_to_binary(UnixTime);
-%%    _ ->
-%%      <<"0">>
-%%  end.
-
-%%  todo: delete (new permissions)
--spec decode(binary(),list()) -> list().
-decode(LServer, FS) ->
-  Decoded = decode(LServer, [],filter_fixed_fields(FS)),
-  case lists:member(false,Decoded) of
-    true ->
-      not_ok;
-    _ ->
-      {ok,Decoded}
-  end.
-
-%%  todo: delete (new permissions)
--spec decode(binary(),list(),list()) -> list().
-decode(LServer, Acc,[#xdata_field{var = Var, values = Values} | RestFS]) ->
-  decode(LServer,[get_and_validate(LServer,Var,Values)| Acc], RestFS);
-decode(_LServer, Acc, []) ->
-  Acc.
-
--spec filter_fixed_fields(list()) -> list().
-filter_fixed_fields(FS) ->
-  lists:filter(fun(F) ->
-    #xdata_field{type = Type} = F,
-    case Type of
-      fixed ->
-        false;
-      hidden ->
-        false;
-      _ ->
-        true
-    end
-               end, FS).
-
-%%  todo: delete (new permissions)
--spec get_and_validate(binary(),binary(),list()) -> binary().
-get_and_validate(LServer,RightName,Value) ->
-  %%  todo: adjust to the new permissions
-  AllRights = mod_groups_restrictions:get_all_rights(LServer),
-  case lists:keyfind(RightName,1,AllRights) of
-    {RightName,Type,_Desc} ->
-      {RightName,Type,Value};
-    _ ->
-      false
-  end.
-
-is_valid_value([],_ValidValues) ->
-  true;
-is_valid_value([Value],ValidValues) ->
-  lists:member(Value,ValidValues);
-is_valid_value(_Other,_ValidValues) ->
-  false.
-
-valid_values() ->
-  [<<"0">>,<<"300">>,<<"600">>,<<"900">>,<<"1800">>,<<"3600">>,<<"604800">>,<<"2592000">>].
-
-validate([]) ->
-  {stop,bad_request};
-validate(FS) ->
-  ValidValues = valid_values(),
-  Validation = lists:map(fun(El) ->
-    {_Rightname,_Type,Values} = El,
-    is_valid_value(Values,ValidValues)
-            end, FS),
-  IsFailed = lists:member(false, Validation),
-  case IsFailed of
-    false ->
-      FS;
-    _ ->
-      {stop, bad_request}
-  end.
-
-%%  todo: delete (new permissions)
-change_rights(LServer,Chat,Admin,RequestUser,Rights) ->
-  lists:foreach(fun(Right) ->
-    {Rule,_Type,ExpireOption} = Right,
-    Expires = set_expires(ExpireOption),
-    mod_groups_restrictions:set_rule(LServer,Rule,Expires,RequestUser,Chat,Admin)
-                end, Rights).
-
-set_expires([]) ->
-  <<>>;
-set_expires([<<"0">>]) ->
-  <<"0">>;
-set_expires(ExpireOption) ->
-  ExpireInteger = binary_to_integer(list_to_binary(ExpireOption)),
-  TS = now_to_timestamp(now()),
-  Sum = TS + ExpireInteger,
-  integer_to_binary(Sum).
-
-%%  todo: delete (new permissions)
-current_values(LServer,User,Chat) ->
-  %%  todo: adjust to the new permissions
-  AllRights = mod_groups_restrictions:get_all_rights(LServer),
-  RightsAndTime = user_rights_and_time(LServer,Chat,User),
-  lists:map(fun(El) ->
-    {Name,Type,_Desc} = El,
-    case lists:keyfind(Name,1,RightsAndTime) of
-      {Name,Type,ExTime} ->
-        {Name,Type,[integer_to_binary(ExTime)]};
-      _ ->
-        {Name,Type,[]}
-    end
-            end, AllRights).
-
 % New methods for user list
 
 get_user_from_chat(LServer, Chat, User, ID) ->
@@ -1666,31 +1221,6 @@ user_role(Server, User, Group) ->
     _ -> <<"member">>
   end.
 
-%%calculate_role(LServer,Username,Chat) ->
-%%  TS = now_to_timestamp(now()),
-%%  Rights =  case ejabberd_sql:sql_query(
-%%    LServer,
-%%    ?SQL("select @(right_name)s,@(type)s from groupchat_policy left join groupchat_rights on groupchat_rights.name = right_name where username=%(Username)s
-%%     and chatgroup=%(Chat)s and (valid_until = 0 or valid_until > %(TS)d )")) of
-%%              {selected, Res} ->
-%%                Res;
-%%              _ ->
-%%                []
-%%            end,
-%%  IsOwner = [R||{R,_T} <- Rights, R == <<"owner">>],
-%%  case length(IsOwner) of
-%%    0 ->
-%%      IsAdmin = [T||{_R,T} <- Rights, T == <<"permission">>],
-%%      case length(IsAdmin) of
-%%        0 ->
-%%          <<"member">>;
-%%        _ ->
-%%          <<"admin">>
-%%      end;
-%%    _ ->
-%%      <<"owner">>
-%%  end.
-
 %% Participants for notification of group deletion
 get_all_participants(LServer,Chat) ->
   case ejabberd_sql:sql_query(
@@ -1700,9 +1230,6 @@ get_all_participants(LServer,Chat) ->
     {selected,Users} -> [jid:from_string(User) || {User} <- Users];
     _ -> []
   end.
-
-now_to_timestamp({MSec, Sec, _USec}) ->
-  (MSec * 1000000 + Sec).
 
 replace_nulls(List) when is_list(List) ->
   lists:map(fun(null) -> <<>>;

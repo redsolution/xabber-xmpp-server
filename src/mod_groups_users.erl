@@ -332,18 +332,6 @@ is_exist(_Acc,{Server,To,Chat,_Lang}) ->
       ok
   end.
 
-%%%%      todo: adjust to the new permissions
-%%set_default_restrictions(_Acc,{Server,To,Chat,_Lang}) ->
-%%  User = jid:to_string(jid:remove_resource(To)),
-%%  case mod_groups_restrictions:is_owner(Server,Chat,User) of
-%%    yes ->
-%%      {stop,owner};
-%%    _ ->
-%%      %%  todo: adjust to the new permissions
-%%      mod_groups_default_restrictions:set_restrictions(Server,User,Chat),
-%%      ok
-%%  end.
-
 is_anon_card(UserCard) ->
   case UserCard#groups_user.jid of
     undefined -> yes;
@@ -539,25 +527,6 @@ get_user_info_t(User, Group) ->
     from groupchat_users where
     username = %(User)s and chatgroup = %(Group)s"
   )).
-
-%%get_user_role_t(User, Group) ->
-%%  TS = now_to_timestamp(now()),
-%%  Rights =  case ejabberd_sql:sql_query_t(
-%%    ?SQL("select @(right_name)s,@(type)s from groupchat_policy "
-%%    " left join groupchat_rights on groupchat_rights.name = right_name "
-%%    " where username=%(User)s and chatgroup=%(Group)s "
-%%    " and (valid_until = 0 or valid_until > %(TS)d )")) of
-%%              {selected, Res} -> Res;
-%%              _ -> []
-%%            end,
-%%  case lists:keyfind(<<"owner">>, 1, Rights) of
-%%    false ->
-%%      case lists:keyfind(<<"permission">>, 2, Rights) of
-%%        false -> <<"member">>;
-%%        _ -> <<"admin">>
-%%      end;
-%%    _ -> <<"owner">>
-%%  end.
 
 
 get_chat_version(Server,Chat) ->

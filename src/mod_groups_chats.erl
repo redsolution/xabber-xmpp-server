@@ -709,7 +709,8 @@ delete_group(Group, IsP2P) ->
 %%  delete user avatars
   mod_groups_vcard:maybe_delete_file(LServer,AllUserMeta),
 %%  delete group avatar
-  mod_groups_vcard:delete_group_avatar_file(Group).
+  mod_groups_vcard:delete_group_avatar_file(Group),
+  ejabberd_hooks:run(groups_group_removed, LServer, [LServer,  Group]).
 
 create_localpart() ->
   S = list_to_binary(
@@ -971,18 +972,6 @@ sql_update_groupchat(Server, SJID, NewInfo) ->
       ok;
     _Err ->
       {error, db_failure}
-  end.
-
-get_permissions(Server) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(name)s from groupchat_rights where type = 'permission' ")) of
-    {selected,[]} ->
-      [];
-    {selected,[{}]} ->
-      [];
-    {selected,Permissions} ->
-      Permissions
   end.
 
 get_chat_active(_Server, Group) ->

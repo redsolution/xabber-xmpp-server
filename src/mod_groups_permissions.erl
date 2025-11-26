@@ -36,7 +36,8 @@
 -export([start/2, stop/1, mod_options/1, depends/2, reload/3, mod_opt_type/1]).
 
 %% Hooks
--export([copy_newbies_perms/2, user_left/2, kick_users/3, add_owner/4]).
+-export([copy_newbies_perms/2, user_left/2, kick_users/3, add_owner/4,
+  group_removed/2]).
 
 %% API
 
@@ -101,6 +102,7 @@ process_iq(_Acc, _Iq) ->
 %% Hooks
 
 register_hooks(Host) ->
+  ejabberd_hooks:add(groups_group_removed, Host, ?MODULE, group_removed, 80),
   ejabberd_hooks:add(groups_permissions_query, Host, ?MODULE, process_iq, 10),
   ejabberd_hooks:add(groups_add_owner, Host, ?MODULE, add_owner, 50),
   ejabberd_hooks:add(groupchat_users_kicked, Host, ?MODULE, kick_users, 80),
@@ -108,6 +110,7 @@ register_hooks(Host) ->
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, copy_newbies_perms, 40).
 
 unregister_hooks(Host) ->
+  ejabberd_hooks:delete(groups_group_removed, Host, ?MODULE, group_removed, 80),
   ejabberd_hooks:delete(groups_permissions_query, Host, ?MODULE, process_iq, 10),
   ejabberd_hooks:delete(groups_add_owner, Host, ?MODULE, add_owner, 50),
   ejabberd_hooks:delete(groupchat_users_kicked, Host, ?MODULE, kick_users, 80),
@@ -137,6 +140,11 @@ kick_users(Server, Group, Users)->
   lists:foreach(fun(User) ->
     delete_admin_perms(Server, Group, User)
                 end, Users).
+
+group_removed(Server, Group) ->
+  delete_default_perms(Server, Group),
+  delete_newbies_perms(Server, Group),
+  delete_perms(Server, Group).
 
 %% API
 
@@ -456,6 +464,10 @@ delete_member_perms(Server, Group, Member) ->
 
 delete_admin_perms(Server, Group, Member) ->
   sql_delete_admin_perms(Server, Group, Member),
+  ok.
+
+delete_perms(Server, Group) ->
+  sql_delete_perms(Server, Group),
   ok.
 
 get_newbies_perms_query(GroupJID, UserJID) ->
@@ -959,6 +971,12 @@ sql_delete_member_perms(Server, Group, Member) ->
     " where groupchat=%(Group)s and member=%(Member)s "
     " and level='member'")).
 
+sql_delete_perms(Server, Group) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("delete from groupchat_permissions "
+    " where groupchat=%(Group)s")).
+
 sql_add_default_perm(Server, Group, Perm, Status) ->
   ?SQL_UPSERT(Server,
     "groupchat_default_permissions",
@@ -1016,22 +1034,6 @@ sql_get_groups_with_perm(Server, Perm, Status) ->
     {selected, Result} -> Result ;
     _ -> []
   end.
-
-%%sql_get_users(Server, Group) ->
-%%  Now = erlang:system_time(second),
-%%  case ejabberd_sql:sql_query(Server, ?SQL(
-%%    "select @(users.id)s,@(perms.permission)s,@(perms.status)b,"
-%%    "@(perms.valid_until)d,@(actors.actor_id)s "
-%%    " from groupchat_permissions as perms "
-%%    " LEFT JOIN groupchat_permissions_actors as actors ON "
-%%    " perms.member=actors.protege and perms.groupchat=actors.groupchat"
-%%    " INNER JOIN groupchat_users as users ON "
-%%    " perms.member=users.username and perms.groupchat=users.chatgroup "
-%%    " where perms.groupchat=%(Group)s and perms.permission!='owner' "
-%%    " and (perms.valid_until=0 or perms.valid_until > %(Now)d)")) of
-%%    {selected, Result} -> Result;
-%%    _ -> []
-%%  end.
 
 sql_get_users(Server, Group) ->
   Now = erlang:system_time(second),

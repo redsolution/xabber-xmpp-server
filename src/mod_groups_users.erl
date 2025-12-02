@@ -145,9 +145,9 @@ decline_hook_delete_invite(_Acc, User, Chat, Server) ->
   end.
 
 % kick hook
-check_if_user_can(_Acc,_LServer,Chat,Admin,_Kick,_Lang) ->
-  case mod_groups_permissions:is_permitted(
-    <<"block-users">>, Admin, Chat) of
+check_if_user_can(_Acc, Host, Group, Admin,_Kick,_Lang) ->
+  case  ejabberd_hooks:run_fold(groups_is_permitted, Host,
+    false,[kick_user, Group, Admin]) of
     true ->
       ok;
     _ ->
@@ -795,7 +795,8 @@ check_user(User) when is_binary(User) ->
 validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
   validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
 validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
-  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
+  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
+    [change_user_info, Chat, Admin]) of
     true ->
       validate_unique(LServer,Chat,Admin,undefined,Badge,Lang);
     _ ->
@@ -803,7 +804,8 @@ validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
-  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
+  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
+    [change_user_info, Chat, Admin]) of
     true ->
       validate_unique(LServer,Chat,Admin,Nickname,Badge,Lang);
     _ ->
@@ -811,7 +813,8 @@ validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickname =/= undefined ->
-  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
+  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
+    [change_user_info, Chat, Admin]) of
     true ->
       case mod_groups_permissions:validate_users(LServer, Chat, Admin, User) of
         true ->
@@ -825,7 +828,8 @@ validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickn
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/= undefined ->
-  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
+  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
+    [change_user_info, Chat, Admin]) of
     true ->
       case mod_groups_permissions:validate_users(LServer, Chat, Admin, User) of
         true ->
@@ -840,7 +844,8 @@ validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,Badge,Lang)
   when Badge =/= undefined andalso Nickname =/= undefined ->
-  case mod_groups_permissions:is_permitted(<<"change-user-info">>, Admin, Chat) of
+  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
+    [change_user_info, Chat, Admin]) of
     true ->
       case mod_groups_permissions:validate_users(LServer, Chat, Admin, User) of
         true ->

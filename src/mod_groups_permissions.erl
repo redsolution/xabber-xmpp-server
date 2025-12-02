@@ -37,7 +37,7 @@
 
 %% Hooks
 -export([copy_newbies_perms/2, user_left/2, kick_users/3, add_owner/4,
-  group_removed/2]).
+  group_removed/2, is_permitted/4]).
 
 %% API
 
@@ -102,6 +102,7 @@ process_iq(_Acc, _Iq) ->
 %% Hooks
 
 register_hooks(Host) ->
+  ejabberd_hooks:add(groups_is_permitted, Host, ?MODULE, is_permitted, 10),
   ejabberd_hooks:add(groups_group_removed, Host, ?MODULE, group_removed, 80),
   ejabberd_hooks:add(groups_permissions_query, Host, ?MODULE, process_iq, 10),
   ejabberd_hooks:add(groups_add_owner, Host, ?MODULE, add_owner, 50),
@@ -110,6 +111,7 @@ register_hooks(Host) ->
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, copy_newbies_perms, 40).
 
 unregister_hooks(Host) ->
+  ejabberd_hooks:delete(groups_is_permited, Host, ?MODULE, is_permitted, 10),
   ejabberd_hooks:delete(groups_group_removed, Host, ?MODULE, group_removed, 80),
   ejabberd_hooks:delete(groups_permissions_query, Host, ?MODULE, process_iq, 10),
   ejabberd_hooks:delete(groups_add_owner, Host, ?MODULE, add_owner, 50),
@@ -146,6 +148,29 @@ group_removed(Server, Group) ->
   delete_newbies_perms(Server, Group),
   delete_perms(Server, Group).
 
+is_permitted(_, {send_message, Msg}, Group, User)->
+  case fast_is_permitted(<<"send-messages">>, User, Group) of
+    false -> false;
+    _ ->
+      check_payload(User, Group, Msg)
+  end;
+is_permitted(_, change_user_info, Group, User)->
+  is_permitted(<<"change-user-info">>, User, Group);
+is_permitted(_, delete_messages, Group, User)->
+  is_permitted(<<"delete-messages">>, User, Group);
+is_permitted(_, add_members, Group, User)->
+  is_permitted(<<"add-members">>, User, Group);
+is_permitted(_, kick_user, Group, User)->
+  is_permitted(<<"block-users">>, User, Group);
+is_permitted(_, block_user, Group, User)->
+  is_permitted(<<"block-users">>, User, Group);
+is_permitted(_,change_group_settings, Group, User)->
+  is_permitted(<<"change-group-settings">>, User, Group);
+is_permitted(_,change_group_info, Group, User)->
+  is_permitted(<<"change-group-info">>, User, Group);
+is_permitted(Acc, _Action, _Group, _User)->
+  Acc.
+
 %% API
 
 is_manager(Server, Group, Member) ->
@@ -174,6 +199,8 @@ get_permissions(Server, Group, Member) ->
 
 fast_is_permitted(<<"send-messages">>, User, Group)->
   fast_is_permitted(member, <<"send-messages">>, User, Group);
+fast_is_permitted(<<"send-media">>, User, Group)->
+  fast_is_permitted(member, <<"send-media">>, User, Group);
 fast_is_permitted(Action, User, Group)->
   is_permitted(Action, User, Group).
 
@@ -210,10 +237,11 @@ fast_is_permitted(group, PermName, User, Group)->
       is_permitted(PermName, User, Group)
   end.
 
-is_permitted(Action, User, Group)->
+is_permitted(Permission, User, Group)->
   {_, Server, _} = jid:tolower(jid:from_string(Group)),
   UserPerms = get_permissions(Server, Group, User),
-  is_permitted(<<"owner">>, UserPerms) orelse is_permitted(Action, UserPerms).
+  is_permitted(<<"owner">>, UserPerms) orelse
+    is_permitted(Permission, UserPerms).
 
 
 %% Internal
@@ -248,7 +276,7 @@ defaults() ->
       level = <<"admin">>, status = false}
   ].
 fast_permissions() ->
-  [<<"send-messages">>].
+  [<<"send-messages">>, <<"send-media">>].
 
 process_iq_personal(#iq{type = get, from = From, to = To,
   sub_els = [Perms]}) ->
@@ -535,7 +563,6 @@ get_members(_Server, _Group, _Privileges, []) ->
 get_members(Server, Group, Privileges, Perms) ->
   GroupDefaults = group_perms(Server, Group),
   lists:map(fun({ID, UserPerms, Actors}) ->
-    ?INFO_MSG("!!!!! ~p",[Actors]),
     Personal = to_records(UserPerms),
     {Role, Perms1} = calculate_perms(GroupDefaults, Personal),
     LockedLevels = case Privileges of
@@ -604,8 +631,16 @@ to_records(Perms) ->
             end, Perms).
 
 
-copy_to_fast_perms(_Server, Group, Group,
-    #perms_permission{name = <<"send-messages">>} = P) ->
+copy_to_fast_perms(Server, Group, Member,
+    #perms_permission{name = Name} = P) ->
+  case lists:member(Name, fast_permissions()) of
+    true ->
+      copy_to_fast_perms1(Server, Group, Member, P);
+    _ ->
+      ok
+  end.
+
+copy_to_fast_perms1(_Server, Group, Group, P) ->
   Default = is_permitted(P#perms_permission.name, defaults()),
   case P#perms_permission.status of
     Default ->
@@ -613,8 +648,7 @@ copy_to_fast_perms(_Server, Group, Group,
     _ ->
       add_fast_perm(Group, Group, P)
   end;
-copy_to_fast_perms(Server, Group, Member,
-    #perms_permission{name = <<"send-messages">>} = P) ->
+copy_to_fast_perms1(Server, Group, Member, P) ->
   GroupPerms = calculate_default_perms(Server,Group),
   Default = is_permitted(P#perms_permission.name, GroupPerms),
   case P#perms_permission.status of
@@ -622,9 +656,7 @@ copy_to_fast_perms(Server, Group, Member,
       del_fast_perm(Group, Member, P);
     _ ->
       add_fast_perm(Group, Member, P)
-  end;
-copy_to_fast_perms(_Server, _Group, _Member, _) ->
-  ok.
+  end.
 
 add_fast_perm(Group, Member, P) ->
   Expires = case P#perms_permission.expires of
@@ -640,6 +672,33 @@ del_fast_perm(Group, Member, P) ->
   mnesia:dirty_delete(fast_group_perms,
     {Group, Member, P#perms_permission.name}).
 
+check_payload(User, Group, Msg) ->
+  case fast_is_permitted(<<"send-media">>, User, Group) of
+    false ->
+      not check_media_files(all, Msg);
+    _ -> true
+  end.
+
+check_media_files(all, Msg) ->
+  Refs = lists:filtermap(fun(El) ->
+    case {xmpp:get_name(El), xmpp:get_ns(El)} of
+      {<<"reference">>, ?NS_REFERENCES} ->
+        {true, xmpp:decode(El)};
+      _ -> false
+    end end, xmpp:get_els(Msg)),
+  search_in_references(all, Refs);
+check_media_files(_MediaType, _Msg) ->
+  true.
+
+
+search_in_references(all, References) ->
+  Files = lists:filter(fun(Reference) ->
+    case xmpp:get_subtag(Reference, #files_file_sharing{}) of
+      #files_file_sharing{} -> true;
+      _ ->
+        false
+    end end, References),
+  Files /= [].
 
 newbies_perms(Server, Group)->
   Values = sql_select_newbies_perms(Server, Group),
@@ -889,15 +948,19 @@ init_fast_perms(Host) ->
   lists:foreach(fun(FP) -> mnesia:dirty_write(FP) end, Perms).
 
 get_all_fast_perms_from_db(Host)->
-  UPerms = lists:map(
-    fun({G, M, P, S, E}) ->
-      #fast_group_perms{gup = {G, M, P}, status = S, expires = E}
-    end, sql_get_users_with_perm(Host, <<"send-messages">>, false)),
+  lists:flatmap(fun(Name) ->
+    #perms_permission{status = Status} =
+      lists:keyfind(Name, #perms_permission.name, defaults()),
+    UPerms = lists:map(
+      fun({G, M, P, S, E}) ->
+        #fast_group_perms{gup = {G, M, P}, status = S, expires = E}
+      end, sql_get_users_with_perm(Host, Name, not Status)),
   GPerms = lists:map(
     fun({G, P, S}) ->
       #fast_group_perms{gup = {G, G, P}, status = S, expires = 0}
-    end, sql_get_groups_with_perm(Host, <<"send-messages">>, false)),
-  UPerms ++ GPerms.
+    end, sql_get_groups_with_perm(Host, Name, not Status)),
+  UPerms ++ GPerms
+                end, fast_permissions()).
 
 %% SQL
 

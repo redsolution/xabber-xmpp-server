@@ -110,7 +110,7 @@ message_hook(#message{to =To, from = From} = Pkt) ->
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
-  UserStatus = check_permission_write(User,Chat),
+  UserStatus = check_permission_write(User, Chat, Pkt),
   ChatStatus = mod_groups_chats:get_chat_active(Server,Chat),
   case UserStatus of
     restricted ->
@@ -120,17 +120,6 @@ message_hook(#message{to =To, from = From} = Pkt) ->
       MessageNew = #message{from = To, to = From, id = randoms:get_string(),
         type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
       UserID = mod_groups_users:get_user_id(Server,User,Chat),
-      ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
-      send_message_no_permission_to_write(UserID,MessageNew);
-    blocked ->
-      Text = <<"You are blocked in this chat">>,
-      BodySer = [#text{lang = <<>>,data = Text}],
-      UserID = mod_groups_users:get_user_id(Server,User,Chat),
-      UserJID = jid:from_string(User),
-      UserCard = #groups_user{id = UserID, jid = UserJID},
-      ElsSer = [#groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, sub_els = [UserCard]}],
-      MessageNew = #message{from = To, to = From, id = randoms:get_string(),
-        type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
       ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
       send_message_no_permission_to_write(UserID,MessageNew);
     allowed when ChatStatus =/= <<"inactive">> ->
@@ -149,21 +138,19 @@ message_hook(#message{to =To, from = From} = Pkt) ->
       ejabberd_router:route_error(Pkt, xmpp:err_not_allowed())
   end.
 
--spec check_permission_write(binary(), binary()) -> allowed | restricted | blocked | notexist .
-check_permission_write(User,Chat) ->
+-spec check_permission_write(binary(), binary(), xmlel()) -> allowed | restricted | blocked | notexist .
+check_permission_write(User,Chat, Pkt) ->
   ChatJID = jid:from_string(Chat),
   Server = ChatJID#jid.lserver,
   case mod_groups_users:check_if_exist(Server,Chat,User) of
     true ->
-      case mod_groups_permissions:fast_is_permitted(<<"send-messages">>, User, Chat) of
-        false -> restricted;
-        _ -> allowed
+      case ejabberd_hooks:run_fold(groups_is_permitted,
+        Server, false,[{send_message, Pkt}, Chat, User]) of
+        true -> allowed;
+        _ -> restricted
       end;
     _ ->
-      case mod_groups_block:is_blocked(Server, Chat, User) of
-        true -> blocked;
-        _-> notexist
-      end
+      restricted
   end.
 
 send_received_and_message(Pkt, UserJID, GroupJID, OriginID, Users) ->

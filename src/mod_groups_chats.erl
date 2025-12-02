@@ -199,10 +199,11 @@ create_chat(Server, Creator, SubEls) ->
       exist
   end.
 
-check_user_rights(_Acc, User, Chat, _Server) ->
-  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,User,Chat) of
+check_user_rights(_Acc, User, Group, Server) ->
+  case ejabberd_hooks:run_fold(groups_is_permitted, Server,
+    false,[change_group_settings, Group, User]) of
     true ->
-      {stop, {ok,form_chat_information(Chat, form)}};
+      {stop, {ok,form_chat_information(Group, form)}};
     _ ->
       {stop, {error,xmpp:err_not_allowed(<<"You are not allowed to change group properties">>, <<"en">>)}}
   end.
@@ -247,9 +248,9 @@ change_pinned_msg(Server, Group, User, MsgID) ->
   end.
 
 %% groupchat_info_change hook
-check_user_permission(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,
-    User, Chat) of
+check_user_permission(_Acc, User, Group, Server, _FS) ->
+  case ejabberd_hooks:run_fold(groups_is_permitted, Server,
+    false,[change_group_settings, Group, User]) of
     true ->
       ok;
     _ ->
@@ -1052,12 +1053,13 @@ get_name_desc(Server,Chat) ->
       {<<>>,<<>>,<<>>,<<>>,<<>>,undefined}
   end.
 
-check_user_rights_to_change_status(_Acc,User,Chat,Server) ->
-  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,User,Chat) of
+check_user_rights_to_change_status(_Acc, User, Group, Server) ->
+  case ejabberd_hooks:run_fold(groups_is_permitted, Server,
+    false,[change_group_settings, Group, User]) of
     true ->
-      {stop, {ok, status_form(Chat,Server,'text-single')}};
+      {stop, {ok, status_form(Group,Server,'text-single')}};
     _ ->
-      {stop, {ok, status_form(Chat,Server,'fixed')}}
+      {stop, {ok, status_form(Group,Server,'fixed')}}
   end.
 
 status_form(Chat,LServer,Type) ->
@@ -1119,8 +1121,9 @@ parse_status_query(FS, Lang) ->
   end.
 
 %% Change status hook
-check_user_rights_to_change_status(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groups_permissions:is_permitted(<<"change-group-settings">>,User,Chat) of
+check_user_rights_to_change_status(_Acc, User, Group, Server, _FS) ->
+  case ejabberd_hooks:run_fold(groups_is_permitted, Server,
+    false,[change_group_settings, Group, User]) of
     true ->
       ok;
     _ ->

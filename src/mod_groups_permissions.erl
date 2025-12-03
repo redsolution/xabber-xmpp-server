@@ -70,7 +70,7 @@ reload(_Host, _NewOpts, _OldOpts) ->
   ok.
 
 depends(_Host, _Opts) ->
-  [].
+  [{mod_permissions, hard}].
 
 mod_options(_Host) ->
   [].
@@ -154,6 +154,11 @@ is_permitted(_, {send_message, Msg}, Group, User)->
     _ ->
       check_payload(User, Group, Msg)
   end;
+
+is_permitted(_, revoke_invite, Group, User)->
+  is_permitted(<<"block-users">>, User, Group);
+is_permitted(_, get_invited_users, Group, User)->
+  is_permitted(<<"block-users">>, User, Group);
 is_permitted(_, change_user_info, Group, User)->
   is_permitted(<<"change-user-info">>, User, Group);
 is_permitted(_, delete_messages, Group, User)->

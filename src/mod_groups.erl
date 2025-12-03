@@ -58,7 +58,8 @@ stop(_Host) ->
   ok.
 
 depends(_Host, _Opts) ->
-  [{mod_http_upload, hard}].
+  [{mod_http_upload, hard},
+    {mod_groups_permissions, soft}].
 
 mod_options(_Host) ->
   [

@@ -66,7 +66,7 @@ revoke(Server,User,Chat) ->
   remove_invite(Server,User,Chat).
 revoke(Server, User, Group, Admin) ->
   case ejabberd_hooks:run_fold(groups_is_permitted, Server,
-    false,[block_user, Group, Admin]) of
+    false,[revoke_invite, Group, Admin]) of
     true ->
       remove_invite(Server,User, Group);
     _ ->

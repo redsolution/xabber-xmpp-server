@@ -303,7 +303,7 @@ make_action(#iq{type = get, sub_els = [#xmlel{name = <<"query">>,
   User = jid:to_string(jid:remove_resource(From)),
   Chat = jid:to_string(jid:remove_resource(To)),
   Query = case ejabberd_hooks:run_fold(groups_is_permitted, Server,
-    false,[block_user, Chat, User]) of
+    false,[get_invited_users, Chat, User]) of
             true ->
               mod_groups_invites:get_invited_users(Server, Chat);
             _ ->

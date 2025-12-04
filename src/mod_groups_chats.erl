@@ -201,7 +201,7 @@ create_chat(Server, Creator, SubEls) ->
 
 check_user_rights(_Acc, User, Group, Server) ->
   case ejabberd_hooks:run_fold(groups_is_permitted, Server,
-    false,[change_group_settings, Group, User]) of
+    false,[change_group_settings, Group, User, []]) of
     true ->
       {stop, {ok,form_chat_information(Group, form)}};
     _ ->
@@ -250,7 +250,7 @@ change_pinned_msg(Server, Group, User, MsgID) ->
 %% groupchat_info_change hook
 check_user_permission(_Acc, User, Group, Server, _FS) ->
   case ejabberd_hooks:run_fold(groups_is_permitted, Server,
-    false,[change_group_settings, Group, User]) of
+    false,[change_group_settings, Group, User, []]) of
     true ->
       ok;
     _ ->
@@ -1055,7 +1055,7 @@ get_name_desc(Server,Chat) ->
 
 check_user_rights_to_change_status(_Acc, User, Group, Server) ->
   case ejabberd_hooks:run_fold(groups_is_permitted, Server,
-    false,[change_group_settings, Group, User]) of
+    false,[change_group_settings, Group, User, []]) of
     true ->
       {stop, {ok, status_form(Group,Server,'text-single')}};
     _ ->
@@ -1123,7 +1123,7 @@ parse_status_query(FS, Lang) ->
 %% Change status hook
 check_user_rights_to_change_status(_Acc, User, Group, Server, _FS) ->
   case ejabberd_hooks:run_fold(groups_is_permitted, Server,
-    false,[change_group_settings, Group, User]) of
+    false,[change_group_settings, Group, User, []]) of
     true ->
       ok;
     _ ->

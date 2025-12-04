@@ -37,7 +37,7 @@
 
 %% Hooks
 -export([copy_newbies_perms/2, user_left/2, kick_users/3, add_owner/4,
-  group_removed/2, is_permitted/4]).
+  group_removed/2, is_permitted/5]).
 
 %% API
 
@@ -148,32 +148,35 @@ group_removed(Server, Group) ->
   delete_newbies_perms(Server, Group),
   delete_perms(Server, Group).
 
-is_permitted(_, {send_message, Msg}, Group, User)->
+is_permitted(_, send_message, Group, User, Atts)->
   case fast_is_permitted(<<"send-messages">>, User, Group) of
-    false -> false;
-    _ ->
-      check_payload(User, Group, Msg)
+    true ->
+      case Atts of
+        [{message, Msg}] ->
+          check_payload(User, Group, Msg);
+        _ -> true
+      end;
+    _ -> false
   end;
-
-is_permitted(_, revoke_invite, Group, User)->
+is_permitted(_, revoke_invite, Group, User, _)->
   is_permitted(<<"block-users">>, User, Group);
-is_permitted(_, get_invited_users, Group, User)->
+is_permitted(_, get_invited_users, Group, User, _Atts)->
   is_permitted(<<"block-users">>, User, Group);
-is_permitted(_, change_user_info, Group, User)->
+is_permitted(_, change_user_info, Group, User, _Atts)->
   is_permitted(<<"change-user-info">>, User, Group);
-is_permitted(_, delete_messages, Group, User)->
+is_permitted(_, delete_messages, Group, User, _Atts)->
   is_permitted(<<"delete-messages">>, User, Group);
-is_permitted(_, add_members, Group, User)->
+is_permitted(_, add_members, Group, User, _Atts)->
   is_permitted(<<"add-members">>, User, Group);
-is_permitted(_, kick_user, Group, User)->
+is_permitted(_, kick_user, Group, User, _Atts)->
   is_permitted(<<"block-users">>, User, Group);
-is_permitted(_, block_user, Group, User)->
+is_permitted(_, block_user, Group, User, _Atts)->
   is_permitted(<<"block-users">>, User, Group);
-is_permitted(_,change_group_settings, Group, User)->
+is_permitted(_,change_group_settings, Group, User, _Atts)->
   is_permitted(<<"change-group-settings">>, User, Group);
-is_permitted(_,change_group_info, Group, User)->
+is_permitted(_,change_group_info, Group, User, _Atts)->
   is_permitted(<<"change-group-info">>, User, Group);
-is_permitted(Acc, _Action, _Group, _User)->
+is_permitted(Acc, _Action, _Group, _User, _Atts)->
   Acc.
 
 %% API

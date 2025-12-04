@@ -176,9 +176,7 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
   Chat = jid:to_string(jid:remove_resource(To)),
   Server = To#jid.lserver,
   Permission = ejabberd_hooks:run_fold(groups_is_permitted, Server, false,
-    [change_group_settings, Chat, User]),
-  CanChangeAva = ejabberd_hooks:run_fold(groups_is_permitted, Server, false,
-    [change_user_info, Chat, User]),
+    [change_group_settings, Chat, User, []]),
   Pubsub = lists:keyfind(pubsub,1,Decoded),
   #pubsub{publish = Publish} = Pubsub,
   #ps_publish{node = Node, items = Items} = Publish,
@@ -252,24 +250,28 @@ handle_pubsub(#iq{id = Id,type = Type,lang = Lang, meta = Meta, from = From, to 
       end;
     <<"urn:xmpp:avatar:data#">> ->
       not_allowed_result(Iq, To, From);
-    <<"urn:xmpp:avatar:data#",SomeUserId/binary>> when CanChangeAva == true ->
-      SomeUser = mod_groups_users:get_user_by_id(Server,Chat,SomeUserId),
-      case mod_groups_permissions:validate_users(Server, Chat, User, SomeUser) of
-        ok when SomeUser =/= none ->
-          #ps_item{id = ItemId,sub_els = [Sub]} = Item,
-          #avatar_data{data = Data} = xmpp:decode(Sub),
-          update_data_user_put(Server, SomeUserId, Data, ItemId,Chat),
-          xmpp:make_iq_result(Iq);
-        _ ->
-          not_allowed_result(Iq, To, From)
+    <<"urn:xmpp:avatar:data#",SomeUserId/binary>> ->
+      case mod_groups_users:get_user_by_id(Server,Chat,SomeUserId) of
+        none ->  not_allowed_result(Iq, To, From);
+        SomeUser ->
+          case mod_groups_users:change_user_permitted(Server, Chat,
+            User, SomeUser) of
+            true ->
+              #ps_item{id = ItemId,sub_els = [Sub]} = Item,
+              #avatar_data{data = Data} = xmpp:decode(Sub),
+              update_data_user_put(Server, SomeUserId, Data, ItemId,Chat),
+              xmpp:make_iq_result(Iq);
+            _ ->
+              not_allowed_result(Iq, To, From)
+          end
       end;
-    <<"urn:xmpp:avatar:metadata#",SomeUserId/binary>> when CanChangeAva == true ->
+    <<"urn:xmpp:avatar:metadata#",SomeUserId/binary>> ->
       SomeUser = case mod_groups_users:get_user_by_id(Server,Chat,SomeUserId) of
                    none -> none;
                    SU ->
-                     case mod_groups_permissions:validate_users(
-                       Server, Chat, User, SU) of
-                       ok -> SU;
+                     case mod_groups_users:change_user_permitted(Server, Chat,
+                       User, SU) of
+                       true -> SU;
                        _ -> none
                      end
                  end,

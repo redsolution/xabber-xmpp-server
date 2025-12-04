@@ -298,7 +298,7 @@ check_special_perms(user_exist, _, _, _, _) ->
 
 is_permitted(Server, User, Group) ->
   case ejabberd_hooks:run_fold(groups_is_permitted, Server,
-    false,[delete_messages, Group, User]) of
+    false,[delete_messages, Group, User, []]) of
     true -> ok;
     _ -> {error, not_allowed}
   end.

@@ -59,7 +59,8 @@
   get_users_from_p2p/2,
   add_owner/3,
   get_owners/2,
-  is_owner/3
+  is_owner/3,
+  change_user_permitted/4
 ]).
 
 -export([is_exist/2
@@ -147,7 +148,7 @@ decline_hook_delete_invite(_Acc, User, Chat, Server) ->
 % kick hook
 check_if_user_can(_Acc, Host, Group, Admin,_Kick,_Lang) ->
   case  ejabberd_hooks:run_fold(groups_is_permitted, Host,
-    false,[kick_user, Group, Admin]) of
+    false,[kick_user, Group, Admin, []]) of
     true ->
       ok;
     _ ->
@@ -796,7 +797,7 @@ validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
   validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
 validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
   case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
-    [change_user_info, Chat, Admin]) of
+    [change_user_info, Chat, Admin, []]) of
     true ->
       validate_unique(LServer,Chat,Admin,undefined,Badge,Lang);
     _ ->
@@ -805,7 +806,7 @@ validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
   end;
 validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
   case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
-    [change_user_info, Chat, Admin]) of
+    [change_user_info, Chat, Admin, []]) of
     true ->
       validate_unique(LServer,Chat,Admin,Nickname,Badge,Lang);
     _ ->
@@ -813,47 +814,26 @@ validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickname =/= undefined ->
-  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
-    [change_user_info, Chat, Admin]) of
+  case change_user_permitted(LServer, Chat, Admin, User) of
     true ->
-      case mod_groups_permissions:validate_users(LServer, Chat, Admin, User) of
-        true ->
-          validate_unique(LServer,Chat,User,Nickname,undefined,Lang);
-        _ ->
-          Message = <<"You have no rights to change a nickname">>,
-          {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
-      end;
+      validate_unique(LServer, Chat, User, Nickname, undefined, Lang);
     _ ->
       Message = <<"You have no rights to change a nickname">>,
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/= undefined ->
-  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
-    [change_user_info, Chat, Admin]) of
+  case  change_user_permitted(LServer, Chat, Admin, User) of
     true ->
-      case mod_groups_permissions:validate_users(LServer, Chat, Admin, User) of
-        true ->
-          validate_unique(LServer,Chat,User,undefined,Badge,Lang);
-        _ ->
-          Message = <<"You have no rights to change a badge">>,
-          {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
-      end;
+      validate_unique(LServer,Chat,User,undefined,Badge,Lang);
     _ ->
       Message = <<"You have no rights to change a badge">>,
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(User, LServer,Chat,Admin,_ID,Nickname,Badge,Lang)
   when Badge =/= undefined andalso Nickname =/= undefined ->
-  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
-    [change_user_info, Chat, Admin]) of
+  case  change_user_permitted(LServer, Chat, Admin, User)of
     true ->
-      case mod_groups_permissions:validate_users(LServer, Chat, Admin, User) of
-        true ->
-          validate_unique(LServer,Chat,User,undefined,Badge,Lang);
-        _ ->
-          Message = <<"You have no rights to change a nickname and a badge">>,
-          {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
-      end;
+      validate_unique(LServer,Chat,User,undefined,Badge,Lang);
     _ ->
       Message = <<"You have no rights to change a nickname and a badge">>,
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
@@ -1194,6 +1174,29 @@ user_role(Server, User, Group) ->
     {selected,[{Role}]} -> Role;
     _ -> <<"member">>
   end.
+
+
+change_user_permitted(Server, Group, Actor, User) ->
+  Roles =
+    case ejabberd_sql:sql_query(
+      Server,
+      ?SQL("select @(username)s,@(role)s from groupchat_users "
+      " where chatgroup=%(Group)s and "
+      " (username=%(User)s or username=%(Actor)s)")) of
+      {selected, Result} -> Result;
+      _ -> []
+    end,
+  ActorRole = proplists:get_value(Actor, Roles, <<"member">>),
+  UserRole = proplists:get_value(User, Roles, <<"member">>),
+  if
+    UserRole == <<"owner">> -> false;
+    ActorRole == <<"owner">> -> true;
+    UserRole == <<"admin">> -> false;
+    true ->
+      ejabberd_hooks:run_fold(groups_is_permitted, Server, false,
+        [change_user_info, Group, Actor, []])
+  end.
+
 
 %% Participants for notification of group deletion
 get_all_participants(LServer,Chat) ->

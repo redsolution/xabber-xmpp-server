@@ -60,7 +60,8 @@
   add_owner/3,
   get_owners/2,
   is_owner/3,
-  change_user_permitted/4
+  change_user_permitted/4,
+  is_permitted/6
 ]).
 
 -export([is_exist/2
@@ -147,8 +148,7 @@ decline_hook_delete_invite(_Acc, User, Chat, Server) ->
 
 % kick hook
 check_if_user_can(_Acc, Host, Group, Admin,_Kick,_Lang) ->
-  case  ejabberd_hooks:run_fold(groups_is_permitted, Host,
-    false,[kick_user, Group, Admin, []]) of
+  case is_permitted(Host, Group, Admin, kick_user, false, []) of
     true ->
       ok;
     _ ->
@@ -796,8 +796,7 @@ check_user(User) when is_binary(User) ->
 validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
   validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
 validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
-  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
-    [change_user_info, Chat, Admin, []]) of
+  case is_permitted(LServer, Chat, Admin, change_user_info, false, []) of
     true ->
       validate_unique(LServer,Chat,Admin,undefined,Badge,Lang);
     _ ->
@@ -805,8 +804,7 @@ validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
       {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
   end;
 validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
-  case ejabberd_hooks:run_fold(groups_is_permitted, LServer, false,
-    [change_user_info, Chat, Admin, []]) of
+  case is_permitted(LServer, Chat, Admin, change_user_info, false, []) of
     true ->
       validate_unique(LServer,Chat,Admin,Nickname,Badge,Lang);
     _ ->
@@ -1195,6 +1193,17 @@ change_user_permitted(Server, Group, Actor, User) ->
     true ->
       ejabberd_hooks:run_fold(groups_is_permitted, Server, false,
         [change_user_info, Group, Actor, []])
+  end.
+
+is_permitted(Server, Group, Member, Action, true, Atts) ->
+  ejabberd_hooks:run_fold(groups_is_permitted, Server, true,
+    [Action, Group, Member, Atts]);
+is_permitted(Server, Group, Member, Action, Default, Atts) ->
+  case is_owner(Server, Group, Member) of
+    true -> true;
+    _ ->
+      ejabberd_hooks:run_fold(groups_is_permitted, Server, Default,
+        [Action, Group, Member, Atts])
   end.
 
 

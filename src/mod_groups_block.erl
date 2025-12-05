@@ -67,8 +67,8 @@ is_allowed(Acc, #iq{from=From, to=To}) ->
   Group = jid:to_string(jid:remove_resource(To)),
   Admin = jid:to_string(jid:remove_resource(From)),
   Host = To#jid.lserver,
-  case ejabberd_hooks:run_fold(groups_is_permitted, Host,
-    false,[block_user, Group, Admin, []]) of
+  case mod_groups_users:is_permitted(Host, Group, Admin,
+    block_user, false, []) of
     true ->
       Acc;
     _ ->
@@ -144,8 +144,8 @@ block_list(UserJID, GroupJID) ->
   Group = jid:to_string(jid:remove_resource(GroupJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
   Host = GroupJID#jid.lserver,
-  case ejabberd_hooks:run_fold(groups_is_permitted, Host,
-    false,[block_user, Group, User, []]) of
+  case mod_groups_users:is_permitted(Host, Group, User,
+    block_user, false, []) of
     true ->
       block_list(GroupJID);
     _ ->

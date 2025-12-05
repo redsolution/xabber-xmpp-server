@@ -65,8 +65,8 @@ mod_options(_Opts) -> [].
 revoke(Server,User,Chat) ->
   remove_invite(Server,User,Chat).
 revoke(Server, User, Group, Admin) ->
-  case ejabberd_hooks:run_fold(groups_is_permitted, Server,
-    false,[revoke_invite, Group, Admin, []]) of
+  case mod_groups_users:is_permitted(Server, Group, Admin,
+    revoke_invite, false, []) of
     true ->
       remove_invite(Server,User, Group);
     _ ->
@@ -120,8 +120,8 @@ sql_get_invited(Server,Chat, User) ->
 invite_right(_Acc, {Admin, Group, Server, _Invite}) ->
   case mod_groups_chats:get_info(Group, [parent]) of
     [<<"0">>] ->
-      case ejabberd_hooks:run_fold(groups_is_permitted, Server,
-        false,[add_members, Group, Admin, []]) of
+      case mod_groups_users:is_permitted(Server, Group, Admin,
+        add_members, true, []) of
         true -> ok;
         _ -> {stop,forbidden}
       end;

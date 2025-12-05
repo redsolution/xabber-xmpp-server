@@ -144,8 +144,8 @@ check_permission_write(User,Chat, Pkt) ->
   Server = ChatJID#jid.lserver,
   case mod_groups_users:check_if_exist(Server,Chat,User) of
     true ->
-      case ejabberd_hooks:run_fold(groups_is_permitted,
-        Server, false,[send_message, Chat, User, [{message,Pkt}]]) of
+      case mod_groups_users:is_permitted(Server, Chat, User,
+        send_message, true, [{message,Pkt}]) of
         true -> allowed;
         _ -> restricted
       end;

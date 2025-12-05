@@ -47,7 +47,8 @@
   is_manager/3,
   validate_users/4,
   fast_is_permitted/3,
-  is_permitted/3
+  is_permitted/3,
+  get_all_fast_perms_from_db/1
  ]).
 
 -record(fast_group_perms, {
@@ -416,11 +417,7 @@ add_personal_perms(Server, Group, IssuedBy, Member, Perms) ->
   GrPerms = calculate_default_perms(Server, Group),
   lists:foreach(fun(#perms_permission{name = Name,
     status = Status} = Perm) ->
-    Expires = case Perm#perms_permission.seconds of
-                undefined -> 0;
-                0 -> 0;
-                S -> erlang:system_time(second) + S
-              end,
+    Expires = stoexpires(Perm#perms_permission.seconds),
     case lists:keyfind(Name, #perms_permission.name, GrPerms) of
       #perms_permission{status = Status} ->
         sql_delete_perm(Server, Group, Member, Name);
@@ -667,14 +664,10 @@ copy_to_fast_perms1(Server, Group, Member, P) ->
   end.
 
 add_fast_perm(Group, Member, P) ->
-  Expires = case P#perms_permission.expires of
-              0 -> undefined;
-              V -> V
-            end,
   mnesia:dirty_write(#fast_group_perms{
     gup = {Group, Member, P#perms_permission.name},
     status = P#perms_permission.status,
-    expires = Expires}).
+    expires = ntoa(P#perms_permission.expires)}).
 
 del_fast_perm(Group, Member, P) ->
   mnesia:dirty_delete(fast_group_perms,
@@ -683,23 +676,21 @@ del_fast_perm(Group, Member, P) ->
 check_payload(User, Group, Msg) ->
   case fast_is_permitted(<<"send-media">>, User, Group) of
     false ->
-      not check_media_files(all, Msg);
+      not check_media_files(Msg);
     _ -> true
   end.
 
-check_media_files(all, Msg) ->
+check_media_files(Msg) ->
   Refs = lists:filtermap(fun(El) ->
     case {xmpp:get_name(El), xmpp:get_ns(El)} of
       {<<"reference">>, ?NS_REFERENCES} ->
         {true, xmpp:decode(El)};
       _ -> false
     end end, xmpp:get_els(Msg)),
-  search_in_references(all, Refs);
-check_media_files(_MediaType, _Msg) ->
-  true.
+  search_in_references(Refs).
 
 
-search_in_references(all, References) ->
+search_in_references(References) ->
   Files = lists:filter(fun(Reference) ->
     case xmpp:get_subtag(Reference, #files_file_sharing{}) of
       #files_file_sharing{} -> true;
@@ -961,14 +952,21 @@ get_all_fast_perms_from_db(Host)->
       lists:keyfind(Name, #perms_permission.name, defaults()),
     UPerms = lists:map(
       fun({G, M, P, S, E}) ->
-        #fast_group_perms{gup = {G, M, P}, status = S, expires = E}
+        #fast_group_perms{gup = {G, M, P}, status = S, expires = ntoa(E)}
       end, sql_get_users_with_perm(Host, Name, not Status)),
   GPerms = lists:map(
     fun({G, P, S}) ->
-      #fast_group_perms{gup = {G, G, P}, status = S, expires = 0}
+      #fast_group_perms{gup = {G, G, P}, status = S, expires = undefined}
     end, sql_get_groups_with_perm(Host, Name, not Status)),
   UPerms ++ GPerms
                 end, fast_permissions()).
+
+ntoa(0)-> undefined;
+ntoa(Value) -> Value.
+
+stoexpires(undefined) -> 0;
+stoexpires(0) -> 0;
+stoexpires(S) -> erlang:system_time(second) + S.
 
 %% SQL
 

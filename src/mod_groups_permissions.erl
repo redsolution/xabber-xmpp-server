@@ -36,20 +36,11 @@
 -export([start/2, stop/1, mod_options/1, depends/2, reload/3, mod_opt_type/1]).
 
 %% Hooks
--export([copy_newbies_perms/2, user_left/2, kick_users/3, add_owner/4,
-  group_removed/2, is_permitted/5]).
+-export([copy_newbies_perms/2, user_left/2, kick_users/3,
+  add_owner/4, group_removed/2, is_permitted/5, process_iq/2]).
 
-%% API
-
--export([process_iq/2]).
--export([
-  remove_expired_perms/5,
-  is_manager/3,
-  validate_users/4,
-  fast_is_permitted/3,
-  is_permitted/3,
-  get_all_fast_perms_from_db/1
- ]).
+%% Async funcs
+-export([remove_expired_perms/5]).
 
 -record(fast_group_perms, {
   gup = {<<>>,<<>>,<<>>} :: {binary(),binary(),binary()},
@@ -190,16 +181,6 @@ is_manager(Server, Group, Member) ->
     _ -> true
   end.
 
-validate_users(Server, Group, Admin, User) ->
-  {Perms, {Actor, _, _}} = personal_perms(Server, Group, User),
-  IsOwner = is_owner(Perms),
-  IsAdmin = is_admin(Perms),
-  if
-    IsOwner -> false;
-    IsAdmin andalso Admin /= Actor -> false;
-    true -> true
-  end.
-
 get_permissions(Server, Group, Member) ->
   GroupDefaults = group_perms(Server, Group),
   {Personal, _} = personal_perms(Server, Group, Member),
@@ -235,6 +216,7 @@ fast_is_permitted(group, PermName, User, Group)->
   case mnesia:dirty_read(fast_group_perms, {Group, Group, PermName}) of
     [FP] ->
       {_, Server, _} = jid:tolower(jid:from_string(Group)),
+      %%todo: make it faster
       case is_manager(Server, Group, User) of
         true -> true;
         _ -> FP#fast_group_perms.status
@@ -785,9 +767,6 @@ lock_perms(Perms, Levels) ->
     end
             end, Perms).
 
-is_owner(Perms) ->
-  is_permitted(<<"owner">>, Perms).
-
 is_admin(Perms) ->
   P1 = filter_by_level(Perms, [<<"admin">>]),
   case [P || P <- P1, P#perms_permission.status] of
@@ -823,7 +802,6 @@ verify_users(Server, Group, Requester, User) ->
   end.
 
 verify_users(Server, Group, Requester, ReqOpts, User) ->
-%%  Perms = get_permissions(Server, Group, User),
   {Perms, {Actor, _,_}} = personal_perms(Server, Group, User),
   UserIsOwner = is_permitted(<<"owner">>, Perms),
   UserIsAdmin = is_admin(Perms),

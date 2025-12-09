@@ -162,10 +162,9 @@ check_kick(_Acc, LServer, Chat, Admin, Kick, _Lang) ->
     get_user_by_id(LServer ,Chat, ID) end, IDs),
   Users = lists:map(fun (JID) ->
     jid:to_string(JID) end, JIDs),
-  V1 = lists:map(fun(User) -> validate_kick_request(LServer,Chat,Admin,User) end, Users),
-  V2 = lists:map(fun(User) -> validate_kick_request(LServer,Chat,Admin,User) end, UsersByID),
-  Validations = V1 ++ V2,
-  case lists:member(not_ok, Validations) of
+  V1 = [ validate_kick_request(LServer,Chat,Admin,User) || User <- Users],
+  V2 = [ validate_kick_request(LServer,Chat,Admin,User) || User <- UsersByID],
+  case lists:member(false, V1 ++ V2) of
     false ->
       UsersByID ++ Users;
     _ ->
@@ -179,11 +178,11 @@ kick_user(Acc, LServer, Chat, _Admin, _Kick, _Lang) ->
   Acc.
 
 validate_kick_request(_LServer,_Chat, User, User) ->
-  not_ok;
+  false;
 validate_kick_request(LServer,Chat, _, User2) ->
-  IsManager = mod_groups_permissions:is_manager(LServer, Chat, User2),
-  if IsManager -> not_ok;
-    true -> ok
+  case user_role(LServer, User2, Chat) of
+    <<"member">> -> true;
+    _ -> false
   end.
 
 kick_user_from_chat(LServer,Chat,User) ->

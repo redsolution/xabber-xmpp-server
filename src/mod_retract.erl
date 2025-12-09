@@ -393,35 +393,36 @@ local_retract(User1,User2,LServer,StanzaID,IQ, Type) ->
   User2JID = jid:make(User2,LServer),
   BarePeer = jid:to_string(User1JID),
   case get_our_stanza_id(LServer, User2, BarePeer, StanzaID) of
-    not_found ->
-      ?DEBUG("Not found ~p ~p~n iq~p",[BarePeer,StanzaID,IQ]),
-      xmpp:make_error(IQ, xmpp:err_item_not_found());
     error ->
       ?DEBUG("Unknow error during retract ~p",[IQ]),
-      xmpp:make_error(IQ, xmpp:err_item_not_found());
+      xmpp:make_error(IQ, xmpp:err_internal_server_error());
     OurStanzaID ->
-      User1Version = get_version(LServer, User1) + 1,
-      RetractAskUser1 = #retract_message{
-        type = Type,
-        xmlns = ?NS_XABBER_REWRITE_NOTIFY,
-        conversation = User2JID,
-        version = User1Version,
-        id = StanzaID},
-      User2Version = get_version(LServer, User2) + 1,
-      RetractAskUser2 = #retract_message{
-        type = Type,
-        xmlns = ?NS_XABBER_REWRITE_NOTIFY,
-        conversation = User1JID,
-        version = User2Version,
-        id = OurStanzaID},
-      case do_retract_message(RetractAskUser2, User2, LServer, OurStanzaID,
-        User2Version) of
-        ok ->
+      RemoteResult =
+        case OurStanzaID of
+          not_found -> ok;
+          _ ->
+            User2Version = get_version(LServer, User2) + 1,
+            RetractAskUser2 = #retract_message{
+              type = Type,
+              xmlns = ?NS_XABBER_REWRITE_NOTIFY,
+              conversation = User1JID,
+              version = User2Version,
+              id = OurStanzaID},
+            do_retract_message(RetractAskUser2, User2, LServer,
+              OurStanzaID, User2Version)
+      end,
+      if
+        RemoteResult == ok orelse RemoteResult == {error, not_found} ->
+          User1Version = get_version(LServer, User1) + 1,
+          RetractAskUser1 = #retract_message{
+            type = Type,
+            xmlns = ?NS_XABBER_REWRITE_NOTIFY,
+            conversation = User2JID,
+            version = User1Version,
+            id = StanzaID},
           retract_message(User1, LServer, StanzaID, IQ, RetractAskUser1,
             User1Version);
-        {error, not_found} ->
-          xmpp:make_error(IQ, xmpp:err_item_not_found());
-        _ ->
+        true ->
           xmpp:make_error(IQ, xmpp:err_internal_server_error())
       end
   end.

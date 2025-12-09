@@ -94,11 +94,9 @@ delete_group_query(LServer, UserJID, GroupJID) ->
     true ->
       Group = jid:to_string(GroupJID),
       User = jid:to_string(jid:remove_resource(UserJID)),
-      case mod_groups_restrictions:is_owner(LServer, Group, User) of
-        yes ->
-          delete_group(Group);
-        _ ->
-          {error, xmpp:err_not_allowed()}
+      case mod_groups_users:is_owner(LServer, Group, User) of
+        true -> delete_group(Group);
+        _ -> {error, xmpp:err_not_allowed()}
       end;
     _ ->
       {error, xmpp:err_item_not_found()}
@@ -193,14 +191,7 @@ create_chat(Server, Creator, SubEls) ->
         user_count => <<"1">>, gstatus => Status},
       groups_sm:activate(Server, LocalPart, Info),
       mod_groups_users:add_user(Server,Creator,<<"owner">>,Chat,<<"both">>,Creator),
-      Expires = <<"0">>,
-      IssuedBy = <<"server">>,
-      Permissions = get_permissions(Server),
-      lists:foreach(fun(N)->
-        {Rule} = N,
-        mod_groups_restrictions:insert_rule(Server,Chat,Creator,Rule,Expires,IssuedBy) end,
-        Permissions
-      ),
+      ejabberd_hooks:run(groups_add_owner, Server, [Server, Chat, Creator, Creator]),
       Result = create_result_query(LocalPart, Name, Desc, Privacy, Membership, Index,
         ContactList, DomainList),
       {ok, Result, Chat, Creator};
@@ -208,10 +199,11 @@ create_chat(Server, Creator, SubEls) ->
       exist
   end.
 
-check_user_rights(_Acc, User, Chat, _Server) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+check_user_rights(_Acc, User, Group, Server) ->
+  case mod_groups_users:is_permitted(Server, Group, User,
+    change_group_settings, false, []) of
     true ->
-      {stop, {ok,form_chat_information(Chat, form)}};
+      {stop, {ok,form_chat_information(Group, form)}};
     _ ->
       {stop, {error,xmpp:err_not_allowed(<<"You are not allowed to change group properties">>, <<"en">>)}}
   end.
@@ -256,8 +248,9 @@ change_pinned_msg(Server, Group, User, MsgID) ->
   end.
 
 %% groupchat_info_change hook
-check_user_permission(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+check_user_permission(_Acc, User, Group, Server, _FS) ->
+  case mod_groups_users:is_permitted(Server, Group, User,
+    change_group_settings, false, []) of
     true ->
       ok;
     _ ->
@@ -346,7 +339,7 @@ maybe_delete_group(_Acc,{LServer, _User, Group, _UserCard, _Lang})->
     end,
   case Result of
     pass ->
-      case mod_groups_restrictions:get_owners(LServer, Group) of
+      case mod_groups_users:get_owners(LServer, Group) of
         [] -> delete_group(Group, false);
         _ -> ok
       end;
@@ -717,7 +710,8 @@ delete_group(Group, IsP2P) ->
 %%  delete user avatars
   mod_groups_vcard:maybe_delete_file(LServer,AllUserMeta),
 %%  delete group avatar
-  mod_groups_vcard:delete_group_avatar_file(Group).
+  mod_groups_vcard:delete_group_avatar_file(Group),
+  ejabberd_hooks:run(groups_group_removed, LServer, [LServer,  Group]).
 
 create_localpart() ->
   S = list_to_binary(
@@ -981,18 +975,6 @@ sql_update_groupchat(Server, SJID, NewInfo) ->
       {error, db_failure}
   end.
 
-get_permissions(Server) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(name)s from groupchat_rights where type = 'permission' ")) of
-    {selected,[]} ->
-      [];
-    {selected,[{}]} ->
-      [];
-    {selected,Permissions} ->
-      Permissions
-  end.
-
 get_chat_active(_Server, Group) ->
   {LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
   case ejabberd_sm:get_user_info(LUser, LServer, <<"Group">>) of
@@ -1071,12 +1053,13 @@ get_name_desc(Server,Chat) ->
       {<<>>,<<>>,<<>>,<<>>,<<>>,undefined}
   end.
 
-check_user_rights_to_change_status(_Acc,User,Chat,Server) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+check_user_rights_to_change_status(_Acc, User, Group, Server) ->
+  case mod_groups_users:is_permitted(Server, Group, User,
+    change_group_settings, false, []) of
     true ->
-      {stop, {ok, status_form(Chat,Server,'text-single')}};
+      {stop, {ok, status_form(Group,Server,'text-single')}};
     _ ->
-      {stop, {ok, status_form(Chat,Server,'fixed')}}
+      {stop, {ok, status_form(Group,Server,'fixed')}}
   end.
 
 status_form(Chat,LServer,Type) ->
@@ -1138,8 +1121,9 @@ parse_status_query(FS, Lang) ->
   end.
 
 %% Change status hook
-check_user_rights_to_change_status(_Acc,User,Chat,_Server,_FS) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,User,Chat) of
+check_user_rights_to_change_status(_Acc, User, Group, Server, _FS) ->
+  case mod_groups_users:is_permitted(Server, Group, User,
+    change_group_settings, false, []) of
     true ->
       ok;
     _ ->

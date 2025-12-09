@@ -280,15 +280,15 @@ check_special_perms(retract, Server, User, Group, [ID]) ->
   case get_owner_of_message(Server, Group, ID) of
     User -> ok;
     _ ->
-      is_permitted(User, Group)
+      is_permitted(Server, User, Group)
   end;
-check_special_perms(retract_all, _Server, User, Group, _) ->
-  is_permitted(User, Group);
+check_special_perms(retract_all, Server, User, Group, _) ->
+  is_permitted(Server, User, Group);
 check_special_perms(retract_user, Server, User, Group, [UserID]) ->
   case mod_groups_users:get_user_by_id(Server, Group, UserID) of
     User -> {ok, User};
     Val ->
-      case is_permitted(User, Group) of
+      case is_permitted(Server, User, Group) of
         ok -> {ok, Val};
         Err -> Err
       end
@@ -296,9 +296,9 @@ check_special_perms(retract_user, Server, User, Group, [UserID]) ->
 check_special_perms(user_exist, _, _, _, _) ->
   ok.
 
-is_permitted(User, Group) ->
-  case mod_groups_restrictions:is_permitted(<<"delete-messages">>,
-    User, Group) of
+is_permitted(Server, User, Group) ->
+  case mod_groups_users:is_permitted(Server, Group, User,
+    delete_messages, false, []) of
     true -> ok;
     _ -> {error, not_allowed}
   end.

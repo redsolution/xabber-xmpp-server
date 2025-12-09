@@ -59,6 +59,7 @@ is_permitted(Action,User,Chat)->
   ChatJid = jid:from_string(Chat),
   check_if_permitted(ChatJid#jid.lserver,User,Chat,Action).
 
+%%  todo: delete (new permissions)
 % Uncomment it to block ability create new owners
 %set_rule(_Server,<<"owner">>,_Expires,_User,_Chat,_Admin) ->
 set_rule(_Server,_Rule,_Expires,Admin,_Chat,Admin) ->

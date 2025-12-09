@@ -66,8 +66,9 @@ mod_options(_Opts) -> [].
 is_allowed(Acc, #iq{from=From, to=To}) ->
   Group = jid:to_string(jid:remove_resource(To)),
   Admin = jid:to_string(jid:remove_resource(From)),
-  case mod_groups_restrictions:is_permitted(<<"set-restrictions">>,
-    Admin, Group) of
+  Host = To#jid.lserver,
+  case mod_groups_users:is_permitted(Host, Group, Admin,
+    block_user, false, []) of
     true ->
       Acc;
     _ ->
@@ -112,12 +113,15 @@ block(Acc, #iq{to = To, from = From} = Iq)->
             mod_groups_users:kick_user([UserName], Server, Group,
               <<>>, <<>>, <<>>),
             sql_block(Server, UserName, <<"user">>, Admin, Group),
-            {true, mod_groups_users:form_user_card(UserName,Group)}
+            {true, {UserName, mod_groups_users:form_user_card(UserName,Group)}}
         end;
       _ ->
         false
     end end, Elements),
-  mod_groups_system_message:users_blocked(Kicked, Iq),
+  Cards = [C || {_, C} <- Kicked],
+  Users = [U || {U, _} <- Kicked],
+  mod_groups_system_message:users_blocked(Cards, Iq),
+  ejabberd_hooks:run(groupchat_users_kicked, Server, [Server, Group, Users]),
   Acc.
 
 unblock(_Acc, #iq{to = To, sub_els = [El]}) ->
@@ -139,8 +143,9 @@ is_blocked(Server, Group, User) ->
 block_list(UserJID, GroupJID) ->
   Group = jid:to_string(jid:remove_resource(GroupJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
-  case mod_groups_restrictions:is_permitted(<<"set-restrictions">>,
-    User, Group) of
+  Host = GroupJID#jid.lserver,
+  case mod_groups_users:is_permitted(Host, Group, User,
+    block_user, false, []) of
     true ->
       block_list(GroupJID);
     _ ->
@@ -206,11 +211,7 @@ check_permissions(Acc, Server, Group, Admin) ->
         _ ->
           case check_owners(JIDs ++ Domains, Server, Group) of
             false -> error;
-            _ ->
-              case check_roles(JIDs, Server, Group, Admin) of
-                false -> error;
-                _ -> true
-              end
+            _ -> true
           end
       end,
   case R of
@@ -219,16 +220,6 @@ check_permissions(Acc, Server, Group, Admin) ->
     _ ->
       Acc
   end.
-
-check_roles(UserJIDs, Server, Group, Admin) ->
-  lists:foldl(
-    fun(J, Acc) ->
-      case mod_groups_restrictions:validate_users(Server,
-        Group, Admin, J) of
-        ok -> Acc;
-        _ -> false
-      end
-    end, true, UserJIDs).
 
 unblock([], _Server, _Group)->
   ok;
@@ -253,8 +244,7 @@ get_domains(Users) ->
             end, Users).
 
 check_owners(BlockList, Server, Group) ->
-  Owners = mod_groups_restrictions:get_owners(Server, Group),
-  OwnerJIDs = [JID || {JID,_ID} <- Owners],
+  OwnerJIDs = mod_groups_users:get_owners(Server, Group),
   OwnerDomains = get_domains(OwnerJIDs),
   Sum = OwnerJIDs ++ OwnerDomains,
   BlockList == BlockList -- Sum.
@@ -285,7 +275,7 @@ get_user_card(Server, User, Group) ->
       false;
     _ ->
       Card = mod_groups_users:form_user_card(User, Group),
-      {true,Card}
+      {true, {User, Card}}
   end.
 
 

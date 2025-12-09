@@ -42,7 +42,8 @@
   anon/1,
   send_to_all/2,
   chat_created/4,
-  user_rights_changed/6, form_message/3
+%%  user_rights_changed/6,
+  form_message/3
   ]).
 -export([groupchat_changed/5, groupchat_avatar_changed/3]).
 
@@ -52,10 +53,8 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groupchat_created, Host, ?MODULE, chat_created, 10),
   ejabberd_hooks:add(groupchat_avatar_changed, Host, ?MODULE, groupchat_avatar_changed, 20),
   ejabberd_hooks:add(groupchat_properties_changed, Host, ?MODULE, groupchat_changed, 20),
-  ejabberd_hooks:add(change_user_settings, Host, ?MODULE, user_rights_changed, 40),
   ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
   ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, users_kicked, 35),
-%%  ejabberd_hooks:add(groupchat_block_hook, Host, ?MODULE, users_blocked, 35),
   ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 80),
   ejabberd_hooks:add(groupchat_user_change_own_avatar, Host, ?MODULE, user_change_own_avatar, 10),
   ejabberd_hooks:add(groupchat_user_change_some_avatar, Host, ?MODULE, user_change_avatar, 10),
@@ -65,12 +64,10 @@ stop(Host) ->
   ejabberd_hooks:delete(groupchat_created, Host, ?MODULE, chat_created, 10),
   ejabberd_hooks:delete(groupchat_avatar_changed, Host, ?MODULE, groupchat_avatar_changed, 20),
   ejabberd_hooks:delete(groupchat_properties_changed, Host, ?MODULE, groupchat_changed, 20),
-  ejabberd_hooks:delete(change_user_settings, Host, ?MODULE, user_rights_changed, 40),
   ejabberd_hooks:delete(groupchat_user_change_own_avatar, Host, ?MODULE, user_change_own_avatar, 10),
   ejabberd_hooks:delete(groupchat_user_change_some_avatar, Host, ?MODULE, user_change_avatar, 10),
   ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, user_updated, 25),
   ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, users_kicked, 35),
-%%  ejabberd_hooks:delete(groupchat_block_hook, Host, ?MODULE, users_blocked, 35),
   ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, user_join, 80),
   ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, user_left, 25).
 
@@ -449,94 +446,8 @@ send_user_updated(LServer,Chat,UpdatedUser,ByUserCard,MsgTxt) ->
   M = form_message(ChatJID,Body,SubEls),
   send_to_all(Chat,M).
 
-user_rights_changed({OldCard,RequestUser,Permission,Restriction,Form}, LServer, Admin, Chat, _ID, Lang) ->
-  ByUserCard = mod_groups_users:form_user_card(Admin,Chat),
-  UpdatedUser = mod_groups_users:form_user_card(RequestUser,Chat),
-  ChatJID = jid:from_string(Chat),
-  Acc = case anon(UpdatedUser) of
-          public when UpdatedUser#groups_user.nickname =/= undefined andalso UpdatedUser#groups_user.nickname =/= <<" ">> andalso UpdatedUser#groups_user.nickname =/= <<"">> andalso UpdatedUser#groups_user.nickname =/= <<>> andalso bit_size(UpdatedUser#groups_user.nickname) > 1 ->
-            UpdatedUser#groups_user.nickname;
-          public ->
-            jid:to_string(UpdatedUser#groups_user.jid);
-          anonim ->
-            UpdatedUser#groups_user.nickname
-        end,
-  UserID = case anon(ByUserCard) of
-             public when ByUserCard#groups_user.nickname =/= undefined andalso ByUserCard#groups_user.nickname =/= <<" ">> andalso ByUserCard#groups_user.nickname =/= <<"">> andalso ByUserCard#groups_user.nickname =/= <<>> andalso bit_size(ByUserCard#groups_user.nickname) > 1 ->
-               ByUserCard#groups_user.nickname;
-             public ->
-               jid:to_string(ByUserCard#groups_user.jid);
-             anonim ->
-               ByUserCard#groups_user.nickname
-           end,
-  MsgTxt =
-    case Admin of
-      _  when length(Permission) > 0 andalso length(Restriction) > 0 ->
-        Txt = <<" rights was updated by ">>,
-        text_for_msg(Lang,Txt,Acc,UserID,[]);
-      _ when length(Permission) > 0 andalso length(Restriction) == 0 ->
-        Txt = permission_text(Permission,OldCard,UpdatedUser),
-        text_for_msg(Lang,Txt,Acc,UserID,[]);
-      _ when length(Permission) == 0 andalso length(Restriction) > 0 ->
-        Txt = new_restriction_text(Restriction),
-        text_for_msg(Lang,Txt,Acc,UserID,[]);
-      _ ->
-        Txt = <<" info was updated by ">>,
-        text_for_msg(Lang,Txt,Acc,UserID,[])
-    end,
-  Body = [#text{lang = <<>>,data = MsgTxt}],
-  Version = mod_groups_users:current_chat_version(LServer,Chat),
-  X = #groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE, version = Version, sub_els = [UpdatedUser], type = <<"update">>},
-  By = #xmppreference{type = <<"mutable">>, sub_els = [ByUserCard]},
-  SubEls = [X,By],
-  M = form_message(ChatJID,Body,SubEls),
-  send_to_all(Chat,M),
-  {stop,{ok,Form}}.
 
 % Internal function
-
-permission_text(Perms,OldUserCard,UpdateUserCard) ->
-  OldRole = OldUserCard#groups_user.role,
-  NewRole = UpdateUserCard#groups_user.role,
-  case NewRole of
-    OldRole when length(Perms) > 1 ->
-      <<" permissions were changed by ">>;
-    OldRole ->
-      <<" permission was changed by ">>;
-    <<"member">> ->
-      <<" was demoted to member by ">>;
-    <<"admin">> ->
-      <<" was promoted to admin by ">>;
-    <<"owner">> ->
-      <<" was promoted to owner by ">>;
-    _  when length(Perms) > 1 ->
-      <<" permissions were changed by ">>;
-    _ ->
-      <<" permission was changed by ">>
-  end.
-
-new_restriction_text(Restrictions) ->
-  ResExpire = lists:map(fun(R) ->
-   {_Name,_Type,Expire} = R,
-    Expire end, Restrictions
-  ),
-  NowExpireList = lists:filter(fun(El) ->
-    El == [] end, ResExpire
-  ),
-  DiffList = ResExpire--NowExpireList,
-  case length(DiffList) of
-    0 when length(NowExpireList) > 1 ->
-      <<" restrictions were removed by ">>;
-    0 ->
-      <<" restriction was removed by ">>;
-    _ when NowExpireList == [] ->
-      <<" was restricted by ">>;
-    _ when length(Restrictions) > 1 ->
-      <<" restrictions were changed by ">>;
-    _ ->
-      <<" restriction was changed by ">>
-  end.
-
 
 send_presences(Server,Chat) ->
   Users = mod_groups_users:users_to_send(Server,Chat),

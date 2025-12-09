@@ -64,12 +64,13 @@ mod_options(_Opts) -> [].
 
 revoke(Server,User,Chat) ->
   remove_invite(Server,User,Chat).
-revoke(Server, User, Chat, Admin) ->
-  case mod_groups_restrictions:is_permitted(<<"change-group">>,Admin,Chat) of
+revoke(Server, User, Group, Admin) ->
+  case mod_groups_users:is_permitted(Server, Group, Admin,
+    revoke_invite, false, []) of
     true ->
-      remove_invite(Server,User,Chat);
+      remove_invite(Server,User, Group);
     _ ->
-      remove_invite(Server,User,Chat, Admin)
+      remove_invite(Server,User, Group, Admin)
   end.
 
 
@@ -116,12 +117,13 @@ sql_get_invited(Server,Chat, User) ->
       []
   end.
 
-invite_right(_Acc, {Admin, Chat, _Server, _Invite}) ->
-  case mod_groups_chats:get_info(Chat, [parent]) of
+invite_right(_Acc, {Admin, Group, Server, _Invite}) ->
+  case mod_groups_chats:get_info(Group, [parent]) of
     [<<"0">>] ->
-      case mod_groups_restrictions:is_restricted(<<"send-invitations">>, Admin, Chat) of
-        true -> {stop,forbidden};
-        _ -> ok
+      case mod_groups_users:is_permitted(Server, Group, Admin,
+        add_members, true, []) of
+        true -> ok;
+        _ -> {stop,forbidden}
       end;
     _ ->
       {stop,forbidden}

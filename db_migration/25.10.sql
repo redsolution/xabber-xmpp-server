@@ -22,3 +22,13 @@ CREATE TABLE groupchat_newbies_permissions(
     seconds bigint NOT NULL DEFAULT 0,
     CONSTRAINT uc_groupchat_newbies_permissions_group_perm UNIQUE (groupchat, permission)
     );
+
+WITH  tmptable AS (SELECT username, chatgroup, 'owner' AS permission, 'owner' AS level, 
+    true AS status, 0 AS valid_until from groupchat_policy WHERE right_name='owner' AND chatgroup in
+    (SELECT jid FROM groupchats WHERE (SELECT count(*) from groupchat_users WHERE chatgroup=jid) > 0))
+    INSERT INTO groupchat_permissions (groupchat,member,permission,level,status,valid_until,issued_by)
+    SELECT chatgroup,username,permission,level,status,valid_until,username from tmptable;
+
+DROP TABLE groupchat_policy;
+DROP TABLE groupchat_default_restrictions;
+DROP TABLE groupchat_rights;

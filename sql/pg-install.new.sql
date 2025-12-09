@@ -423,34 +423,6 @@ CREATE TABLE groupchat_users_vcard (
     fullupdate text
 );
 
-CREATE TABLE groupchat_rights (
-    name text NOT NULL UNIQUE,
-    type text NOT NULL,
-    description text NOT NULL
-);
-
-
-CREATE TABLE groupchat_policy (
-    username text NOT NULL,
-    chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
-    right_name text NOT NULL REFERENCES groupchat_rights(name) ON DELETE CASCADE,
-    valid_until bigint NOT NULL default 0,
-    issued_by text NOT NULL,
-    issued_at timestamp NOT NULL,
-    CONSTRAINT UC_groupchat_policy UNIQUE (username,chatgroup,right_name)
-);
-
-INSERT INTO groupchat_rights (name,description,type) values
-('send-messages','Send messages','restriction'),
-('send-stickers','Send stickers','restriction'),
-('send-voice','Send voice messages','restriction'),
-('send-invitations','Send invitations', 'restriction'),
-('owner','Owner','permission'),
-('change-group','Change group','permission'),
-('change-users','Change users','permission'),
-('set-restrictions','Set restrictions','permission')
-;
-
 CREATE TABLE groupchat_block (
     chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
     blocked text NOT NULL,
@@ -459,13 +431,6 @@ CREATE TABLE groupchat_block (
     issued_by text NOT NULL,
     issued_at timestamp NOT NULL,
     CONSTRAINT UC_groupchat_block UNIQUE (chatgroup,blocked)
-);
-
-CREATE TABLE groupchat_default_restrictions(
-    chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
-    right_name text NOT NULL REFERENCES groupchat_rights(name) ON DELETE CASCADE,
-    action_time text NOT NULL,
-    CONSTRAINT UC_groupchat_default_restrictions UNIQUE (chatgroup,right_name)
 );
 
 CREATE TABLE groupchat_retract(

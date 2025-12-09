@@ -864,6 +864,8 @@ modules:
     ## global_indexs:
     ##   - "index.domain.com"
     ## remove_empty: true
+  mod_permissions: {}
+  mod_groups_permissions: {}
   mod_panel: {}
     ## cronjob_token: "strongpassword"
   ## mod_nick_avatar:
@@ -876,6 +878,8 @@ modules:
     use_cache: false
   mod_http_iq :
     url: "https://@HOST@:5443/iq"
+  mod_favorites: {}
+  mod_notify: {}
   ## mod_disco_urls:
     ## items:
       ## - "serviceid": "https://service.domain.com/api/"

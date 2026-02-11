@@ -487,36 +487,37 @@ sum(Acc,[]) ->
 sum(Acc,[F|R]) ->
   sum(Acc + F, R).
 
-xabber_registered_chats(Host,Limit,Page) ->
-  mod_groups_chats:get_all_info(Host,Limit,Page).
+xabber_registered_chats(_Host,_Limit,_Page) ->
+  [].
+%%  mod_groups_chats:get_all_info(Host,Limit,Page).
 
 xabber_registered_chats_count(Host) ->
-  mod_groups_chats:get_count_chats(Host).
+  mod_groups_chats:numbers_of_groups(Host).
 
 xabber_registered_users_count(Host) ->
   length(xabber_registered_users(Host)).
 
-xabber_register_chat(Server,Creator,Host,Name,LocalJid,Anon,Searchable,Model,Description) ->
-  case validate(Anon,Searchable,Model) of
-    ok ->
-      GroupInfo = [
-        #groups_localpart{cdata = jid:nodeprep(LocalJid)},
-        #groups_name{cdata = Name},
-        #groups_description{cdata = Description},
-        #groups_index{cdata = Searchable},
-        #groups_privacy{cdata = Anon},
-        #groups_membership{cdata = Model}
-      ],
-      Owner = jid:to_string(jid:make(Creator, Host)),
-      case mod_groups_chats:create_chat(Server, Owner, GroupInfo) of
-        {ok, _, _, _} ->
-          ok;
-        _ ->
-          1
-      end;
-    _ ->
-      2
-  end.
+xabber_register_chat(_Server,_Creator,_Host,_Name,_LocalJid,_Anon,_Searchable,_Model,_Description) ->ok.
+%%  case validate(Anon,Searchable,Model) of
+%%    ok ->
+%%      GroupInfo = [
+%%        #groups_localpart{cdata = jid:nodeprep(LocalJid)},
+%%        #groups_name{cdata = Name},
+%%        #groups_description{cdata = Description},
+%%        #groups_index{cdata = Searchable},
+%%        #groups_privacy{cdata = Anon},
+%%        #groups_membership{cdata = Model}
+%%      ],
+%%      Owner = jid:to_string(jid:make(Creator, Host)),
+%%      case mod_groups_chats:create_chat(Server, Owner, GroupInfo) of
+%%        {ok, _, _, _} ->
+%%          ok;
+%%        _ ->
+%%          1
+%%      end;
+%%    _ ->
+%%      2
+%%  end.
 
 xabber_num_online_users(Host) ->
   length(lists:usort([U || {U, _H, _R} <- ejabberd_sm:get_vh_session_list(Host)])).

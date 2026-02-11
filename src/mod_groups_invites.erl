@@ -25,73 +25,165 @@
 
 -module(mod_groups_invites).
 -author('ilya.kalashnikov@redsolution.com').
--behavior(gen_mod).
 
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
 -compile([{parse_transform, ejabberd_sql_pt}]).
 
--export([start/2, stop/1, depends/2, mod_options/1]).
--export([
-  add_user/5,
-  add_user/6,
-  invite_right/2,
-  check_user/2,
-  send_invite/2,
-  get_invited_users/2,
-  get_invited_users/3,
-  revoke/3,
-  revoke/4,
-  add_user_in_chat/2
+%%API
+-export([get_invites/3,
+  revoke/3, revoke/4,
+  invite_user/4
 ]).
 
-start(Host, _Opts) ->
-  ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, invite_right, 10),
-  ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, check_user, 20),
-  ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, add_user_in_chat, 30),
-  ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, send_invite, 80).
 
-stop(Host) ->
-  ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, invite_right, 10),
-  ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, check_user, 20),
-  ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, add_user_in_chat, 30),
-  ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, send_invite, 80).
+%% External
 
-depends(_Host, _Opts) -> [].
+invite_user(Server, Group, User, Invite) ->
+  case invite_allowed(Server, Group, User) of
+    true ->
+      #groups_invite{target = JID, send = Send,
+        reason = Reason } = Invite,
+      case check_target(Server, Group, JID) of
+        ok ->
+          Target = jid:to_string(jid:remove_resource(JID)),
+          add_user_to_group(Server, Group, User, Target, Send, Reason);
+        exists ->
+          {error, xmpp:err_conflict(<<"User was already invited">>,<<>>)};
+        blocked ->
+          {error, xmpp:err_not_allowed(<<"User is blocked">>,<<>>)};
+        _ ->
+          {error, xmpp:err_forbidden()}
+      end;
+    _ ->
+      {error, xmpp:err_not_allowed()}
+  end.
 
-mod_options(_Opts) -> [].
+get_invites(Server, Group, User) ->
+  case mod_groups_users:is_permitted(Server, Group, User,
+    get_invited_users, false, []) of
+    true ->
+      get_invited_users(Server, Group);
+    _ ->
+      get_invited_users(Server, Group, User)
+  end.
 
-revoke(Server,User,Chat) ->
-  remove_invite(Server,User,Chat).
-revoke(Server, User, Group, Admin) ->
-  case mod_groups_users:is_permitted(Server, Group, Admin,
+revoke(Server, Group, JIDS) ->
+  remove_invite(Server, Group, JIDS).
+
+revoke(Server, Group, User, JIDS) ->
+  case mod_groups_users:is_permitted(Server, Group, User,
     revoke_invite, false, []) of
     true ->
-      remove_invite(Server,User, Group);
+      remove_invite(Server, Group, JIDS);
     _ ->
-      remove_invite(Server,User, Group, Admin)
+      remove_invite(Server, Group, User, JIDS)
   end.
 
 
--spec get_invited_users(binary(),binary()) -> groups_query_invites().
-get_invited_users(Server,Chat) ->
-  List = sql_get_invited(Server,Chat),
-  make_invite_query(List).
+%%Internal
 
--spec get_invited_users(binary(),binary(),binary()) -> groups_query_invites().
-get_invited_users(Server, Chat, User) ->
-  List = sql_get_invited(Server, Chat, User),
-  make_invite_query(List).
+invite_allowed(Server, Group, User) ->
+  case mod_groups_chats:get_info(Group, [parent]) of
+    [<<"0">>] ->
+      mod_groups_users:is_permitted(Server, Group, User,
+        add_members, true, []);
+    _ ->
+      false
+  end.
 
--spec make_invite_query(list()) -> groups_query_invites().
-make_invite_query([]) ->
-  #groups_query_invites{};
-make_invite_query(List) ->
-  UserList = lists:map(fun({User})->
-    #groups_invite_user{jid = User}
-                       end, List),
-  #groups_query_invites{users = UserList}.
+check_target(Server, Group, UserJID) ->
+  IsGroup = case UserJID#jid.lserver of
+              Server ->
+                mod_xabber_entity:is_group(UserJID#jid.luser, Server);
+              _ ->
+                false
+            end,
+  if
+    not IsGroup ->
+      User = jid:to_string(jid:remove_resource(UserJID)),
+      case mod_groups_block:is_blocked(Server, Group, User) of
+        false ->
+          Subs = mod_groups_users:user_subscription(Server,
+            User, Group),
+          if
+            Subs == <<"both">> orelse  Subs == <<"wait">> ->
+              exists;
+            true ->
+              ok
+          end;
+        _ ->
+          blocked
+      end;
+    true ->
+      forbidden
+  end.
+
+add_user_to_group(Server, Group, Actor, User, Send, Reason) ->
+  mod_groups_users:add_invited_user(Server, Group, User, Actor),
+  case Send of
+    true ->
+      send_invite(Server, Group, User, Reason);
+    _->
+      ok
+  end.
+
+send_invite(Server, Group, User, Reason) ->
+  GroupDetails = mod_groups_chats:group_details(Server, User, Group,
+    [{full, true}, {members, true}]),
+  Text = <<"You have been invited to the group chat ",Group/binary,".
+   Please add it to your contacts to join">>,
+  GroupJID = jid:from_string(Group),
+  Invite = #groups_invite{reason = Reason, jid = GroupJID},
+  Message = #message{
+    type = chat,
+    id = randoms:get_string(),
+    from = jid:replace_resource(GroupJID, <<"Group">>),
+    to = jid:from_string(User),
+    body = [#text{lang = <<>>,data = Text}],
+    sub_els = [Invite, GroupDetails]},
+  ejabberd_router:route(Message).
+
+get_invited_users(Server, Group) ->
+  List = sql_get_invited(Server, Group),
+  invites_query_result(List).
+
+get_invited_users(Server, Group, User) ->
+  List = sql_get_invited(Server, Group, User),
+  invites_query_result(List).
+
+invites_query_result([]) ->
+  #groups_invites{};
+invites_query_result(List) ->
+  JIDs = lists:map(fun({User})->
+    jid:from_string(User)
+                   end, List),
+  #groups_invites{list = JIDs}.
+
+remove_invite(Server, Group, JIDS) ->
+  R = sql_remove_invite(Server, Group, JIDS),
+  remove_invite_result(R, Group, JIDS).
+
+remove_invite(Server, Group, User, JIDS) ->
+  R = sql_remove_invite(Server, Group, User, JIDS),
+  remove_invite_result(R, Group, JIDS).
+
+remove_invite_result(Result, Group, JIDS) ->
+  case Result of
+    ok ->
+      From = jid:from_string(Group),
+      To = jid:from_string(JIDS),
+      Unsubscribe = #presence{type = unsubscribe, from = From, to= To},
+      Unavailable = #presence{type = unavailable,from = From, to= To},
+      ejabberd_router:route(Unavailable),
+      ejabberd_router:route(Unsubscribe),
+      ok;
+    _ ->
+      {error, xmpp:err_item_not_found()}
+  end.
+
+%% SQL
 
 sql_get_invited(Server,Chat) ->
   case ejabberd_sql:sql_query(
@@ -99,10 +191,8 @@ sql_get_invited(Server,Chat) ->
     ?SQL("select @(username)s from groupchat_users
     where chatgroup = %(Chat)s
     and subscription = 'wait'")) of
-    {selected,Users} ->
-      Users;
-    _->
-      []
+    {selected, Users} -> Users;
+    _-> []
   end.
 
 sql_get_invited(Server,Chat, User) ->
@@ -111,110 +201,26 @@ sql_get_invited(Server,Chat, User) ->
     ?SQL("select @(username)s from groupchat_users
     where chatgroup = %(Chat)s
     and subscription = 'wait' and invited_by = %(User)s")) of
-    {selected,Users} ->
-      Users;
-    _->
-      []
+    {selected, Users} -> Users;
+    _-> []
   end.
 
-invite_right(_Acc, {Admin, Group, Server, _Invite}) ->
-  case mod_groups_chats:get_info(Group, [parent]) of
-    [<<"0">>] ->
-      case mod_groups_users:is_permitted(Server, Group, Admin,
-        add_members, true, []) of
-        true -> ok;
-        _ -> {stop,forbidden}
-      end;
-    _ ->
-      {stop,forbidden}
-  end.
-
-check_user(_Acc, {_A, Chat, Server, #groups_invite{invite_jid = User}}) ->
-  case mod_groups_block:is_blocked(Server, Chat , User) of
-    false ->
-      Subs = mod_groups_users:check_user_if_exist(Server,User,Chat),
-      if
-        Subs == <<"both">> orelse  Subs == <<"wait">> ->
-          {stop, exist};
-        true ->
-          ok
-      end;
-    _ ->
-      {stop, blocked}
-  end.
-
-add_user_in_chat(_Acc, {Admin,Chat,Server,
-  #groups_invite{invite_jid =  User, reason = _Reason, send = _Send}}) ->
-  Role = <<"member">>,
-  Subscription = <<"wait">>,
+sql_remove_invite(Server, Group, JIDS) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchat_users set subscription = %(Subscription)s, invited_by = %(Admin)s where chatgroup=%(Chat)s
-              and username=%(User)s and subscription='none'")) of
-    {updated,N} when N > 0 ->
-      ok;
-    _ ->
-      add_user(Server,User,Role,Chat,Subscription, Admin)
+    ?SQL("delete from groupchat_users where "
+    " username=%(JIDS)s and chatgroup=%(Group)s "
+    " and subscription='wait'")) of
+    {updated, 1} -> ok;
+    _ -> error
   end.
 
-send_invite(_Acc, {Admin, Chat, _Server,
-  #groups_invite{invite_jid = User, reason = Reason, send = Send}}) ->
-  if
-    Send == <<"1">> orelse Send == <<"true">> ->
-      ejabberd_router:route(message_invite(User, Chat, Admin, Reason)),
-      ok;
-    true ->
-      ok
-  end.
-
-
-message_invite(User,Chat,Admin,Reason) ->
-  U = #groups_invite_user{jid = Admin},
-  ChatJID = jid:from_string(Chat),
-  [Privacy] = mod_groups_chats:get_info(Chat, [privacy]),
-  Text = <<"Add ",Chat/binary," to the contacts to join a group chat">>,
-    #message{type = chat,to = jid:from_string(User), from = jid:from_string(Chat), id = randoms:get_string(),
-      sub_els = [#groups_invite{user = U, reason = Reason, jid = ChatJID},
-        #groups_x{sub_els = [#groups_privacy{cdata = Privacy}]}],
-      body = [#text{lang = <<>>,data = Text}], meta = #{}}.
-
-%% internal functions
-remove_invite(Server,User,Chat) ->
-  R = ejabberd_sql:sql_query(
+sql_remove_invite(Server, Group, User, JIDS) ->
+  case ejabberd_sql:sql_query(
     Server,
-    ?SQL("delete from groupchat_users where
-         username=%(User)s and chatgroup=%(Chat)s and subscription='wait'")),
-  remove_invite_result(R, User, Chat).
-remove_invite(Server, User, Chat, InvitedBy) ->
-  R = ejabberd_sql:sql_query(
-    Server,
-    ?SQL("delete from groupchat_users where
-         username=%(User)s and chatgroup=%(Chat)s and subscription='wait' and invited_by=%(InvitedBy)s")),
-  remove_invite_result(R, User, Chat).
-
-remove_invite_result(Result, User, Chat) ->
-  case Result of
-    {updated,1} ->
-      From = jid:from_string(Chat),
-      To = jid:from_string(User),
-      Unsubscribe = #presence{type = unsubscribe, from = From, to= To},
-      Unavailable = #presence{type = unavailable,from = From, to= To},
-      ejabberd_router:route(Unavailable),
-      ejabberd_router:route(Unsubscribe),
-      ok;
-    _ ->
-      {error, not_found}
+    ?SQL("delete from groupchat_users where "
+    " username=%(JIDS)s and chatgroup=%(Group)s "
+    " and subscription='wait' and invited_by=%(User)s")) of
+    {updated, 1} -> ok;
+    _ -> error
   end.
-
-add_user(Server, Member, Role, Group, Subs) ->
-  add_user(Server, Member, Role, Group, Subs,<<>>).
-
-add_user(Server, Member, Role, Group, Subs, InvitedBy) ->
-  case mod_groups_users:check_user_if_exist(Server, Member, Group) of
-    not_exist  ->
-      mod_groups_users:add_user(Server, Member, Role,
-        Group, Subs,InvitedBy);
-    _ ->
-      ok
-  end.
-

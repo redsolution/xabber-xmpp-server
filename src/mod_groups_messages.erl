@@ -28,38 +28,35 @@
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
 -behaviour(gen_server).
--export([start/2, stop/1, depends/2, mod_options/1]).
--export([process_messages/0,send_message/3]).
--export([init/1, handle_call/3, handle_cast/2,
-  handle_info/2, terminate/2, code_change/3]).
--export([
-  message_hook/1,
-  send_displayed/3,
-  get_displayed_msg/4,
-  shift_references/2,
-  set_displayed/4,
-  strip_group_elements/1
-]).
--export([get_last/1, seconds_since_epoch/1]).
 
--record(state, {host :: binary()}).
-
--record(displayed_msg,
-{
-  chat = {<<"">>, <<"">>}                     :: {binary(), binary()} | '_',
-  bare_peer = {<<"">>, <<"">>, <<"">>}        :: ljid() | '_',
-  stanza_id = <<>>                            :: binary() | '_',
-  origin_id = <<>>                            :: binary() | '_'
-}
-).
-
--record(groupchat_blocked_user, {user :: binary(), timestamp :: integer() }).
--export([send_received/4]).
 -include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
+-include_lib("stdlib/include/ms_transform.hrl").
 
+-export([start/2, stop/1, depends/2, mod_options/1]).
+-export([init/1, handle_call/3, handle_cast/2,
+  handle_info/2, terminate/2, code_change/3]).
+-export([process_messages/0, send_message/3]).
+-export([modify/1, shift_references/2]).
+-export([delete_all_sessions/1, get_present/1, select_sessions/2,
+  delete_all_user_sessions/2, change_present_state/3]).
+
+-record(state, {host :: binary()}).
+-record(participant_session, {group, username, server, resource, ts}).
+-record(groups_send_displayed,
+{
+  group = <<"">>                              :: binary() | '_',
+  user = <<"">>                               :: binary() | '_',
+  stanza_id = <<>>                            :: binary() | '_',
+  displayed                                   :: xmpp_element() | '_'
+  }).
+
+
+%%====================================================================
+%% gen_mod callbacks
+%%====================================================================
 start(Host, Opts) ->
   gen_mod:start_child(?MODULE, Host, Opts).
 
@@ -76,16 +73,28 @@ mod_options(_Opts) -> [].
 %%====================================================================
 init([Host, _Opts]) ->
   init_db(),
+  %% run task once for all hosts
+  Hosts = lists:sort(ejabberd_config:get_myhosts()),
+  case Hosts of
+    [Host | _] ->
+      erlang:send_after(timer:minutes(10), self(), clean),
+      erlang:send_after(timer:minutes(60), self(),
+        'delete_zombie_sessions');
+    _ ->
+      ok
+  end,
   {ok, #state{host = Host}}.
 
 init_db() ->
-  ejabberd_mnesia:create(?MODULE, displayed_msg,
-    [{disc_only_copies, [node()]},
-      {type, bag},
-      {attributes, record_info(fields, displayed_msg)}]),
-  ejabberd_mnesia:create(?MODULE, groupchat_blocked_user,
+  ejabberd_mnesia:create(?MODULE, participant_session,
     [{ram_copies, [node()]},
-      {attributes, record_info(fields, groupchat_blocked_user)}]).
+      {attributes, record_info(fields, participant_session)},
+      {type, bag}]),
+  ejabberd_mnesia:create(?MODULE, groups_send_displayed,
+    [{disc_only_copies, [node()]},{type, bag},
+      {attributes, record_info(fields, groups_send_displayed)}]),
+  catch ets:new(groups_strangers, [named_table, public,
+    {heir, erlang:group_leader(), none}]).
 
 handle_call(_Call, _From, State) ->
   {noreply, State}.
@@ -95,6 +104,19 @@ handle_cast(Msg, State) ->
   {noreply, State}.
 
 
+handle_info(clean, State) ->
+  ?DEBUG("cleaning ~p ETS table", [groups_strangers]),
+  Now = erlang:system_time(second),
+  ets:select_delete(
+    groups_strangers,
+    ets:fun2ms(fun({_, UnbanTS}) -> UnbanTS =< Now end)),
+  erlang:send_after(timer:minutes(10), self(), clean),
+  {noreply, State};
+handle_info('delete_zombie_sessions', State) ->
+  kill_zombies(),
+  erlang:send_after(timer:minutes(60),
+    self(), 'delete_zombie_sessions'),
+  {noreply, State};
 handle_info(Info, State) ->
   ?WARNING_MSG("unexpected info: ~p", [Info]),
   {noreply, State}.
@@ -105,40 +127,193 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-%%
-message_hook(#message{to =To, from = From} = Pkt) ->
-  User = jid:to_string(jid:remove_resource(From)),
-  Chat = jid:to_string(jid:remove_resource(To)),
-  Server = To#jid.lserver,
-  UserStatus = check_permission_write(User, Chat, Pkt),
-  ChatStatus = mod_groups_chats:get_chat_active(Server,Chat),
-  case UserStatus of
-    restricted ->
-      Text = <<"You have no permission to write in this chat">>,
-      BodySer = [#text{lang = <<>>,data = Text}],
-      ElsSer = [#groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE}],
-      MessageNew = #message{from = To, to = From, id = randoms:get_string(),
-        type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
-      UserID = mod_groups_users:get_user_id(Server,User,Chat),
-      ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
-      send_message_no_permission_to_write(UserID,MessageNew);
-    allowed when ChatStatus =/= <<"inactive">> ->
-      Message = Pkt#message{type = chat},
-      transform_message(Message);
-    _ when ChatStatus == <<"inactive">> ->
-      Text = <<"Chat is inactive.">>,
-      BodySer = [#text{lang = <<>>,data = Text}],
-      ElsSer = [#groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE}],
-      MessageNew = #message{from = To, to = From, id = randoms:get_string(),
-        type = chat, body = BodySer, sub_els = ElsSer, meta = #{}},
-      UserID = mod_groups_users:get_user_id(Server,User,Chat),
-      ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
-      send_message_no_permission_to_write(UserID,MessageNew);
+%%--------------------------------------------------------------------
+%% API
+%%--------------------------------------------------------------------
+send_message(Message, [], GroupJID) ->
+  send_message_to_index(GroupJID, Message),
+  ok;
+send_message(Message, Users, GroupJID) ->
+  [User|RestUsers] = Users,
+  ejabberd_router:route(GroupJID, User, Message),
+  send_message(Message, RestUsers, GroupJID).
+
+%%--------------------------------------------------------------------
+%% Sub process.
+%%--------------------------------------------------------------------
+process_messages() ->
+  receive
+    {message,Message} ->
+      process_message(Message),
+      process_messages();
     _ ->
-      ejabberd_router:route_error(Pkt, xmpp:err_not_allowed())
+      exit(normal)
+  after
+    300000 -> exit(normal)
   end.
 
--spec check_permission_write(binary(), binary(), xmlel()) -> allowed | restricted | blocked | notexist .
+%% Internal functions
+%% todo: check this
+process_message(#message{type = headline, body=[],
+  from = From, to = From, sub_els = Sub} = _Message) ->
+  %% todo: delete this
+  %% When a group changes something in its PEP, it receives the notification about it.
+  %% The group then forwards these notifications on behalf of itself to all members.
+  ?INFO_MSG("IN SELF MSG ~p",[Sub]);
+%%  Event = lists:keyfind(ps_event,1,Sub),
+%%  FromChat = jid:remove_resource(From),
+%%  case Event of
+%%    false ->
+%%      ok;
+%%    _ ->
+%%      Chat = jid:to_string(From),
+%%      #ps_event{items = Items} = Event,
+%%      #ps_items{items = ItemList, node = Node} = Items,
+%%      Item = lists:keyfind(ps_item,1,ItemList),
+%%      #ps_item{sub_els = Els} = Item,
+%%      Decoded = lists:map(fun(N) -> xmpp:decode(N) end, Els),
+%%      [El|_R] = Decoded,
+%%      case El of
+%%        {nick,Nickname} when Node == <<"http://jabber.org/protocol/nick">> ->
+%%          mod_groups_vcard:change_nick_in_vcard(From#jid.luser,From#jid.lserver,Nickname),
+%%          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
+%%          send_message(Message,AllUsers,FromChat);
+%%        {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
+%%          AvatarI = hd(AvatarInfo),
+%%          IdAvatar = AvatarI#avatar_info.id,
+%%          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
+%%          send_message(Message,AllUsers,FromChat),
+%%          mod_groups_vcard:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar);
+%%        {avatar_meta,_AvatarInfo,_Smth} ->
+%%          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
+%%          send_message(Message,AllUsers,FromChat);
+%%        {nick,_Nickname} ->
+%%          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
+%%          send_message(Message,AllUsers,FromChat);
+%%        _ ->
+%%          ok
+%%      end
+%%  end;
+process_message(#message{type = headline, body=[],
+  from = From, to = To, sub_els = Sub}) ->
+  ?INFO_MSG("IN headline MSG from ~p to ~p:\n~p",[From, To, Sub]);
+%%  Event = lists:keyfind(ps_event,1,Sub),
+%%  Chat = jid:to_string(jid:remove_resource(To)),
+%%  User = jid:to_string(jid:remove_resource(From)),
+%%  LServer = To#jid.lserver,
+%%  case Event of
+%%    false ->
+%%      ok;
+%%    _ ->
+%%      #ps_event{items = Items} = Event,
+%%      #ps_items{items = ItemList, node = Node} = Items,
+%%      Item = lists:keyfind(ps_item,1,ItemList),
+%%      #ps_item{sub_els = Els} = Item,
+%%      AvatarMeta = case Els of
+%%                     [] -> undefined;
+%%                     _ -> xmpp:decode(hd(Els))
+%%                   end,
+%%      case AvatarMeta of
+%%        #avatar_meta{info = AvatarInfo} when Node == <<"urn:xmpp:avatar:metadata">> ->
+%%          AvatarI = hd(AvatarInfo),
+%%          IdAvatar = AvatarI#avatar_info.id,
+%%          OldID = mod_groups_vcard:get_image_id(LServer,User, Chat),
+%%          case OldID of
+%%            IdAvatar -> ok;
+%%            _ ->
+%%              mod_groups_vcard:handle_avatar_meta(
+%%                jid:replace_resource(To,<<"Group">>),
+%%                jid:remove_resource(From),
+%%                AvatarMeta)
+%%          end;
+%%        _ ->
+%%          ok
+%%      end
+%%  end;
+process_message(#message{body=[], from = From, type = Type, to = To} = Msg)
+  when Type == normal orelse Type == chat ->
+  {_, LServer, _} = jid:tolower(To),
+  GroupJID = jid:remove_resource(To),
+  SUser = jid:to_string(jid:remove_resource(From)),
+  Displayed = is_displayed(Msg, GroupJID),
+  PresentType = lists:foldl(fun(CType, Result) ->
+    case xmpp:get_subtag(Msg, #chatstate{type = CType}) of
+      false -> Result;
+      _ when CType == active -> present;
+      _ -> not_present
+    end end, false, [active, gone, inactive]),
+  IsAllowed = case {Displayed, PresentType} of
+              {false, false} -> false;
+              _ ->
+                mod_groups_users:check_if_exist(LServer,
+                  jid:to_string(GroupJID), SUser)
+            end,
+  if
+    Displayed /= false  andalso IsAllowed ->
+      #mark_displayed{id = OriginID} = Displayed,
+      StanzaID = get_stanza_id(Displayed, GroupJID, LServer, OriginID),
+      ejabberd_hooks:run(groupchat_got_displayed,LServer,[From, GroupJID,StanzaID]),
+      send_displayed(GroupJID, StanzaID);
+    PresentType /= false andalso IsAllowed ->
+      change_present_state(To, From, PresentType);
+    true ->
+      ok
+  end;
+process_message(#message{body=_Body, type = Type} = Msg)
+  when Type == normal orelse Type == chat ->
+  case xmpp:get_subtag(Msg, #groups_invite{}) of
+    false ->
+      IsPermitted = is_permitted(Msg),
+      process_message(IsPermitted, Msg);
+    _ ->
+      ?DEBUG("Drop message with invite",[]),
+      ok
+  end;
+process_message(_Message) ->
+  ok.
+
+process_message({false, <<>>}, Pkt) ->
+  ejabberd_router:route_error(Pkt, xmpp:err_not_allowed());
+process_message({false, Why}, Pkt) ->
+  UserJID = Pkt#message.from,
+  GroupJID = Pkt#message.to,
+  Body = [#text{lang = <<>>,data = Why}],
+  Els = [#groups_x{}],
+  Message = #message{from = GroupJID, to = UserJID,
+    id = randoms:get_string(),
+    type = chat, body = Body, sub_els = Els, meta = #{}},
+  ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
+  send_not_allowed(UserJID, GroupJID, Message);
+process_message(_, Pkt) ->
+  OriginID = case xmpp:get_subtag(Pkt, #origin_id{}) of
+               false -> Pkt#message.id;
+               #origin_id{id = Val}  -> Val
+             end,
+  Pkt1 = Pkt#message{type = chat, id = OriginID},
+  case xmpp:get_subtag(Pkt1, #groups_resend{}) of
+    false ->
+      modify_and_send(Pkt1);
+    _ ->
+      re_sent_msg(Pkt1)
+  end.
+
+is_permitted(#message{to =To, from = From} = Pkt) ->
+  User = jid:to_string(jid:remove_resource(From)),
+  Group = jid:to_string(jid:remove_resource(To)),
+  UserStatus = check_permission_write(User, Group, Pkt),
+  ChatState = mod_groups_chats:group_is_active(Group),
+  if
+    UserStatus == restricted ->
+      {false, <<"You are not allowed to send such messages to this group.">>};
+    ChatState == inactive ->
+      {false, <<"Group is inactive.">>};
+    UserStatus == allowed andalso ChatState =/= inactive ->
+      true;
+    true ->
+      {false, <<>>}
+  end.
+
+-spec check_permission_write(binary(), binary(), xmlel()) -> allowed | restricted | notexist .
 check_permission_write(User,Chat, Pkt) ->
   ChatJID = jid:from_string(Chat),
   Server = ChatJID#jid.lserver,
@@ -150,33 +325,112 @@ check_permission_write(User,Chat, Pkt) ->
         _ -> restricted
       end;
     _ ->
-      restricted
+      notexist
   end.
 
-send_received_and_message(Pkt, UserJID, GroupJID, OriginID, Users) ->
+is_displayed(Pkt, GroupJID) ->
+  case xmpp:get_subtag(Pkt, #mark_displayed{}) of
+    #mark_displayed{sub_els = Els} = D ->
+      NewEls = lists:filtermap(
+        fun(El) ->
+          Name = xmpp:get_name(El),
+          NS = xmpp:get_ns(El),
+          if (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
+            try xmpp:decode(El) of
+              #stanza_id{by = GroupJID} = SID ->
+                {true, SID};
+              _ -> false
+            catch _:{xmpp_codec, _} ->
+              false
+            end;
+            true ->
+              false
+          end
+        end, Els),
+      D#mark_displayed{sub_els = NewEls};
+    _ ->
+      false
+  end.
+
+get_stanza_id(Pkt, BareJID, LServer, OriginID) ->
+  case xmpp:get_subtag(Pkt, #stanza_id{}) of
+    #stanza_id{by = BareJID, id = StanzaID} ->
+      StanzaID;
+    _ ->
+      SIDInt = mod_unique:get_stanza_id_by_origin_id(LServer,
+        OriginID, BareJID#jid.luser),
+      integer_to_binary(SIDInt)
+  end.
+
+re_sent_msg(#message{from = From, to = To, id = Id} = Pkt) ->
+  {LP, Server, _} = jid:tolower(To),
+  case mod_unique:get_message(Server, LP, Id) of
+    #message{} = Found ->
+      FoundMeta = Found#message.meta,
+      StanzaID = integer_to_binary(maps:get('stanza_id', FoundMeta)),
+      Mod = gen_mod:db_mod(Server, 'mod_mam'),
+      case Mod:select(Server, To, To,
+        [{'ids',[StanzaID]}], undefined, chat) of
+        {[{_, _, Forwarded}], true, 1} ->
+          Message1 = hd(Forwarded#forwarded.sub_els),
+          Message2 = Message1#message{meta = FoundMeta},
+          send_received(Message2, From, To);
+        Err ->
+          %%  message not found in archive
+          ?ERROR_MSG("The message is gone!!! group: ~p, id: ~p.\n ~p",
+            [To, StanzaID, Err]),
+          ejabberd_router:route_error(Pkt,
+            xmpp:err_internal_server_error())
+      end;
+    _ ->
+      Pkt1 = mod_unique:remove_request(Pkt, true),
+      modify_and_send(Pkt1)
+  end.
+
+modify_and_send(#message{to = To, from = From} = Pkt) ->
+  Msg = modify(Pkt),
+  Server = To#jid.lserver,
+  GroupS = jid:to_string(jid:remove_resource(To)),
+  AllUsers = mod_groups_users:users_to_send(Server, GroupS),
+  UserBareJID = jid:remove_resource(From),
+  Users = AllUsers -- [UserBareJID],
+  send_received_and_message(Msg, From, To, Users).
+
+modify(#message{to = To, from = From, body = Body} = Pkt) ->
+  GroupS = jid:to_string(jid:remove_resource(To)),
+  UserS = jid:to_string(jid:remove_resource(From)),
+  UserBareJID = jid:remove_resource(From),
+  UserCard = mod_groups_users:user_card(UserS, GroupS),
+  Username = UserCard#groups_user.nickname,
+  Header = <<Username/binary, ":", "\n">>,
+  Length = misc:escaped_text_len(Header),
+  GroupEls = [#xmppreference{'begin' = 0, 'end' = Length,
+    type = <<"mutable">>}, #groups_x{author = UserCard}],
+  NewBody = [T#text{data = <<Header/binary, Text/binary >>}
+    || #text{data = Text} = T <- Body],
+  Els1 = clean_sub_els(xmpp:get_els(Pkt)),
+  Els2 = shift_references(Els1, Length),
+  Pkt#message{body = NewBody, sub_els = GroupEls ++ Els2,
+    to = UserBareJID}.
+
+send_received_and_message(Pkt, UserJID, GroupJID, Users) ->
   {Pkt2, _State2} = mod_mam:user_send_packet({Pkt,#{jid => GroupJID}}),
-  send_received(Pkt2, UserJID, OriginID, GroupJID),
+  send_received(Pkt2, UserJID, GroupJID),
   send_message(Pkt2, Users, GroupJID),
   send_notifications(Pkt2, GroupJID, UserJID, Users).
 
-send_message(Message,[], GroupJID) ->
-  send_message_to_index(GroupJID, Message),
-  ok;
-send_message(Message, Users, GroupJID) ->
-  [User|RestUsers] = Users,
-  ejabberd_router:route(GroupJID, User, Message),
-  send_message(Message, RestUsers, GroupJID).
 
-send_message_to_index(ChatJID, Message) ->
-  Server = ChatJID#jid.lserver,
-  Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  case mod_groups_chats:is_global_indexed(Chat) of
-    true ->
+send_message_to_index(GroupJID, Message) ->
+  Server = GroupJID#jid.lserver,
+  Group = jid:to_string(jid:remove_resource(GroupJID)),
+  [Index] = mod_groups_chats:get_info(Group, [index]),
+  case Index of
+    global ->
       GlobalIndexes = mod_groups:get_option(Server, global_indexs),
-      lists:foreach(fun(Index) ->
-        To = jid:from_string(Index),
+      lists:foreach(fun(JIDS) ->
+        To = jid:from_string(JIDS),
         MessageDecoded = xmpp:decode(Message),
-        M = xmpp:set_from_to(MessageDecoded,ChatJID,To),
+        M = xmpp:set_from_to(MessageDecoded, GroupJID,To),
         ejabberd_router:route(M) end, GlobalIndexes);
     _ ->
       ok
@@ -208,462 +462,79 @@ send_notifications(_Message, _GroupJID, []) ->
 send_notifications(Message, GroupJID, [User | Users]) ->
   Group = jid:to_string(jid:remove_resource(GroupJID)),
   Fallback = xmpp:mk_text(<<"You were mentioned in ",Group/binary," group.">>),
-    Notification = #xen_notification{category = <<"mention">>,
-      sub_els = [
-        #forwarded{sub_els = [xmpp:set_from_to(Message, GroupJID, User)]}
-      ]},
-    Notify = #xen_notify{notification = Notification,
-      fallback = Fallback,
-      addresses = #addresses{list = [#address{type = to, jid = User}]}},
-    IQ = #iq{from = GroupJID, to = User, type = set, id = randoms:get_string(),
-      sub_els = [Notify]},
-    ejabberd_router:route(IQ),
+  Notification = #xen_notification{category = <<"mention">>,
+    sub_els = [
+      #forwarded{sub_els = [xmpp:set_from_to(Message, GroupJID, User)]}
+    ]},
+  Notify = #xen_notify{notification = Notification,
+    fallback = Fallback,
+    addresses = #addresses{list = [#address{type = to, jid = User}]}},
+  IQ = #iq{from = GroupJID, to = User, type = set, id = randoms:get_string(),
+    sub_els = [Notify]},
+  ejabberd_router:route(IQ),
   send_notifications(Message, GroupJID, Users).
 
-
-%%--------------------------------------------------------------------
-%% Sub process.
-%%--------------------------------------------------------------------
-process_messages() ->
-  receive
-    {message,Message} ->
-      do_route(Message),
-      process_messages();
-    _ ->
-      exit(normal)
-  after
-    300000 -> exit(normal)
-  end.
-
-%% Internal functions
-%% todo: check this
-do_route(#message{from = From, to = From, body=[], sub_els = Sub, type = headline} = Message) ->
-  Event = lists:keyfind(ps_event,1,Sub),
-  FromChat = jid:replace_resource(From,<<"Group">>),
-  case Event of
-    false ->
-      ok;
-    _ ->
-      Chat = jid:to_string(From),
-      #ps_event{items = Items} = Event,
-      #ps_items{items = ItemList, node = Node} = Items,
-      Item = lists:keyfind(ps_item,1,ItemList),
-      #ps_item{sub_els = Els} = Item,
-      Decoded = lists:map(fun(N) -> xmpp:decode(N) end, Els),
-      [El|_R] = Decoded,
-      case El of
-        {nick,Nickname} when Node == <<"http://jabber.org/protocol/nick">> ->
-          mod_groups_vcard:change_nick_in_vcard(From#jid.luser,From#jid.lserver,Nickname),
-          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
-          send_message(Message,AllUsers,FromChat);
-        {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
-          AvatarI = hd(AvatarInfo),
-          IdAvatar = AvatarI#avatar_info.id,
-          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
-          send_message(Message,AllUsers,FromChat),
-          mod_groups_vcard:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar);
-        {avatar_meta,_AvatarInfo,_Smth} ->
-          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
-          send_message(Message,AllUsers,FromChat);
-        {nick,_Nickname} ->
-          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
-          send_message(Message,AllUsers,FromChat);
-        _ ->
-          ok
-      end
-  end;
-do_route(#message{from = From, to = To, body=[], sub_els = Sub, type = headline}) ->
-  Event = lists:keyfind(ps_event,1,Sub),
-  Chat = jid:to_string(jid:remove_resource(To)),
-  User = jid:to_string(jid:remove_resource(From)),
-  LServer = To#jid.lserver,
-  case Event of
-    false ->
-      ok;
-    _ ->
-      #ps_event{items = Items} = Event,
-      #ps_items{items = ItemList, node = Node} = Items,
-      Item = lists:keyfind(ps_item,1,ItemList),
-      #ps_item{sub_els = Els} = Item,
-      AvatarMeta = case Els of
-                     [] -> undefined;
-                     _ -> xmpp:decode(hd(Els))
-                   end,
-      case AvatarMeta of
-        #avatar_meta{info = AvatarInfo} when Node == <<"urn:xmpp:avatar:metadata">> ->
-          AvatarI = hd(AvatarInfo),
-          IdAvatar = AvatarI#avatar_info.id,
-          OldID = mod_groups_vcard:get_image_id(LServer,User, Chat),
-          case OldID of
-            IdAvatar -> ok;
-            _ ->
-              mod_groups_vcard:handle_avatar_meta(
-                jid:replace_resource(To,<<"Group">>),
-                jid:remove_resource(From),
-                AvatarMeta)
-          end;
-        _ ->
-          ok
-      end
-  end;
-do_route(#message{body=[], from = From, type = Type, to = To} = Msg)
-  when Type == normal orelse Type == chat ->
-  {_, LServer, _} = jid:tolower(To),
-  ChatJID = jid:remove_resource(To),
-  SUser = jid:to_string(jid:remove_resource(From)),
-  Displayed = xmpp:get_subtag(Msg, #mark_displayed{}),
-  PresentType = lists:foldl(fun(CType, Result) ->
-    case xmpp:get_subtag(Msg, #chatstate{type = CType}) of
-      false -> Result;
-      _ when CType == active -> present;
-      _ -> not_present
-    end end, false, [active, gone, inactive]),
-  IsAllowed = case {Displayed, PresentType} of
-              {false, false} -> false;
-              _ ->
-                mod_groups_users:check_if_exist(LServer,
-                  jid:to_string(ChatJID), SUser)
-            end,
-  if
-    Displayed /= false  andalso IsAllowed ->
-      #mark_displayed{id = OriginID} = Displayed,
-      Displayed2 = filter_packet(Displayed,ChatJID),
-      StanzaID = get_stanza_id(Displayed2,ChatJID,LServer,OriginID),
-      ejabberd_hooks:run(groupchat_got_displayed,LServer,[From,ChatJID,StanzaID]),
-      send_displayed(ChatJID,StanzaID,OriginID);
-    PresentType /= false andalso IsAllowed ->
-      mod_groups_presence:change_present_state(To, From, PresentType);
-    true ->
-      ok
-  end;
-do_route(#message{body=_Body, type = Type} = Message) when Type == normal orelse Type == chat->
-  case xmpp:get_subtag(Message, #groups_invite{}) of
-    false ->
-      message_hook(Message);
-    _ ->
-      ?DEBUG("Drop message with invite",[]),
-      ok
-  end;
-do_route(_Message) ->
-  ok.
-
-%% todo: it needs to be optimized
-send_displayed(_ChatJID,empty,_MessageID) ->
-  ok;
-send_displayed(ChatJID,StanzaID,MessageID) ->
-  #jid{lserver = LServer, luser = LName} = ChatJID,
-  Msgs = get_displayed_msg(LName,LServer,StanzaID, MessageID),
-  lists:foreach(fun(Msg) ->
-    #displayed_msg{bare_peer = {PUser,PServer,_}, stanza_id = StanzaID, origin_id = MessageID} = Msg,
-    case PUser of
-      LName when PServer == LServer ->
-        send_displayed_to_all(ChatJID,StanzaID,MessageID);
-      _ ->
-        Displayed = #mark_displayed{id = MessageID, sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
-        M = #message{type = chat, from = ChatJID, to = jid:make(PUser,PServer), sub_els = [Displayed], id=randoms:get_string()},
-        ejabberd_router:route(M)
-    end
-                end, Msgs),
-  delete_old_messages(LName,LServer,StanzaID).
-
-send_displayed_to_all(ChatJID,StanzaID,MessageID) ->
-  Displayed = #mark_displayed{id = MessageID,
-    sub_els = [#stanza_id{id = StanzaID, by = jid:remove_resource(ChatJID)}]},
-  Server = ChatJID#jid.lserver,
-  Chat = jid:to_string(jid:remove_resource(ChatJID)),
-  Users = mod_groups_users:users_to_send(Server,Chat),
-  lists:foreach(fun(To) ->
-    M = #message{type = chat, from = ChatJID, to = To,
-      sub_els = [Displayed], id=randoms:get_string()},
-    ejabberd_router:route(M) end, Users).
-
-get_displayed_msg(LName,LServer,StanzaID, MessageID) ->
-  FN = fun()->
-    mnesia:match_object(displayed_msg,
-      {displayed_msg, {LName,LServer}, {'_','_','_'}, StanzaID, MessageID},
-      read)
-       end,
-  {atomic,Msgs} = mnesia:transaction(FN),
-  Msgs.
-
-delete_old_messages(LName,LServer,StanzaID) ->
-  FN = fun()->
-    mnesia:match_object(displayed_msg,
-      {displayed_msg, {LName,LServer}, {'_','_','_'}, '_','_'},
-      read)
-       end,
-  {atomic,Msgs} = mnesia:transaction(FN),
-  MsgToDel = [X || X <- Msgs, X#displayed_msg.stanza_id =< StanzaID],
-  lists:foreach(fun(M) ->
-    mnesia:dirty_delete_object(M) end, MsgToDel).
-
-get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
-  case xmpp:get_subtag(Pkt, #stanza_id{}) of
-    #stanza_id{by = BareJID, id = StanzaID} ->
-      StanzaID;
-    _ ->
-      mod_unique:get_stanza_id_by_origin_id(LServer,OriginID,BareJID#jid.luser)
-  end.
-
-filter_packet(Pkt,BareJID) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = lists:filtermap(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
-        try xmpp:decode(El) of
-          #stanza_id{by = By} ->
-            By == BareJID
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els),
-  xmpp:set_els(Pkt, NewEls).
-
-transform_message(#message{id = Id, to = To,from = From, body = Body} = Pkt) ->
-  Server = To#jid.lserver,
-  GroupS = jid:to_string(jid:remove_resource(To)),
-  UserS = jid:to_string(jid:remove_resource(From)),
-  UserBareJID = jid:remove_resource(From),
-  UserCard = mod_groups_users:form_user_card(UserS, GroupS),
-  Username = mod_groups_users:choose_name(UserCard),
-  Header = <<Username/binary, ":", "\n">>,
-  Length = misc:escaped_text_len(Header),
-  Reference = #groups_x{xmlns = ?NS_GROUPS,
-    sub_els = [#xmppreference{ 'begin' = 0, 'end' = Length,
-      type = <<"mutable">>, sub_els = [UserCard]}]},
-  NewBody = [T#text{data = <<Header/binary, Text/binary >>}
-    || #text{data = Text} = T <- Body],
-  AllUsers = mod_groups_users:users_to_send(Server, GroupS),
-  Users = AllUsers -- [UserBareJID],
-  Els1 = strip_group_elements(xmpp:get_els(Pkt)),
-  Els2 = shift_references(Els1, Length),
-  ArchiveMsg = Pkt#message{body = NewBody, sub_els = [Reference|Els2],
-    to = UserBareJID},
-  OriginID = case get_origin_id(xmpp:get_subtag(ArchiveMsg, #origin_id{})) of
-               false ->
-                 Id;
-               Val -> Val
-             end,
-  Retry = xmpp:get_subtag(Pkt, #delivery_retry{}),
-  Pkt0 = strip_stanza_id(ArchiveMsg),
-  Pkt1 = mod_unique:remove_request(Pkt0,Retry),
-  case Retry of
-    false ->
-      send_received_and_message(Pkt1, From, To, OriginID, Users);
-    _ ->
-      case mod_unique:get_message(Server, To#jid.luser, OriginID) of
-        #message{} = Found ->
-          FoundMeta = Found#message.meta,
-          StanzaID = integer_to_binary(maps:get('stanza_id', FoundMeta)),
-          Mod = gen_mod:db_mod(Server, 'mod_mam'),
-          case Mod:select(Server, To, To,
-            [{'ids',[StanzaID]}], undefined, chat) of
-            {[{_, _, Forwarded}], true, 1} ->
-              Message1 = hd(Forwarded#forwarded.sub_els),
-              Message2 = Message1#message{meta = FoundMeta},
-              Message = xmpp:set_from_to(Message2, From, To),
-              send_received(Message, From, OriginID, To);
-            Err ->
-              %%  message not found in archive
-              ?ERROR_MSG("The message is gone!!! group: ~p, id: ~p.\n ~p",
-                [GroupS, StanzaID, Err]),
-              ejabberd_router:route_error(Pkt,
-                xmpp:err_internal_server_error())
-          end;
-        _ ->
-         send_received_and_message(Pkt1, From, To, OriginID, Users)
-      end
-  end.
-
-get_origin_id(OriginId) ->
-  case OriginId of
-    false ->
-      false;
-    _ ->
-      #origin_id{id = ID} = OriginId,
-      ID
-  end.
-
--spec strip_group_elements(stanza()) -> stanza().
-strip_group_elements(Els) ->
+clean_sub_els(Els) ->
   lists:filter(
     fun(El) ->
       Name = xmpp:get_name(El),
       NS = xmpp:get_ns(El),
-      IsGroupsNS = str:prefix(?NS_GROUPS, NS),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCES);
-      (Name == <<"x">> andalso IsGroupsNS) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = <<"groupchat">>} ->
-            false;
-          #xmppreference{type = _Any} ->
-            true;
-          #groups_x{} ->
-            false
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
+      IsGroup = str:prefix(?NS_GROUPS, NS),
+      if
+        (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
+          (Name == <<"time">> andalso NS == ?NS_UNIQUE);
+          (Name == <<"stanza-id">> andalso NS == ?NS_SID_0);
+          IsGroup ->
+          false;
         true ->
           true
       end
     end, Els).
 
--spec strip_stanza_id(stanza()) -> stanza().
-strip_stanza_id(Pkt) ->
-  Els = xmpp:get_els(Pkt),
-  NewEls = lists:filter(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if
-        (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
-          (Name == <<"time">> andalso NS == ?NS_UNIQUE);
-          (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
-          false;
-        true ->
-          true
-      end
-    end, Els),
-  xmpp:set_els(Pkt, NewEls).
-
-send_received(
-    Pkt,
-    JID,
-    OriginID,ChatJID) ->
-  JIDBare = jid:remove_resource(JID),
-  #message{meta = #{stanza_id := StanzaID}} = Pkt,
-  Pkt2 = xmpp:set_from_to(Pkt,JID,ChatJID),
-  set_displayed(ChatJID,JID,StanzaID,OriginID),
-  UniqueReceived = #delivery_x{sub_els = [Pkt2]},
+send_received(Pkt, UserJID, GroupJID) ->
+  JIDBare = jid:remove_resource(UserJID),
+  #message{meta = #{stanza_id := StanzaID}, id = OriginID} = Pkt,
+  Pkt2 = xmpp:set_from_to(Pkt, UserJID, GroupJID),
+  Forwarded = #forwarded{sub_els = [Pkt2]},
+  set_displayed(GroupJID, UserJID, integer_to_binary(StanzaID), OriginID),
+  Received = #groups_x{sub_els = [Forwarded]},
   Confirmation = #message{
-    from = ChatJID,
+    from = GroupJID,
     to = JIDBare,
     type = headline,
-    sub_els = [UniqueReceived]},
+    sub_els = [Received]},
   ejabberd_router:route(Confirmation).
 
-set_displayed(ChatJID,UserJID,StanzaID,OriginID) ->
-  {LName,LServer,_} = jid:tolower(ChatJID),
-  {PUser,PServer,_} = jid:tolower(UserJID),
-  Msg = #displayed_msg{chat = {LName,LServer}, stanza_id = integer_to_binary(StanzaID), origin_id = OriginID, bare_peer = {PUser,PServer,<<>>}},
-  mnesia:dirty_write(Msg).
+set_displayed(GroupJID, UserJID, StanzaID, OriginID) ->
+  GroupS = jid:to_string(jid:remove_resource(GroupJID)),
+  UserS = jid:to_string(jid:remove_resource(UserJID)),
+  Displayed = #mark_displayed{id = OriginID,
+    sub_els = [#stanza_id{id = StanzaID, by = GroupJID}]},
+  mnesia:dirty_write(#groups_send_displayed{
+    group = GroupS, user = UserS,
+    stanza_id = StanzaID, displayed = Displayed}).
 
-%% Removed updating of information about the author
-%% when requesting a message from the archive
-
-%% Actual information about user for mod_mam
-%%
-%%get_actual_user_info(_Server, []) ->
-%%  [];
-%%get_actual_user_info(Server, Msgs) ->
-%%  UsersIDs = lists:map(fun(Pkt) ->
-%%    {_ID, _IDInt, El} = Pkt,
-%%    #forwarded{sub_els = [MsgE]} = El,
-%%    Msg = xmpp:decode(MsgE),
-%%    X = xmpp:get_subtag(Msg, #groups_x{xmlns = ?NS_GROUPS}),
-%%    case X of
-%%      false ->
-%%        {false,false};
-%%      _ ->
-%%        Reference = xmpp:get_subtag(X, #xmppreference{}),
-%%        case Reference of
-%%          false ->
-%%            {false, false};
-%%          _ ->
-%%            Card = xmpp:get_subtag(Reference, #groups_user{}),
-%%            case Card of
-%%              false ->
-%%                {false,false};
-%%              _ ->
-%%                {jid:to_string(jid:remove_resource(Msg#message.from)),
-%%                  Card#xabbergroupchat_user_card.id}
-%%            end
-%%        end
-%%    end
-%%    end, Msgs
-%%  ),
-%%  UniqUsersIDs = lists:usort(UsersIDs),
-%%  Chats = lists:usort([C || {C,_ID} <- UsersIDs]),
-%%  ChatandUserCards = lists:map(fun(Chat) ->
-%%    case Chat of
-%%      false ->
-%%        {false,[]};
-%%      _ ->
-%%        Users = [U ||{C,U} <- UniqUsersIDs ,C == Chat],
-%%        AllUserCards = lists:map(fun(UsID) ->
-%%          User = mod_groups_users:get_user_by_id(Server,Chat,UsID),
-%%          case User of
-%%            none ->
-%%              {none,none};
-%%            _ ->
-%%              UserCard = mod_groups_users:form_user_card(User,Chat),
-%%              {UsID, UserCard}
-%%          end end, Users),
-%%        UserCards = [{UID,Card}|| {UID,Card} <- AllUserCards, UID =/= none],
-%%        {Chat, UserCards}
-%%    end end, Chats),
-%%  change_all_messages(ChatandUserCards,Msgs).
-
-%%change_all_messages(ChatandUsers, Msgs) ->
-%%  lists:map(fun(Pkt) ->
-%%    {_ID, _IDInt, El} = Pkt,
-%%    #forwarded{sub_els = [Msg0]} = El,
-%%    Msg = xmpp:decode(Msg0),
-%%    X = xmpp:get_subtag(Msg, #groups_x{xmlns = ?NS_GROUPS}),
-%%    case X of
-%%      false ->
-%%        Pkt;
-%%      _ ->
-%%        Ref = xmpp:get_subtag(X, #xmppreference{}),
-%%        case Ref of
-%%          false ->
-%%            Pkt;
-%%          _ ->
-%%            Card = xmpp:get_subtag(Ref, #groups_user{}),
-%%            change_message(Card,ChatandUsers,Pkt)
-%%        end
-%%    end
-%%            end
-%%    , Msgs
-%%  ).
-%%
-%%change_message(false,_ChatandUsers,Pkt) ->
-%%  Pkt;
-%%change_message(OldCard,ChatandUsers,Pkt) ->
-%%  {ID, IDInt, El} = Pkt,
-%%  #forwarded{sub_els = [Msg0]} = El,
-%%  Msg = xmpp:decode(Msg0),
-%%  Xtag = xmpp:get_subtag(Msg, #groups_x{xmlns = ?NS_GROUPS}),
-%%  CurrentUserID = OldCard#xabbergroupchat_user_card.id,
-%%  Chat = jid:to_string(jid:remove_resource(Msg#message.from)),
-%%  Cards = lists:keyfind(Chat,1,ChatandUsers),
-%%  case Cards of
-%%    false ->
-%%      Pkt;
-%%    _ ->
-%%      {Chat,UserCards} = Cards,
-%%      IDNewCard = lists:keyfind(CurrentUserID,1,UserCards),
-%%      case IDNewCard of
-%%        false ->
-%%          Pkt;
-%%        _ ->
-%%          {CurrentUserID, NewCard} = IDNewCard,
-%%          Pkt2 = strip_x_elements(Msg),
-%%          Sub2 = xmpp:get_els(Pkt2),
-%%          Reference = xmpp:get_subtag(Xtag, #xmppreference{}),
-%%          X = Reference#xmppreference{type = <<"mutable">>, sub_els = [NewCard]},
-%%          NewX = #groups_x{xmlns = ?NS_GROUPS, sub_els = [X]},
-%%          XEl = xmpp:encode(NewX),
-%%          Sub3 = [XEl|Sub2],
-%%          {ID,IDInt,El#forwarded{sub_els = [Msg0#message{sub_els = Sub3}]}}
-%%      end
-%%  end.
-
+send_displayed(_ChatJID, empty) ->
+  ok;
+send_displayed(GroupJID, StanzaID) ->
+  GroupS = jid:to_string(jid:remove_resource(GroupJID)),
+  Msgs = mnesia:dirty_read(groups_send_displayed, GroupS),
+  lists:foreach(fun(Msg) ->
+    #groups_send_displayed{user = User, displayed = D,
+      stanza_id = SID} = Msg,
+    if
+      SID == StanzaID ->
+        mnesia:dirty_delete_object(Msg),
+        M = #message{type = chat, from = GroupJID,
+          to = jid:from_string(User), sub_els = [D],
+          id=randoms:get_string()},
+        ejabberd_router:route(M);
+      SID < StanzaID ->
+        mnesia:dirty_delete_object(Msg);
+      true ->
+        ok
+    end
+                end, Msgs).
 
 shift_references(Els, Length) ->
   lists:filtermap(
@@ -684,49 +555,156 @@ shift_references(Els, Length) ->
       end
     end, Els).
 
-%% Block to write
+%% limit on the number of error messages per user of time
 
-send_message_no_permission_to_write(User,Message) ->
-  Last = get_last(User),
+send_not_allowed(UserJID, GroupJID, Message) ->
+  User = jid:to_string(jid:remove_resource(UserJID)),
+  Group = jid:to_string(jid:remove_resource(GroupJID)),
+  UG = <<User/binary,Group/binary>>,
+  Last = ets:lookup(groups_strangers, UG),
   case Last of
     [] ->
-      write_new_ts(User),
+      add_stranger(UG),
       ejabberd_router:route(Message);
     [Blocked] ->
-      check_and_send(Blocked,Message)
+      check_and_send(Blocked, Message)
   end.
 
-check_and_send(Last,Message) ->
-  Now = seconds_since_epoch(0),
-  LastTime = Last#groupchat_blocked_user.timestamp,
-  User = Last#groupchat_blocked_user.user,
-  Diff = Now - LastTime,
-  case Diff of
-    _  when Diff > 60 ->
-      clean_last(Last),
+check_and_send({UG, UnbanTS}, Message) ->
+  Now = erlang:system_time(second),
+  if
+    UnbanTS =< Now ->
       ejabberd_router:route(Message),
-      write_new_ts(User);
-    _ ->
+      add_stranger(UG);
+    true ->
       ok
   end.
 
-get_last(User) ->
+add_stranger(UG) ->
+  TS = erlang:system_time(second) + 60,
+  ets:insert(groups_strangers, {UG, TS}).
+
+%%%===================================================================
+%%% present functions
+%%%===================================================================
+
+get_present(Group) ->
+  Sessions = select_all_sessions(Group),
+  AllUsersSession = [{U,S}||{participant_session, _G, U, S, _R, _TS} <- Sessions],
+  UniqueOnline = lists:usort(AllUsersSession),
+  integer_to_binary(length(UniqueOnline)).
+
+change_present_state(GroupJID, UserJID, PresentType) ->
+  Server = GroupJID#jid.lserver,
+  Group = jid:to_string(jid:remove_resource(GroupJID)),
+  Username = jid:to_string(jid:remove_resource(UserJID)),
+  PresentNum = get_present(Group),
+  Result  = case PresentType of
+              present ->
+                set_session(Group, UserJID);
+              not_present ->
+                delete_session(Group, UserJID)
+            end,
+  mod_groups_users:update_last_seen(Server, Username, Group),
+  case Result of
+    ok ->
+      send_present(UserJID, GroupJID, PresentNum, PresentType);
+    _ -> ignore
+  end.
+
+get_users_with_session(Group) ->
+  SS = select_all_sessions(Group),
+  [jid:make(U,S,R)||{participant_session, _, U, S, R, _} <- SS].
+
+send_present(UserJID, GroupJID, PresentNum, PresentType) ->
+  Group = jid:to_string(jid:remove_resource(GroupJID)),
+  CurNum = get_present(Group),
+  Users =
+    case CurNum of
+      PresentNum  when PresentType == present ->
+        %% notify only the connecting device about the actual count
+        [UserJID];
+      PresentNum ->
+        %% someone left, but the counter didn't change
+        [];
+      _ ->
+        %% notify everyone about the counter change
+        get_users_with_session(Group)
+    end,
+  groups_notifications:send_present(Group, Users, CurNum).
+
+-spec set_session(binary(), jid()) -> ok | ignore.
+set_session(Group, UserJID) ->
+  Result = case select_session(Group, UserJID) of
+             [#participant_session{} = SS] ->
+               delete_session(SS),
+               ignore;
+             _ -> ok
+           end,
+  {Username, Server, Resource} = jid:tolower(UserJID),
+  Session = #participant_session{
+    group = Group,
+    username = Username,
+    server = Server,
+    resource =  Resource,
+    ts = misc:now_to_usec(erlang:now())
+  },
+  mnesia:dirty_write(Session),
+  Result.
+
+delete_session(Group, UserJID) ->
+  S = select_session(Group, UserJID),
+  lists:foreach(fun(N) -> delete_session(N) end, S).
+
+-spec delete_session(#participant_session{}) -> ok.
+delete_session(S) ->
+  mnesia:dirty_delete_object(S).
+
+select_session(Group, UserJID) ->
+  {LUser, LServer, Resource} = jid:tolower(UserJID),
   FN = fun()->
-    mnesia:match_object(groupchat_blocked_user,
-      {groupchat_blocked_user, User, '_'},
-      read) end,
-  {atomic,Last} = mnesia:transaction(FN),
-  Last.
+    mnesia:match_object(participant_session,
+      {participant_session, Group, LUser, LServer, Resource, '_'},
+      read)
+       end,
+  {atomic,Session} = mnesia:transaction(FN),
+  Session.
 
-clean_last(Last) ->
-  mnesia:dirty_delete_object(Last).
+select_all_sessions(Group) ->
+  mnesia:dirty_read(participant_session, Group).
 
-write_new_ts(User) ->
-  TS = seconds_since_epoch(0),
-  B = #groupchat_blocked_user{user = User, timestamp = TS},
-  mnesia:dirty_write(B).
+select_sessions(User, Group) ->
+  {LUser, LServer, _} = jid:tolower(jid:from_string(User)),
+  FN = fun()->
+    mnesia:match_object(participant_session,
+      {participant_session, Group, LUser, LServer, '_', '_'},
+      read)
+       end,
+  {atomic,Sessions} = mnesia:transaction(FN),
+  Sessions.
 
--spec seconds_since_epoch(integer()) -> non_neg_integer().
-seconds_since_epoch(Diff) ->
-  {Mega, Secs, _} = os:timestamp(),
-  Mega * 1000000 + Secs + Diff.
+delete_all_user_sessions(User, Group) ->
+  Sessions = select_sessions(User, Group),
+  lists:foreach(fun(Session) ->
+    delete_session(Session) end, Sessions).
+
+delete_all_sessions(Group) ->
+  Sessions = select_all_sessions(Group),
+  lists:foreach(fun(Session) ->
+    delete_session(Session) end, Sessions).
+
+%% delete sessions older than 1 hour
+kill_zombies() ->
+  FN = fun()->
+    TS = misc:now_to_usec(erlang:now()) - 3600000000,
+    MatchHead = #participant_session{_='_', _='_' , _='_', _='_', ts = '$1'},
+    Guards = [{'<', '$1', TS}],
+    SS = mnesia:select(participant_session,[{MatchHead, Guards, ['$_']}]),
+    lists:foreach(fun(O) ->
+      ?WARNING_MSG("Delete session older than 1 hour. Group: ~p; user: ~p",
+        [O#participant_session.group, O#participant_session.username]),
+      mnesia:delete_object(O) end, SS)
+       end,
+  mnesia:transaction(FN),
+  ok.
+

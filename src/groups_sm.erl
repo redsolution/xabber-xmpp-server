@@ -17,7 +17,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
   code_change/3]).
--export([activate/2, activate/3, deactivate/2,update_group_session_info/2]).
+-export([activate/3, deactivate/2,update_group_session_info/2]).
 -define(SERVER, ?MODULE).
 -define(MYHOSTS, ejabberd_config:get_myhosts()).
 -record(xabber_sm_state, {pid = <<>>}).
@@ -98,9 +98,15 @@ handle_info({route, #presence{to = To} = Packet}, State) ->
   Proc = gen_mod:get_module_proc(To#jid.lserver, mod_groups_presence),
   gen_server:cast(Proc, Packet),
   {noreply, State};
-handle_info({route, #iq{to = To} = Packet}, State) ->
-  Proc = gen_mod:get_module_proc(To#jid.lserver, mod_groups_iq_handler),
-  gen_server:cast(Proc, Packet),
+handle_info({route, #iq{to = To} = Iq}, State) ->
+  try xmpp:decode_els(Iq) of
+    DecodedIq ->
+      Proc = gen_mod:get_module_proc(To#jid.lserver,
+        mod_groups_iq_handler),
+      gen_server:cast(Proc, DecodedIq)
+  catch _:_ ->
+    ?ERROR_MSG("Decoding error ~p",[Iq])
+  end,
   {noreply, State};
 handle_info({route, #message{} = Packet}, State) ->
   {LUser, LServer, _} = jid:tolower(Packet#message.to),
@@ -153,7 +159,7 @@ start_entities(Pid) ->
 
 start_entities(GroupsInfo, Pid) ->
   lists:foreach(fun({{LUser, LServer, Resource}, Info}) ->
-    Info1 = maps:to_list(Info) ++ [{group, true}],
+    Info1 = maps:to_list(Info),
     SID = {p1_time_compat:unique_timestamp(), Pid},
     ejabberd_sm:open_session(SID, LUser, LServer, Resource,
       50, Info1) end, GroupsInfo).
@@ -162,18 +168,6 @@ start_entities(GroupsInfo, Pid) ->
 %%% API
 %%%===================================================================
 
-%% Deprecated
-activate(Server, GroupLocalPart) ->
-  SJID = jid:to_string(jid:make(GroupLocalPart, Server)),
-  {Name, Privacy, Index, Membership, Desc, Message,
-    Contacts, Domains, Parent, Status
-  } = mod_groups_chats:db_get_info(SJID, Server),
-  Info = #{name => Name, description => Desc, privacy => Privacy,
-    membership => Membership, index => Index,
-    message => Message, contacts => Contacts,
-    domains => Domains, parent => Parent,
-    gstatus => Status},
-  gen_server:cast(?MODULE, {group_created,Server, GroupLocalPart, Info}).
 
 activate(Server, GroupLocalPart, Info) ->
   gen_server:cast(?MODULE, {group_created,Server,GroupLocalPart, Info}).

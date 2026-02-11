@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
 %%% File    : mod_groups_users.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%% Purpose : Manage users in groupchats
-%%% Created : 17 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   Redsolution
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -24,322 +24,186 @@
 %%%----------------------------------------------------------------------
 
 -module(mod_groups_users).
--author('andrey.gagarin@redsolution.com').
+-author('ilya.kalashnikov@redsolution.com').
 -behavior(gen_mod).
--include("ejabberd.hrl").
+
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
 -compile([{parse_transform, ejabberd_sql_pt}]).
 
-%% API
+%% gen_mod
 -export([start/2, stop/1, depends/2, mod_options/1]).
+%% API
 -export([
-  check_user_if_exist/3,
-%%  get_user_from_chat/3,
-  get_user_from_chat/4,
-  get_users_from_chat/6,
-  form_user_card/2,
+  user_subscription/3,
+  get_group_member/4,
+  get_group_members/6,
+  user_card/2,
   users_to_send/2,
   add_user/6,
-  delete_user/2,
-  is_in_chat/3,
+  is_in_group/3,
   check_if_exist/3,
-  check_if_exist_by_id/3,
-  convert_from_unix_time_to_datetime/1,
-  convert_from_datetime_to_unix_time/1,
-  current_chat_version/2,
-  subscribe_user/2,
   update_last_seen/3,
   get_user_id/3,
-  get_user_by_id/3, get_user_info_for_peer_to_peer/3, add_user_to_peer_to_peer_chat/4,
-  update_user_status/4, user_no_read/2, get_nick_in_chat/3, check_invited_to_p2p/3,
-  process_subscribed/2, get_vcard/2,check_user/3,choose_name/1, add_user_vcard/2,
-  change_peer_to_peer_invitation_state/4,
+  get_user_by_id/3,
+  add_user_to_p2p_group/4,
+  update_user_status/4,
+  get_nick_in_chat/3,
+  check_invited_to_p2p/3,
+  change_p2p_invitation_state/4,
   get_users_from_p2p/2,
-  add_owner/3,
+  add_owner/4,
   get_owners/2,
   is_owner/3,
   change_user_permitted/4,
-  is_permitted/6
+  is_permitted/6,
+  update_member_query/4,
+  user_role/3,
+  add_invited_user/4,
+  kick_user/3,
+  delete_user/3,
+  deny_user_avatar/3
 ]).
 
--export([is_exist/2
-%%  set_default_restrictions/2
-]).
+-export([subscribe_user/4]).
+%% Hook groups_presence_subscribed
+-export([process_subscribed/2]).
 
-%% Change user settings hook export
-%%-export([check_if_exist/6, get_user_rights/6, validate_request/6, change_user_rights/6, user_rights/3, check_if_request_user_exist/6, user_rights_and_time/3]).
-
-% request_own_rights hook export
-%%-export([check_if_user_exist/5, send_user_rights/5]).
-
-% Change user nick and badge
--export([validate_data/8, validate_rights/8, update_user/8]).
-
-% Delete chat
+% Delete group
 -export([unsubscribe_all_for_delete/2]).
 
-% Kick user from groupchat
--export([check_if_user_can/6, check_kick/6, kick_user/6]).
 
-% Decline hook
--export([decline_hook_check_if_exist/4, decline_hook_delete_invite/4]).
-
--export([user_role/3]).
 start(Host, _Opts) ->
-  ejabberd_hooks:add(groupchat_decline_invite, Host, ?MODULE, decline_hook_check_if_exist, 10),
-  ejabberd_hooks:add(groupchat_decline_invite, Host, ?MODULE, decline_hook_delete_invite, 20),
-  ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
-  ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
-  ejabberd_hooks:add(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
-  ejabberd_hooks:add(groupchat_presence_hook, Host, ?MODULE, subscribe_user, 60),
-  ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, validate_data, 10),
-  ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, validate_rights, 15),
-  ejabberd_hooks:add(groupchat_update_user_hook, Host, ?MODULE, update_user, 20),
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 30),
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, process_subscribed, 20),
-  ejabberd_hooks:add(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
-  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20).
+  ejabberd_hooks:add(groups_presence_subscribed, Host, ?MODULE, process_subscribed, 20).
 
 stop(Host) ->
-  ejabberd_hooks:delete(groupchat_decline_invite, Host, ?MODULE, decline_hook_check_if_exist, 10),
-  ejabberd_hooks:delete(groupchat_decline_invite, Host, ?MODULE, decline_hook_delete_invite, 20),
-  ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_if_user_can, 10),
-  ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, check_kick, 20),
-  ejabberd_hooks:delete(groupchat_user_kick, Host, ?MODULE, kick_user, 30),
-  ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, validate_data, 10),
-  ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, validate_rights, 15),
-  ejabberd_hooks:delete(groupchat_update_user_hook, Host, ?MODULE, update_user, 20),
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, get_vcard, 30),
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, process_subscribed, 20),
-  ejabberd_hooks:delete(groupchat_invite_hook, Host, ?MODULE, add_user_vcard, 50),
-  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, delete_user, 20),
-  ejabberd_hooks:delete(groupchat_presence_hook, Host, ?MODULE, subscribe_user, 60).
+  ejabberd_hooks:delete(groups_presence_subscribed, Host, ?MODULE, process_subscribed, 20).
+
 
 depends(_Host, _Opts) ->  [].
 
 mod_options(_Opts) -> [].
 
-% decline invite hooks
+%%External
 
-decline_hook_check_if_exist(Acc, User,Chat,Server) ->
-  case is_in_chat(Server,Chat,User) of
-    true ->
-      Acc;
-    _ ->
-      Txt = <<"Member ", User/binary, " is not in chat">>,
-      {stop,{error, xmpp:err_item_not_found(Txt, <<"en">>)}}
-  end.
-
-decline_hook_delete_invite(_Acc, User, Chat, Server) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("update groupchat_users set subscription = 'none',user_updated_at = (now() at time zone 'utc') where
-         username=%(User)s and chatgroup=%(Chat)s and  subscription = 'wait' ")) of
-    {updated,1} ->
-      {stop, ok};
-    {updated,0} ->
-      Txt = <<"No invitation for ", User/binary, " is found in chat">>,
-      {stop,{error, xmpp:err_item_not_found(Txt, <<"en">>)}};
-    _ ->
-      {error,xmpp:err_internal_server_error()}
-  end.
-
-% kick hook
-check_if_user_can(_Acc, Host, Group, Admin,_Kick,_Lang) ->
-  case is_permitted(Host, Group, Admin, kick_user, false, []) of
-    true ->
-      ok;
-    _ ->
-      {stop, {error, xmpp:err_not_allowed()}}
-  end.
-
-check_kick(_Acc, LServer, Chat, Admin, Kick, _Lang) ->
-  #groups_kick{jids = JIDs, ids = IDs} = Kick,
-  UsersByID = lists:map(fun (Block_ID) ->
-    #groups_user_id{cdata = ID} = Block_ID,
-    get_user_by_id(LServer ,Chat, ID) end, IDs),
-  Users = lists:map(fun (JID) ->
-    jid:to_string(JID) end, JIDs),
-  V1 = [ validate_kick_request(LServer,Chat,Admin,User) || User <- Users],
-  V2 = [ validate_kick_request(LServer,Chat,Admin,User) || User <- UsersByID],
-  case lists:member(false, V1 ++ V2) of
-    false ->
-      UsersByID ++ Users;
-    _ ->
-      {stop, {error, xmpp:err_not_allowed()}}
-    end.
-
-kick_user(Acc, LServer, Chat, _Admin, _Kick, _Lang) ->
-  lists:foreach(fun(User) -> kick_user_from_chat(LServer,Chat,User) end, Acc),
-  mod_groups_chats:update_user_counter(Chat),
-  ejabberd_hooks:run(groupchat_users_kicked, LServer, [LServer, Chat, Acc]),
-  Acc.
-
-validate_kick_request(_LServer,_Chat, User, User) ->
-  false;
-validate_kick_request(LServer,Chat, _, User2) ->
-  case user_role(LServer, User2, Chat) of
-    <<"member">> -> true;
-    _ -> false
-  end.
-
-kick_user_from_chat(LServer,Chat,User) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("update groupchat_users set subscription = 'none', role = 'member', "
-    " user_updated_at = (now() at time zone 'utc') where "
-    " username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
-    {updated,1} ->
-      mod_groups_presence:delete_all_user_sessions(User,Chat),
-      update_last_seen(LServer,User,Chat),
-      UserJID = jid:from_string(User),
-      ChatJID = jid:from_string(Chat),
-      ejabberd_router:route(ChatJID,UserJID,#presence{type = unsubscribe, id = randoms:get_string()}),
-      ejabberd_router:route(ChatJID,UserJID,#presence{type = unavailable, id = randoms:get_string()});
-    _ ->
-      <<>>
-  end.
-
-unsubscribe_all_for_delete(LServer,Chat) ->
-  Users = get_all_participants(LServer,Chat),
-  From = jid:from_string(Chat),
-  lists:foreach(fun(To) ->
-    ejabberd_router:route(#presence{type = unsubscribe,
-      id = randoms:get_string(), from = From, to = To}),
-    ejabberd_router:route(#presence{type = unsubscribed,
-      id = randoms:get_string(), from = From, to = To})
+update_member_query(Server, Group, Actor, Iq) ->
+  #iq{sub_els = [#groups_members{id = UserID,
+    members = [NewCard]}]} = Iq,
+  {User, UserID1} = if
+                  UserID == <<"0">> -> {Actor, undefined};
+                  true -> {undefined, UserID}
                 end,
-    Users
-  ).
-
-choose_name(UserCard) ->
-  IsAnon = is_anon_card(UserCard),
-  choose_name(UserCard,IsAnon).
-
-choose_name(UserCard,yes) ->
-  case UserCard#groups_user.nickname of
-    undefined ->
-      UserCard#groups_user.id;
-    _ ->
-      UserCard#groups_user.nickname
-  end;
-choose_name(UserCard,no) ->
-  case UserCard#groups_user.nickname of
-    undefined ->
-      jid:to_string(UserCard#groups_user.jid);
-    _ ->
-      UserCard#groups_user.nickname
-  end.
-
-
-current_chat_version(Server,Chat)->
-  DateNew = get_chat_version(Server,Chat),
-  integer_to_binary(convert_from_datetime_to_unix_time(DateNew)).
-
-get_vcard(_Acc,{Server, UserJID,Chat,_Lang}) ->
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  From = jid:replace_resource(jid:from_string(Chat),<<"Group">>),
-  To = jid:remove_resource(UserJID),
-  case mod_groups_chats:is_anonim(Chat) of
+  [JIDS, UserID, _, CurBadge, CurNick, _, Role] =
+    get_user_info(Server, Group, User, UserID1),
+  IsNewBadge = case NewCard#groups_user.badge of
+                 undefined -> false;
+                 CurBadge -> false;
+                 _ -> true
+               end,
+  case change_user_permitted(Server, Group, Actor, JIDS, IsNewBadge) of
     true ->
-      mod_groups_vcard:update_parse_avatar_option(Server,User,Chat,<<"no">>);
+      CurCard = #groups_user{id = UserID, nickname = CurNick,
+        badge = CurBadge, role = Role},
+      update_user(Server, Group, JIDS, CurCard, NewCard, Iq);
     _ ->
-      mod_groups_vcard:set_update_status(Server,User,<<"true">>),
-      ejabberd_router:route(From,To, mod_groups_vcard:get_vcard()),
-      ejabberd_router:route(From,To, mod_groups_vcard:get_pubsub_meta())
+      {error, xmpp:err_not_allowed()}
   end.
 
-add_user_vcard(_Acc, {_Admin,Chat,Server,
-  #groups_invite{invite_jid = User, reason = _Reason, send = _Send}}) ->
-  case mod_groups_chats:is_anonim(Chat) of
-    false ->
-      add_wait_for_vcard(Server,User),
-      From = jid:from_string(Chat),
-      To = jid:from_string(User),
-      ejabberd_router:route(From,To, mod_groups_vcard:get_vcard()),
-      ejabberd_router:route(jid:replace_resource(From,<<"Group">>),jid:remove_resource(To), mod_groups_vcard:get_pubsub_meta()),
-      ok;
+%%update_member_query(Server, Group, Actor, ID, NewCard) ->
+%%  {User, ID1} = if
+%%                   ID == <<"0">> -> {Actor, undefined};
+%%                   true -> {undefined, ID}
+%%                 end,
+%%  [JIDS, UserID, _, CurBadge, CurNick, _, Role] =
+%%    get_user_info(Server, Group, User, ID1),
+%%  IsNewBadge = case NewCard#groups_user.badge of
+%%                 undefined -> false;
+%%                 CurBadge -> false;
+%%                 _ -> true
+%%               end,
+%%  case change_user_permitted(Server, Group, Actor, JIDS, IsNewBadge) of
+%%    true ->
+%%      CurCard = #groups_user{id = UserID, nickname = CurNick,
+%%        badge = CurBadge, role = Role},
+%%      update_user(Server, Group, JIDS, CurCard, NewCard);
+%%    _ ->
+%%      {error, xmpp:err_not_allowed()}
+%%  end.
+
+get_group_member(Server, Group, User, ID) ->
+  {User1, ID1} = if
+                   ID == <<"0">> -> {User, undefined};
+                   true -> {undefined, ID}
+                 end,
+
+  case get_user_info(Server, Group, User1, ID1) of
+    [Username, Id, _Sub, Badge, Nick, LastSeen, Role] ->
+      IsAnon = mod_groups_chats:is_anon(Group),
+      AvatarEl = mod_groups_vcard:get_user_avatar(Server, Username, Group),
+      Last = case mod_groups_messages:select_sessions(Username, Group) of
+               [] ->
+                 Stamp = misc:usec_to_now(LastSeen * 1000000),
+                 #groups_last{stamp = Stamp};
+               _ -> undefined
+             end,
+      CanSeeJID = mod_groups_users:is_permitted(Server, Group, User,
+        block_user, false, []),
+      JID = if
+              IsAnon andalso not CanSeeJID  -> undefined;
+              true -> jid:from_string(Username)
+            end,
+      UserCard = #groups_user{ id = Id,
+        nickname = Nick, role = Role, avatar = AvatarEl,
+        badge = Badge, last = Last, jid = JID},
+      #groups_members{members = [UserCard]};
     _ ->
-      ok
+      {error, xmpp:err_item_not_found()}
   end.
 
-subscribe_user(_Acc, Presence) ->
-  #presence{to = To, from = From} = Presence,
-  Chat = jid:to_string(jid:remove_resource(To)),
-  User = jid:to_string(jid:remove_resource(From)),
-  Server = To#jid.lserver,
-  Role = <<"member">>,
-  Subscription = <<"wait">>,
-  Status = check_user_if_exist(Server,User,Chat),
-  case Status of
-    not_exist ->
-      case add_user(Server,User,Role,
-        Chat,Subscription, <<>>) of
-        ok -> ok;
-        _ ->  {stop, not_allowed}
-      end;
-    <<"none">> ->
-      change_subscription(Server,Chat,User,Subscription),
-      ok;
-    <<"wait">> ->
-      ok;
-    <<"both">> ->
-      {stop, exist}
-  end.
+get_group_members(Server, Group, RequesterUser, RSM, Version, XData) ->
+  Filters = get_filters(XData),
+  {QueryChats, QueryCount} = make_sql_query(Group, RSM, Version, Filters),
+  {selected, _, Res} = ejabberd_sql:sql_query(Server, QueryChats),
+  {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(Server, QueryCount),
+  Users = make_query(Server,Res,RequesterUser, Group),
+  Count = binary_to_integer(CountBinary),
+  SubEls = case Users of
+             [_|_] when RSM /= undefined ->
+               #groups_user{nickname = First} = hd(Users),
+               #groups_user{nickname = Last} = lists:last(Users),
+               [#rsm_set{first = #rsm_first{data = First},
+                 last = Last,
+                 count = Count}|Users];
+             [] when RSM /= undefined ->
+               [#rsm_set{count = Count}|Users];
+             _ ->
+               Users
+           end,
+  NewVer = get_chat_version(Server, Group),
+  #groups_members{members = SubEls, version = NewVer}.
 
-process_subscribed(_Acc,{Server,To,Chat,_Lang}) ->
-  User = jid:to_string(jid:remove_resource(To)),
-  Status = check_user_if_exist(Server,User,Chat),
-  case Status of
-    <<"wait">> ->
-      change_subscription(Server, Chat, User, <<"both">>),
-      mod_groups_chats:update_user_counter(Chat),
-      ok;
-    <<"both">> ->
-      {stop,both};
-    _ ->
-     ?ERROR_MSG("Wrong subscription: user ~s, group ~s, status, ~s",
-       [User, Chat, Status]),
-      {stop, error}
-  end.
 
-delete_user(_Acc,{Server,User,Chat,_UserCard,_Lang}) ->
-  Subscription = check_user(Server,User,Chat),
+add_invited_user(Server, Group, User, InvitedBy) ->
+  sql_add_invited_user(Server, Group, User, InvitedBy).
+
+user_role(Server, User, Group) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchat_users set role = 'member', subscription = 'none',
-    user_updated_at = (now() at time zone 'utc') where
-    username=%(User)s and chatgroup=%(Chat)s and subscription != 'none'")) of
-    {updated,1} when Subscription == <<"both">> ->
-      mod_groups_chats:update_user_counter(Chat),
-      ok;
-    _ ->
-      {stop,no_user}
+    ?SQL("select @(role)s from groupchat_users "
+    " where chatgroup=%(Group)s and username=%(User)s")) of
+    {selected,[{Role}]} -> Role;
+    _ -> <<"member">>
   end.
 
-is_exist(_Acc,{Server,To,Chat,_Lang}) ->
-  User = jid:to_string(jid:remove_resource(To)),
-  Subscription = check_user(Server,User,Chat),
-  case Subscription of
-    not_exist ->
-      {stop, not_ok};
-    <<"both">> ->
-      {stop, both};
-    _ ->
-      change_subscription(Server,Chat,User,<<"both">>),
-      ok
-  end.
+kick_user(Server, Group, User) ->
+  kick_user_from_chat(Server, Group, User),
+  mod_groups_chats:update_user_counter(Group),
+  ejabberd_hooks:run(groups_user_left, Server, [Server, Group, User]),
+  ok.
 
-is_anon_card(UserCard) ->
-  case UserCard#groups_user.jid of
-    undefined -> yes;
-    _ -> no
-  end.
-
-form_user_card(User,Chat) ->
-  case get_user_info(User,Chat) of
+user_card(User, Group) ->
+  case get_user_info(User, Group) of
     error ->
       #groups_user{};
     {Role, UserJID, Badge, UserId, Nick, AvatarEl, false} ->
@@ -350,96 +214,287 @@ form_user_card(User,Chat) ->
         id = UserId, nickname = Nick, avatar = AvatarEl}
   end.
 
-users_to_send(Server, Group) ->
-  Users =  sql_users_to_send(Server, Group),
-  [jid:from_string(U) || {U} <- Users].
+process_subscribed(_Acc, {Server, UserJID, Group}) ->
+  User = jid:to_string(jid:remove_resource(UserJID)),
+  Status = user_subscription(Server, User, Group),
+  case Status of
+    <<"wait">> ->
+      change_subscription(Server, Group, User, <<"both">>),
+      mod_groups_chats:update_user_counter(Group),
+      ok;
+    <<"both">> ->
+      {stop, both};
+    _ ->
+      ?ERROR_MSG("Wrong subscription: user ~s, group ~s, status, ~s",
+        [User, Group, Status]),
+      {stop, error}
+  end.
 
-add_user(Server, Member, Role, Group, Subs, InvitedBy) ->
-  {MUser, MServer, _} = jid:tolower(jid:from_string(Member)),
-  case mod_xabber_entity:is_group(MUser, MServer) of
-    false ->
-      sql_add_user(Server, Member, Role, Group, Subs, InvitedBy),
+%%Internal
+
+make_query(Server, RawData, Requester, Group) ->
+  IsAnon = mod_groups_chats:is_anon(Group),
+  CanSeeJID = mod_groups_users:is_permitted(Server, Group, Requester,
+    block_user, false, []),
+  lists:map(
+    fun(UserInfo) ->
+      [Username, Id, Badge, LastSeen, Nick, Role] = UserInfo,
+      AvatarEl = mod_groups_vcard:get_user_avatar(Server, Username, Group),
+      Last = case mod_groups_messages:select_sessions(Username, Group) of
+                  [] ->
+                    LSI = binary_to_integer(LastSeen),
+                    Stamp = misc:usec_to_now(LSI * 1000000),
+                    #groups_last{stamp = Stamp};
+                  _ -> undefined
+                end,
+      Badge1 = case Badge of
+                <<>> -> undefined;
+                _ -> Badge
+              end,
+      Card = #groups_user{id = Id, nickname = Nick,
+        role = Role, avatar = AvatarEl, badge = Badge1, last = Last},
+      WithoutJID = IsAnon andalso Requester /= Username andalso
+        not CanSeeJID,
+      if
+        WithoutJID -> Card;
+        true -> Card#groups_user{jid = jid:from_string(Username)}
+      end
+    end, RawData).
+
+get_user_info(User, Group) ->
+  ChatJID = jid:from_string(Group),
+  Server = ChatJID#jid.lserver,
+  case get_user_info(Server, User, Group) of
+    [Username, UserId, _Subs, Badge, Nick, _Last, Role] ->
+      IsAnon = mod_groups_chats:is_anon(Group),
+      UserJID = jid:from_string(User),
+      Avatar = mod_groups_vcard:get_user_avatar(Server,Username, Group),
+      {Role, UserJID, Badge, UserId, Nick, Avatar, IsAnon};
+    _ ->
+      error
+  end.
+
+change_user_permitted(_Server, _Group, Actor, Actor, false) ->
+  true;
+change_user_permitted(Server, Group, Actor, Actor, true) ->
+  is_permitted(Server, Group, Actor, change_user_info, false, []);
+change_user_permitted(Server, Group, Actor, User, _IsNewBadge) ->
+  change_user_permitted(Server, Group, Actor, User).
+
+change_user_permitted(Server, Group, Actor, User) ->
+  Roles = sql_get_roles(Server, Group, Actor, User),
+  ActorRole = proplists:get_value(Actor, Roles, <<"member">>),
+  UserRole = proplists:get_value(User, Roles, <<"member">>),
+  if
+    UserRole == <<"owner">> -> false;
+    ActorRole == <<"owner">> -> true;
+    UserRole == <<"admin">> -> false;
+    true ->
+      ejabberd_hooks:run_fold(groups_is_permitted, Server, false,
+        [change_user_info, Group, Actor, []])
+  end.
+
+update_user(Server, Group, User, CurCard, NewCard, Iq) ->
+  case update_avatar(Server, Group, User, Iq,
+    NewCard#groups_user.avatar) of
+    continue ->
+      update_nick_and_badge(Server, Group, User,
+        CurCard, NewCard);
+    R -> R
+  end.
+
+%%update_user(Server, Group, User, CurCard, NewCard) ->
+%%  case update_avatar(Server, Group, User,
+%%    NewCard#groups_user.avatar) of
+%%    continue ->
+%%      update_nick_and_badge(Server, Group, User,
+%%        CurCard, NewCard);
+%%    {error, Err} ->
+%%      {error, Err};
+%%    NewInfo ->
+%%      CurCard#groups_user{avatar = NewInfo}
+%%  end.
+
+update_nick_and_badge(_Server, _Group, _User,
+    #groups_user{nickname = Nick, badge = Badge},
+    #groups_user{nickname = Nick, badge = Badge}) ->
+  ok;
+update_nick_and_badge(_Server, _Group, _User, _CurCard,
+    #groups_user{nickname = undefined, badge = undefined}) ->
+  ok;
+update_nick_and_badge(Server, Group, User, CurCard, NewCard) ->
+  #groups_user{nickname = CurNick, badge = CurBadge} = CurCard,
+  #groups_user{nickname = NewNick, badge = NewBadge} = NewCard,
+  Nick = case NewNick of
+           undefined -> CurNick;
+            _ -> NewNick
+         end,
+  Badge = case NewBadge of
+            undefined -> CurBadge;
+            _ -> NewBadge
+          end,
+  case check_nick_badge(Server, Group, Nick, Badge) of
+    true ->
+      sql_update_nick_and_badge(Server, Group, User, Nick, Badge),
+      ejabberd_hooks:run(groups_user_changed,
+        Server, [Server, Group, User, CurCard]),
+      ok;
+    _ when Nick == CurNick ->
+      {error, xmpp:err_conflict()};
+    _ when Badge == CurBadge ->
+      rand:uniform(1000),
+      sql_update_nick_and_badge(Server, Group, User, Nick,
+        rand:uniform(1000)),
+      ejabberd_hooks:run(groups_user_changed,
+        Server, [Server, Group, User, CurCard]),
       ok;
     _ ->
-      not_allowed
+      {error, xmpp:err_conflict()}
   end.
 
+check_nick_badge(Server, Group, Nick, Badge) ->
+  sql_check_nick_badge(Server, Group, Nick, Badge).
 
-get_owners(Server, Group)->
-  sql_get_owners(Server, Group).
-
-is_owner(Server, Group, Member) ->
-  lists:member(Member, get_owners(Server, Group)).
-
-add_owner(Group, Requester, UserId) ->
-  Server = Group#jid.lserver,
-  GroupS = jid:to_string(jid:remove_resource(Group)),
-  RequesterS = jid:to_string(jid:remove_resource(Requester)),
-  case mod_groups_users:get_user_by_id(Server, GroupS, UserId) of
-    none -> {error, not_found};
-    RequesterS -> {error, not_allowed};
-    Member ->
-      add_owner(Server, GroupS, RequesterS, Member)
-  end.
-
-add_owner(Server, Group, Requester, Member) ->
-  Owners = get_owners(Server, Group),
-  case {lists:member(Requester, Owners), lists:member(Member, Owners)} of
-    {true, false} ->
-      update_user_status(Server, Member, Group, <<"owner">>),
-      ejabberd_hooks:run(groups_add_owner, Server, [Server, Group, Requester, Member]),
+update_avatar(_Server, _Group, _User, _Iq, undefined) ->
+  continue;
+update_avatar(Server, Group, User, Iq, #groups_avatar{info = undefined}) ->
+%% delete_avatar
+  mod_groups_vcard:user_update_avatar(Server, Group, User, Iq, undefined),
+  ignore;
+update_avatar(Server, Group, User, Iq, #groups_avatar{info = Info} = Avatar) ->
+  ID = Info#avatar_info.id,
+  case  mod_groups_vcard:get_user_avatar(Server, User, Group) of
+    #groups_avatar{info = #avatar_info{id = ID}} ->
       ok;
-    _ -> {error, not_allowed}
+    _ ->
+      mod_groups_vcard:user_update_avatar(Server,Group, User, Iq, Avatar),
+      ignore
   end.
 
-% SQL functions
+get_chat_version(Server, Group) ->
+  sql_get_chat_version(Server, Group).
 
-sql_get_owners(Server, Group) ->
+kick_user_from_chat(Server, Group, User) ->
+  case sql_kick_user(Server, Group, User) of
+    ok ->
+      mod_groups_messages:delete_all_user_sessions(User, Group),
+      UserJID = jid:from_string(User),
+      ChatJID = jid:from_string(Group),
+      ejabberd_router:route(ChatJID, UserJID,
+        #presence{type = unsubscribe, id = randoms:get_string()}),
+      ejabberd_router:route(ChatJID, UserJID,
+        #presence{type = unavailable, id = randoms:get_string()});
+    _ ->
+      ok
+  end.
+
+delete_user(Server, Group, User) ->
+  IsBoth = check_if_exist(Server, Group, User),
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(username)s from groupchat_users "
-    " where chatgroup=%(Group)s and subscription='both'"
-    " and role='owner' ")) of
-    {selected, Users} -> [U || {U} <- Users];
+    ?SQL("update groupchat_users set role = 'none', subscription = 'none', "
+    " user_updated_at = (now() at time zone 'utc'), "
+    " last_seen = (now() at time zone 'utc') where "
+    " username=%(User)s and chatgroup=%(Group)s and subscription != 'none'")) of
+    {updated,1} when IsBoth ->
+      mod_groups_messages:delete_all_user_sessions(User, Group),
+      mod_groups_chats:update_user_counter(Group),
+      ok;
+    _ ->
+      {stop,no_user}
+  end.
+
+change_subscription(Server, Group, User, Sub) ->
+  sql_change_subscription(Server, Group, User, Sub).
+
+change_auto_nickname(_Server, _Group, _User, false) ->
+  ok;
+change_auto_nickname(Server, Group, User, Nick) ->
+   case mod_groups_chats:is_anon(Group) of
+     false -> sql_change_auto_nickname(Server, Group,
+       User, Nick);
+     _ ->
+       ok
+   end.
+
+
+sql_get_chat_version(Server, Group) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select EXTRACT(EPOCH FROM max(greatest(user_updated_at,last_seen)))::BIGINT"
+    " as @(ver)s from groupchat_users where chatgroup=%(Group)s")) of
+    {selected, [{Result}]} -> Result;
+    _ ->
+      error
+  end.
+
+sql_get_roles(Server, Group, User1, User2) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s,@(role)s from groupchat_users "
+    " where chatgroup=%(Group)s and "
+    " (username=%(User1)s or username=%(User2)s)")) of
+    {selected, Result} -> Result;
     _ -> []
   end.
 
-sql_get_vcard_nickname_t(User)->
-  case ejabberd_sql:sql_query_t(
-    ?SQL("select
-         CASE
-          WHEN TRIM(nickname) != '' and nickname is not null
-            THEN nickname
-          WHEN TRIM(givenfamily) != '' and givenfamily is not null
-            THEN givenfamily
-          WHEN TRIM(fn) != '' and fn is not null
-            THEN fn
-          ELSE %(User)s
-        END as @(result)s
-      from groupchat_users_vcard where jid=%(User)s"
-    )) of
-    {selected,[{V}]} -> V;
-    _ -> not_exist
+sql_update_nick_and_badge(Server, Group, User, Nick, Badge) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchat_users set nickname = %(Nick)s, "
+    " badge = %(Badge)s, "
+    " user_updated_at = (now() at time zone 'utc') where
+         username=%(User)s and chatgroup=%(Group)s")).
+
+sql_check_nick_badge(Server, Group, Nick, Badge) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s
+     from groupchat_users where chatgroup=%(Group)s
+      and (nickname=%(Nick)s or auto_nickname=%(Nick)s)
+      and badge=%(Badge)s")) of
+    {selected,[]} -> true;
+    _ -> false
   end.
 
-sql_add_user(Server, User, Role, Group, Subs, InvitedBy) ->
+sql_add_invited_user(Server, Group, User, InvitedBy) ->
+  Role = <<"member">>,
+  Sub = <<"wait">>,
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchat_users set subscription=%(Sub)s,"
+    " invited_by=%(InvitedBy)s where chatgroup=%(Group)s "
+    " and username=%(User)s and subscription='none'")) of
+    {updated,N} when N > 0 ->
+      ok;
+    _ ->
+      sql_add_user(Server, User, Role, Group, Sub, InvitedBy, false)
+  end.
+
+
+sql_add_user(Server, User, Role, Group, Subs, InvitedBy, Nick) ->
   ID = str:to_lower(randoms:get_alphanum_string(16)),
-  IsAnon = mod_groups_chats:is_anonim(Group),
+  {_, Privacy, _, _, _, _, _, _, _, _, _} =
+    mod_groups_chats:db_get_info(Server, Group),
+%%  IsAnon = mod_groups_chats:is_anon(Group),
+  ?INFO_MSG("!!!!!!!~p ~p",[Group, Privacy]),
   F = fun() ->
-    {ANN, ParseAvatar} =
-      case IsAnon of
-        true -> {ID, <<"no">>};
-        _ ->
-          Nick = case sql_get_vcard_nickname_t(User) of
-                    not_exist -> User;
-                    V -> V
-                  end,
-          {Nick, <<"yes">>}
+    {ANN, UseUserAvatar} =
+      case Privacy of
+        incognito -> {ID, false};
+        _ when Nick /= false ->{Nick, true};
+        _ -> {User, true}
+%%          Nick = case sql_get_vcard_nickname_t(User) of
+%%                   not_exist -> User;
+%%                   V -> V
+%%                 end,
+%%          {Nick, true}
       end,
     Badge = case ejabberd_sql:sql_query_t(
       ?SQL("select @(username)s from groupchat_users "
-      " where chatgroup=%(Group)s and (nickname=%(ANN)s or auto_nickname=%(ANN)s)"
-      " and badge != ''")) of
+      " where chatgroup=%(Group)s and "
+      " (nickname=%(ANN)s or auto_nickname=%(ANN)s)"
+      " and badge != '' ")) of
               {selected, [_|_]} -> rand:uniform(1000);
               _ -> <<"">>
             end,
@@ -454,15 +509,159 @@ sql_add_user(Server, User, Role, Group, Subs, InvitedBy) ->
           "invited_by=%(InvitedBy)s",
           "auto_nickname=%(ANN)s",
           "badge=%(Badge)s",
-          "parse_avatar=%(ParseAvatar)s"
-          ]))
+          "use_user_avatar=%(UseUserAvatar)b"
+        ]))
       end,
   ejabberd_sql:sql_transaction(Server, F),
-  case mod_groups_chats:is_anonim(Group) of
-    true ->
-      make_incognito_nickname(Server, User, Group, ID);
+  case Privacy of
+    incognito ->
+      make_nick_avatar(Server, User, Group, ID);
     _ -> ok
   end.
+
+sql_kick_user(Server, Group, User) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchat_users set subscription = 'none', role = 'none', "
+    " user_updated_at = (now() at time zone 'utc'), "
+    " last_seen = (now() at time zone 'utc') where "
+    " username=%(User)s and chatgroup=%(Group)s and subscription != 'none'")) of
+    {updated, 1} -> ok;
+    _ ->
+      error
+  end.
+
+sql_change_subscription(Server, Group, User, Sub) ->
+  Role = case Sub of
+           <<"none">> -> <<"none">>;
+           _ -> <<"member">>
+         end,
+  case ?SQL_UPSERT(Server, "groupchat_users",
+    ["!username=%(User)s",
+      "!chatgroup=%(Group)s",
+      "user_updated_at = (now() at time zone 'utc')",
+      "subscription=%(Sub)s",
+      "role=%(Role)s"]) of
+    ok ->
+      ok;
+    _Err ->
+      {error, db_failure}
+  end.
+
+sql_change_auto_nickname(Server, Group, User, Nick) ->
+  F = fun() ->
+    Badge = case ejabberd_sql:sql_query_t(
+      ?SQL("select @(username)s from groupchat_users "
+      " where chatgroup=%(Group)s and "
+      " (nickname=%(Nick)s or auto_nickname=%(Nick)s)"
+      " and badge != '' ")) of
+              {selected, [_|_]} -> rand:uniform(1000);
+              _ -> <<"">>
+            end,
+    ejabberd_sql:sql_query_t(
+    ?SQL("update groupchat_users set auto_nickname = %(Nick)s, "
+    " badge = %(Badge)s, user_updated_at = (now() at time zone 'utc') "
+    " where username=%(User)s and chatgroup=%(Group)s"))
+    end,
+  ejabberd_sql:sql_transaction(Server, F).
+
+unsubscribe_all_for_delete(LServer,Chat) ->
+  Users = get_all_participants(LServer,Chat),
+  From = jid:from_string(Chat),
+  lists:foreach(fun(To) ->
+    ejabberd_router:route(#presence{type = unsubscribe,
+      id = randoms:get_string(), from = From, to = To}),
+    ejabberd_router:route(#presence{type = unsubscribed,
+      id = randoms:get_string(), from = From, to = To})
+                end,
+    Users
+  ).
+
+subscribe_user(Server, Group, User, Nick) ->
+  Role = <<"member">>,
+  Subs = <<"wait">>,
+  case user_subscription(Server, User, Group) of
+    not_exist ->
+      add_user(Server, User, Role, Group , Subs, <<>>, Nick);
+    <<"none">> ->
+      change_auto_nickname(Server, Group, User, Nick),
+      change_subscription(Server, Group, User, Subs),
+      ok;
+    <<"wait">> ->
+      change_auto_nickname(Server, Group, User, Nick),
+      ok;
+    <<"both">> ->
+      change_auto_nickname(Server, Group, User, Nick),
+      exist
+  end.
+
+users_to_send(Server, Group) ->
+  Users = sql_users_to_send(Server, Group),
+  [jid:from_string(U) || {U} <- Users].
+
+add_user(Server, Member, Role, Group, Subs, InvitedBy) ->
+  add_user(Server, Member, Role, Group, Subs, InvitedBy, false).
+
+add_user(Server, Member, Role, Group, Subs, InvitedBy, Nick) ->
+  {MUser, MServer, _} = jid:tolower(jid:from_string(Member)),
+  case mod_xabber_entity:is_group(MUser, MServer) of
+    false ->
+      sql_add_user(Server, Member, Role, Group, Subs, InvitedBy, Nick),
+      ok;
+    _ ->
+      not_allowed
+  end.
+
+get_owners(Server, Group)->
+  sql_get_owners(Server, Group).
+
+is_owner(Server, Group, Member) ->
+  lists:member(Member, get_owners(Server, Group)).
+
+add_owner(Server, Group, Requester, MemberID) ->
+  case mod_groups_users:get_user_by_id(Server, Group, MemberID) of
+    none -> {error, not_found};
+    Requester -> {error, not_allowed};
+    Member ->
+      Owners = get_owners(Server, Group),
+      case {lists:member(Requester, Owners), lists:member(Member, Owners)} of
+        {true, false} ->
+          update_user_status(Server, Member, Group, <<"owner">>),
+          ejabberd_hooks:run(groups_add_owner, Server, [Server, Group, Requester, Member]),
+          ok;
+        _ -> {error, not_allowed}
+      end
+  end.
+
+% SQL functions
+
+sql_get_owners(Server, Group) ->
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(username)s from groupchat_users "
+    " where chatgroup=%(Group)s and subscription='both'"
+    " and role='owner' ")) of
+    {selected, Users} -> [U || {U} <- Users];
+    _ -> []
+  end.
+
+%%sql_get_vcard_nickname_t(User)->
+%%  case ejabberd_sql:sql_query_t(
+%%    ?SQL("select
+%%         CASE
+%%          WHEN TRIM(nickname) != '' and nickname is not null
+%%            THEN nickname
+%%          WHEN TRIM(givenfamily) != '' and givenfamily is not null
+%%            THEN givenfamily
+%%          WHEN TRIM(fn) != '' and fn is not null
+%%            THEN fn
+%%          ELSE %(User)s
+%%        END as @(result)s
+%%      from groupchat_user_profile where jid=%(User)s"
+%%    )) of
+%%    {selected,[{V}]} -> V;
+%%    _ -> not_exist
+%%  end.
 
 sql_users_to_send(Server, Group) ->
   case ejabberd_sql:sql_query(
@@ -480,18 +679,6 @@ sql_users_from_p2p(Server, Group) ->
     " where chatgroup=%(Group)s")) of
     {selected, Users} -> Users;
     _ -> []
-  end.
-
-change_subscription(Server,Chat,Username,State) ->
-  case ?SQL_UPSERT(Server, "groupchat_users",
-    ["!username=%(Username)s",
-      "!chatgroup=%(Chat)s",
-      "user_updated_at = (now() at time zone 'utc')",
-      "subscription=%(State)s"]) of
-    ok ->
-      ok;
-    _Err ->
-      {error, db_failure}
   end.
 
 get_user_info(Server, User, Group) ->
@@ -514,6 +701,14 @@ get_user_info(Server, Group, User, UserID) ->
     {aborted, _Reason} -> {error, db_failure}
   end.
 
+get_user_by_id_t(Chat,Id) ->
+  case ejabberd_sql:sql_query_t(
+    ?SQL("select @(username)s from groupchat_users "
+    " where chatgroup=%(Chat)s and id=%(Id)s")) of
+    {selected,[{User}]} -> User;
+    _ -> <<>>
+  end.
+
 get_user_info_t(User, Group) ->
   ejabberd_sql:sql_query_t(?SQL(
     "select @(username)s, @(id)s, @(subscription)s, @(badge)s,
@@ -522,83 +717,39 @@ get_user_info_t(User, Group) ->
         THEN nickname
       ELSE auto_nickname
      END as @(r_nickname)s,
-    to_char(last_seen, 'YYYY-MM-DDThh24:mi:ssZ') as @(last)s,
+    EXTRACT(EPOCH FROM last_seen)::BIGINT as @(last)d,
     @(role)s
     from groupchat_users where
     username = %(User)s and chatgroup = %(Group)s"
   )).
 
-
-get_chat_version(Server,Chat) ->
+user_subscription(Server, User, Group) ->
   case ejabberd_sql:sql_query(
     Server,
-    [
-      <<"select max(greatest(user_updated_at,last_seen)) from groupchat_users where chatgroup='">>,Chat,<<"';">>
-    ]) of
-    {selected,_,[[Max]]} ->
-      Max;
-    _ ->
-      error
+    ?SQL("select @(subscription)s from groupchat_users "
+    " where chatgroup=%(Group)s and username=%(User)s")) of
+    {selected,[{Subscription}]} -> Subscription;
+    _ -> not_exist
   end.
 
-check_user(Server,User,Chat) ->
+check_if_exist(Server, Group, User) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(subscription)s
-         from groupchat_users where chatgroup=%(Chat)s
-              and username=%(User)s and (subscription = 'both' or subscription = 'wait')")) of
-    {selected,[]} ->
-      not_exist;
-    {selected,[{Subscription}]} ->
-      Subscription
-  end.
-
-check_user_if_exist(Server,User,Chat) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(subscription)s
-         from groupchat_users where chatgroup=%(Chat)s
-              and username=%(User)s")) of
-    {selected,[]} ->
-      not_exist;
-    {selected,[{Subscription}]} ->
-      Subscription
-  end.
-
-check_if_exist(Server,Chat,User) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(subscription)s
-         from groupchat_users where chatgroup=%(Chat)s
+         from groupchat_users where chatgroup=%(Group)s
               and username=%(User)s and subscription='both'")) of
-    {selected,[{_Subscription}]} ->
-      true;
-    _ ->
-      false
+    {selected,[{_Subscription}]} -> true;
+    _ -> false
   end.
 
-is_in_chat(Server,Chat,User) ->
+is_in_group(Server, Group, User) ->
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("select @(subscription)s
-         from groupchat_users where chatgroup=%(Chat)s
-              and username=%(User)s and (subscription='both' or subscription='wait')")) of
-    {selected,[{_Subscription}]} ->
-      true;
-    _ ->
-      false
-  end.
-
-check_if_exist_by_id(Server,Chat,ID) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(subscription)s
-         from groupchat_users where chatgroup=%(Chat)s
-              and id=%(ID)s and subscription='both'")) of
-    {selected,[{_Subscription}]} ->
-      true;
-    _ ->
-      false
+    ?SQL("select @(subscription)s from groupchat_users "
+    " where chatgroup=%(Group)s and username=%(User)s "
+    " and (subscription='both' or subscription='wait')")) of
+    {selected,[{_Subscription}]} -> true;
+    _ -> false
   end.
 
 update_user_status(Server, User, Group, Role) ->
@@ -608,42 +759,26 @@ update_user_status(Server, User, Group, Role) ->
     " user_updated_at = (now() at time zone 'utc'), role=%(Role)s "
     " where chatgroup=%(Group)s and username=%(User)s")).
 
-update_last_seen(Server,User,Chat) ->
+update_last_seen(Server, User, Group) ->
   ejabberd_sql:sql_query(
     Server,
-    ?SQL("update groupchat_users set last_seen = (now() at time zone 'utc')
-  where chatgroup=%(Chat)s and username=%(User)s")).
+    ?SQL("update groupchat_users set "
+    " last_seen = (now() at time zone 'utc') "
+    " where chatgroup=%(Group)s and username=%(User)s")).
 
-sql_update_nickname_badge(LServer, User, Group, Nickname, Badge) ->
-  PureUser = <<$',(ejabberd_sql:escape(User))/binary,$'>>,
-  PureGroup = <<$',(ejabberd_sql:escape(Group))/binary,$'>>,
-  NicknameSet = case Nickname of
-                  undefined -> <<>>;
-                  _ ->
-                    VN = ejabberd_sql:escape(str:strip(Nickname)),
-                    <<",nickname = '",VN/binary,"'">>
-                end,
-  BadgeSet = case Badge of
-               undefined -> <<>>;
-               _ ->
-                 VB = ejabberd_sql:escape(str:strip(Badge)),
-                 <<",badge = '",VB/binary,"'">>
-                end,
-  ejabberd_sql:sql_query(LServer,
-    [<<"update groupchat_users set user_updated_at=(now() at time zone 'utc')">>,
-      NicknameSet, BadgeSet, <<" where chatgroup=">>,PureGroup,
-      <<" and username=">>,PureUser,<<";">>]).
+deny_user_avatar(Server, Group, User) ->
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update groupchat_users set use_user_avatar=false "
+    " where chatgroup=%(Group)s and username=%(User)s")).
 
-make_incognito_nickname(LServer, User, Group, UserID)->
+
+make_nick_avatar(LServer, User, Group, UserID)->
   RandomNick =
     case mod_nick_avatar:random_nick_and_avatar(LServer) of
-      {Nick,{_FileName, Bin}} ->
-        %% todo: make a function for this in vcard module
-        case mod_groups_vcard:store_user_avatar_file(LServer, Bin, UserID) of
-          #avatar_info{bytes = Size, id = ID, type = Type, url = Url} ->
-            mod_groups_vcard:update_avatar(LServer, User, Group, ID, Type, Size, Url);
-          _ -> ok
-        end,
+      {Nick, {_FileName, Bin}} ->
+        mod_groups_vcard:store_user_avatar_file(LServer, Group,
+          User, UserID, Bin),
         Nick;
       {Nick, _} -> Nick;
       _ ->
@@ -668,50 +803,27 @@ sql_update_incognito_nickname(LServer, User, Group, Nickname) ->
     end end,
   ejabberd_sql:sql_transaction(LServer, FN).
 
-sql_update_auto_nickname_t(User, Chat, Nick) ->
+sql_update_auto_nickname_t(User, Group, Nick) ->
   ejabberd_sql:sql_query_t(
     ?SQL("update groupchat_users set auto_nickname=%(Nick)s "
-    " where username=%(User)s and chatgroup=%(Chat)s")).
+    " where username=%(User)s and chatgroup=%(Group)s")).
 
-get_user_id(LServer, User, Chat) ->
+get_user_id(LServer, User, Group) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(id)s from groupchat_users "
-    " where chatgroup=%(Chat)s and username=%(User)s")) of
-    {selected,[{UserID}]} ->
-      UserID;
-    _ ->
-      <<>>
+    " where chatgroup=%(Group)s and username=%(User)s")) of
+    {selected,[{UserID}]} -> UserID;
+    _ -> <<>>
   end.
 
-get_user_by_id_t(Chat,Id) ->
-  case ejabberd_sql:sql_query_t(
+get_user_by_id(Server, Group, Id) ->
+  case ejabberd_sql:sql_query(
+    Server,
     ?SQL("select @(username)s from groupchat_users "
-    " where chatgroup=%(Chat)s and id=%(Id)s")) of
+    " where chatgroup=%(Group)s and id=%(Id)s")) of
     {selected,[{User}]} -> User;
     _ -> none
-  end.
-
-get_user_by_id(Server,Chat,Id) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(username)s from groupchat_users "
-    " where chatgroup=%(Chat)s and id=%(Id)s")) of
-    {selected,[{User}]} ->
-      User;
-    _ ->
-      none
-  end.
-
-get_existed_user_by_id(Server,Chat,Id) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(username)s from groupchat_users "
-    " where chatgroup=%(Chat)s and id=%(Id)s and subscription='both'")) of
-    {selected,[{User}]} ->
-      User;
-    _ ->
-      false
   end.
 
 check_invited_to_p2p(Server, Group, Id) ->
@@ -720,180 +832,11 @@ check_invited_to_p2p(Server, Group, Id) ->
     ?SQL("select @(username)s from groupchat_users "
     " where chatgroup=%(Group)s and id=%(Id)s "
     " and p2p_state ='true' and subscription='both'")) of
-    {selected,[{User}]} ->
-      User;
-    _ ->
-      none
+    {selected,[{User}]} -> User;
+    _ -> false
   end.
 
 % Internal functions
-
-convert_from_unix_time_to_datetime(UnixTime) ->
-  UnixEpoch = 62167219200,  %calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}) Time from 0 to 1970
-  {{Y,M,D},{H,Min,Sec}} = calendar:gregorian_seconds_to_datetime(UnixEpoch + UnixTime),
-  Year = integer_to_binary(Y),
-  Month = integer_to_binary(M),
-  Day = integer_to_binary(D),
-  Hours = integer_to_binary(H),
-  Minutes = integer_to_binary(Min),
-  Seconds = integer_to_binary(Sec),
-  <<Year/binary,"-",Month/binary,"-",Day/binary," ",Hours/binary,":",Minutes/binary,":",Seconds/binary>>.
-
-convert_from_datetime_to_unix_time(DateTime) ->
-  UnixEpoch = 62167219200,
-  [DateBinary,TimeBinary] = binary:split(DateTime,<<" ">>,[global]),
-  [Y,M,D]= binary:split(DateBinary,<<"-">>,[global]),
-  [H,Min,SecRaw] = binary:split(TimeBinary,<<":">>,[global]),
-  SplitSec = binary:split(SecRaw,<<".">>,[global]),
-  Sec = case length(SplitSec) of
-          1 ->
-            [SSeconds] = SplitSec,
-            SSeconds;
-          _ ->
-            [SSeconds|_Mill] = SplitSec,
-            SSeconds
-        end,
-  Year = binary_to_integer(Y),
-  Month = binary_to_integer(M),
-  Day = binary_to_integer(D),
-  Hours = binary_to_integer(H),
-  Minutes = binary_to_integer(Min),
-  Seconds = binary_to_integer(Sec),
-  GS = calendar:datetime_to_gregorian_seconds({{Year,Month,Day},{Hours,Minutes,Seconds}}),
-  GS - UnixEpoch.
-
-
-get_user_info(User,Chat) ->
-  ChatJID = jid:from_string(Chat),
-  Server = ChatJID#jid.lserver,
-  case get_user_info(Server, User, Chat) of
-    [Username, UserId, _Subs, Badge, Nick, _Last, Role] ->
-      IsAnon = mod_groups_chats:is_anonim(Chat),
-      UserJID = jid:from_string(User),
-      AvatarEl = mod_groups_vcard:get_photo_meta(Server,Username,Chat),
-      {Role, UserJID, Badge, UserId, Nick, AvatarEl, IsAnon};
-    _ ->
-      error
-  end.
-
-validate_data(_Acc, _LServer,_Chat,_Admin,_ID,undefined, undefined,_Lang) ->
-  {stop, {error, xmpp:err_bad_request()}};
-validate_data(_Acc, LServer,Chat,Admin,ID,_Nickname,_Badge,_Lang) ->
-  User = case ID of
-           <<>> ->
-             Admin;
-           _ ->
-             get_existed_user_by_id(LServer,Chat,ID)
-         end,
-  check_user(User).
-
-check_user(false) ->
-  {stop, {error,xmpp:err_item_not_found()}};
-check_user(User) when is_binary(User) ->
-  User.
-
-validate_rights(Admin,LServer,Chat,Admin,_ID,Nickname,undefined,Lang) ->
-  validate_unique(LServer,Chat,Admin,Nickname,undefined,Lang);
-validate_rights(Admin, LServer,Chat,Admin,_ID,undefined,Badge,Lang) ->
-  case is_permitted(LServer, Chat, Admin, change_user_info, false, []) of
-    true ->
-      validate_unique(LServer,Chat,Admin,undefined,Badge,Lang);
-    _ ->
-      Message = <<"You have no rights to change a badge">>,
-      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
-  end;
-validate_rights(Admin, LServer,Chat,Admin,_ID,Nickname,Badge,Lang) ->
-  case is_permitted(LServer, Chat, Admin, change_user_info, false, []) of
-    true ->
-      validate_unique(LServer,Chat,Admin,Nickname,Badge,Lang);
-    _ ->
-      Message = <<"You have no rights to change a badge">>,
-      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
-  end;
-validate_rights(User, LServer,Chat,Admin,_ID,Nickname,undefined,Lang) when Nickname =/= undefined ->
-  case change_user_permitted(LServer, Chat, Admin, User) of
-    true ->
-      validate_unique(LServer, Chat, User, Nickname, undefined, Lang);
-    _ ->
-      Message = <<"You have no rights to change a nickname">>,
-      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
-  end;
-validate_rights(User, LServer,Chat,Admin,_ID,undefined,Badge,Lang) when Badge =/= undefined ->
-  case  change_user_permitted(LServer, Chat, Admin, User) of
-    true ->
-      validate_unique(LServer,Chat,User,undefined,Badge,Lang);
-    _ ->
-      Message = <<"You have no rights to change a badge">>,
-      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
-  end;
-validate_rights(User, LServer,Chat,Admin,_ID,Nickname,Badge,Lang)
-  when Badge =/= undefined andalso Nickname =/= undefined ->
-  case  change_user_permitted(LServer, Chat, Admin, User)of
-    true ->
-      validate_unique(LServer,Chat,User,undefined,Badge,Lang);
-    _ ->
-      Message = <<"You have no rights to change a nickname and a badge">>,
-      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
-  end.
-
-sql_validate_unique(LServer, Group, User, NewNick, NewBadge) ->
-  Current = fun()->
-    case ejabberd_sql:sql_query_t(?SQL("select
-     CASE
-      WHEN TRIM(nickname) != '' and nickname is not null
-        THEN nickname
-      ELSE auto_nickname
-     END as @(r_nickname)s, @(badge)s from groupchat_users
-     where chatgroup=%(Group)s and username=%(User)s")) of
-      {selected,[V]} -> V;
-      _ ->
-        error
-    end end,
-  CheckNew  = fun(Nick, Badge) ->
-    case ejabberd_sql:sql_query_t(?SQL("select @(username)s
-     from groupchat_users where chatgroup=%(Group)s
-      and (nickname=%(Nick)s or auto_nickname=%(Nick)s)
-      and badge=%(Badge)s")) of
-      {selected,[]} -> ok;
-      _ ->
-        error
-    end end,
-  FN = fun() ->
-    case Current() of
-      {NewNick, NewBadge} ->
-        error;
-      {CurNick, CurBadge} ->
-        Nick = set_value(NewNick, CurNick),
-        Badge = set_value(NewBadge, CurBadge),
-        CheckNew(Nick, Badge);
-      _->
-        error
-    end end,
-  case ejabberd_sql:sql_transaction(LServer, FN) of
-    {atomic, Res} -> Res;
-    {aborted, _Reason} -> error
-  end.
-
-validate_unique(LServer, Group, User, NickRaw, BadgeRaw, Lang) ->
-  NewNick = set_value(NickRaw, <<>>),
-  NewBadge = set_value(BadgeRaw, <<>>),
-  case sql_validate_unique(LServer, Group,
-    User, NewNick, NewBadge) of
-    ok -> User;
-    _ ->
-      Message = <<"Duplicated combination
-       of nickname and badge is not allowed">>,
-      {stop, {error, xmpp:err_not_allowed(Message, Lang)}}
-  end.
-
-update_user(User, LServer,Chat, _Admin,_ID,Nickname,Badge,_Lang) ->
-  UserCard = form_user_card(User,Chat),
-  sql_update_nickname_badge(LServer, User, Chat, Nickname, Badge),
-  {User,UserCard}.
-
-%% for backward compatibility
-user_no_read(_Server,_Chat) ->
-  {selected, []}.
 
 get_nick_in_chat(Server,User,Chat) ->
   case ejabberd_sql:sql_query(
@@ -912,23 +855,12 @@ get_nick_in_chat(Server,User,Chat) ->
       <<>>
   end.
 
-add_wait_for_vcard(Server,Jid) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(jid)s from groupchat_users_vcard
-    where jid=%(Jid)s")) of
-    {selected,[]} ->
-      ejabberd_sql:sql_query(
-        Server,
-        ?SQL_INSERT(
-          "groupchat_users_vcard",
-          ["jid=%(Jid)s",
-            "fullupdate='true'"]));
-    {selected,[{_Nick}]} ->
-      ok
-  end.
+add_user_to_p2p_group(Server, User, P2PGroup, ParentGroup) ->
+  Info = sql_get_user_info_for_p2p(Server, User, ParentGroup),
+  sql_add_user_to_p2p_group(Server, User, P2PGroup, Info),
+  Info.
 
-get_user_info_for_peer_to_peer(LServer,User,Chat) ->
+sql_get_user_info_for_p2p(LServer, User, Group) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(id)s,@(avatar_id)s,@(avatar_type)s,@(avatar_url)s,@(avatar_size)d,
@@ -937,24 +869,25 @@ get_user_info_for_peer_to_peer(LServer,User,Chat) ->
         THEN groupchat_users.nickname
       ELSE groupchat_users.auto_nickname
     END AS @(r_nickname)s,
-    @(parse_avatar)s, @(badge)s from groupchat_users
-     where chatgroup=%(Chat)s and username=%(User)s")) of
+    @(badge)s from groupchat_users
+     where chatgroup=%(Group)s and username=%(User)s")) of
     {selected,[]} ->
       not_exist;
     {selected,[Info]} ->
       Info
   end.
 
-add_user_to_peer_to_peer_chat(LServer,User,Chat,
-    {Id, AvatarID,AvatarType,AvatarUrl,AvatarSize,
-      Nickname,ParseAvatar,Badge}) ->
+sql_add_user_to_p2p_group(Server, User, Group,
+    {Id, AvatarID, AvatarType, AvatarUrl, AvatarSize,
+      Nickname, Badge}) ->
+  UseUserAvatar = false,
   ejabberd_sql:sql_query(
-    LServer,
+    Server,
     ?SQL_INSERT(
       "groupchat_users",
       ["username=%(User)s",
         "role='member'",
-        "chatgroup=%(Chat)s",
+        "chatgroup=%(Group)s",
         "id=%(Id)s",
         "subscription='wait'",
         "avatar_id=%(AvatarID)s",
@@ -963,11 +896,11 @@ add_user_to_peer_to_peer_chat(LServer,User,Chat,
         "avatar_size=%(AvatarSize)d",
         "nickname=%(Nickname)s",
         "auto_nickname=%(Id)s",
-        "parse_avatar=%(ParseAvatar)s",
+        "use_user_avatar=%(UseUserAvatar)b",
         "badge=%(Badge)s"
       ])).
 
-change_peer_to_peer_invitation_state(LServer, User, Chat, State)
+change_p2p_invitation_state(LServer, User, Chat, State)
   when State == <<"true">> orelse State == <<"false">> ->
   ejabberd_sql:sql_query(
     LServer,
@@ -976,63 +909,11 @@ change_peer_to_peer_invitation_state(LServer, User, Chat, State)
     " (select anonymous from groupchats where jid = %(Chat)s and %(LServer)H)"
     )),
     ok;
-change_peer_to_peer_invitation_state(_, _, _, _) -> ok.
+change_p2p_invitation_state(_, _, _, _) -> ok.
 
-% New methods for user list
-
-get_user_from_chat(LServer, Chat, User, ID) ->
-  {User1, ID1} = if
-                   ID == <<"0">> -> {User, undefined};
-                   true -> {undefined, ID}
-                 end,
-
-  case get_user_info(LServer, Chat, User1, ID1) of
-    [Username, Id, Subscription, Badge, Nick, LastSeen, Role] ->
-      IsAnon = mod_groups_chats:is_anonim(Chat),
-      AvatarEl = mod_groups_vcard:get_photo_meta(LServer,Username,Chat),
-      Present = case mod_groups_presence:select_sessions(Username,Chat) of
-                  [] -> LastSeen;
-                  _ -> undefined
-                end,
-      RequesterRole = user_role(LServer,User,Chat),
-      JID = if
-              IsAnon andalso RequesterRole /= <<"owner">> -> undefined;
-              true -> jid:from_string(Username)
-            end,
-      UserCard = #groups_user{subscription = Subscription, id = Id,
-        nickname = Nick, role = Role, avatar = AvatarEl,
-        badge = Badge, present = Present, jid = JID},
-      #groups_query{xmlns = ?NS_GROUPS_MEMBERS, sub_els = [UserCard]};
-    _ ->
-      []
-  end.
-
-get_users_from_chat(LServer, Chat, RequesterUser, RSM, Version, Els) ->
-  Filters = get_filters(Els),
-  {QueryChats, QueryCount} = make_sql_query(Chat, RSM, Version, Filters),
-  {selected, _, Res} = ejabberd_sql:sql_query(LServer, QueryChats),
-  {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(LServer, QueryCount),
-  Users = make_query(LServer,Res,RequesterUser,Chat),
-  Count = binary_to_integer(CountBinary),
-  SubEls = case Users of
-             [_|_] when RSM /= undefined ->
-               #groups_user{nickname = First} = hd(Users),
-               #groups_user{nickname = Last} = lists:last(Users),
-               [#rsm_set{first = #rsm_first{data = First},
-                 last = Last,
-                 count = Count}|Users];
-             [] when RSM /= undefined ->
-               [#rsm_set{count = Count}|Users];
-             _ ->
-               Users
-           end,
-  DateNew = get_chat_version(LServer,Chat),
-  VersionNew = convert_from_datetime_to_unix_time(DateNew),
-  #groups_query{xmlns = ?NS_GROUPS_MEMBERS, sub_els = SubEls, version = VersionNew}.
-
-get_filters([#xdata{type = 'submit'} = XData]) ->
+get_filters(#xdata{type = 'submit'} = XData) ->
   case  xmpp_util:get_xdata_values(<<"FORM_TYPE">>, XData) of
-    [?NS_GROUPS_MEMBERS] ->
+    [?NS_GROUPS] ->
       Filters = [<<"role">>, <<"badge">>, <<"nickname">>],
       lists:filtermap(fun(Filter) ->
         case  xmpp_util:get_xdata_values(Filter, XData) of
@@ -1062,10 +943,9 @@ make_sql_query(SChat, RSM, Version, Filters) ->
                 end,
   VersionClause =
     if is_integer(Version) ->
-      Date = convert_from_unix_time_to_datetime(Version),
       [<<" AND (user_updated_at > ">>,
-        <<"'">>, Date, <<"' OR last_seen > ">>,
-        <<"'">>, Date, <<"')">>];
+        <<"to_timestamp(">>, Version, <<") OR last_seen > ">>,
+        <<"to_timestamp(">>, Version, <<"))">>];
       true -> []
     end,
   FiltersClause = lists:map(
@@ -1080,8 +960,7 @@ make_sql_query(SChat, RSM, Version, Filters) ->
     end, Filters),
 
   Users = [<<"WITH group_members AS (SELECT username, id, badge,
-  to_char(last_seen,'YYYY-MM-DDThh24:mi:ssZ') as last,
-  subscription, role,
+  EXTRACT(EPOCH FROM last_seen)::BIGINT as last, role,
   CASE
   WHEN nickname != '' and nickname is not null
    THEN groupchat_users.nickname
@@ -1089,7 +968,7 @@ make_sql_query(SChat, RSM, Version, Filters) ->
   END AS r_nickname
   FROM groupchat_users  WHERE chatgroup = '">>,Chat, <<"'">>,
     VersionClause, SubsClause, FiltersClause,
-    <<") SELECT username, id, badge, last, subscription, r_nickname, role
+    <<") SELECT username, id, badge, last, r_nickname, role
   from group_members where 0=0 ">>],
   PageClause =
     case Item of
@@ -1134,65 +1013,8 @@ get_max_direction_item(RSM) ->
       {undefined, undefined, undefined}
   end.
 
-make_query(LServer,RawData,RequesterUser,Chat) ->
-  IsAnon = mod_groups_chats:is_anonim(Chat),
-  RequesterUserRole = user_role(LServer,RequesterUser,Chat),
-  lists:map(
-    fun(UserInfo) ->
-      [Username, Id, Badge, LastSeen, Subs, Nick, Role] = UserInfo,
-      AvatarEl = mod_groups_vcard:get_photo_meta(LServer,Username,Chat),
-      S = mod_groups_presence:select_sessions(Username,Chat),
-      L = length(S),
-      Present = case L of
-                     0 ->
-                       LastSeen;
-                     _ ->
-                       undefined
-                   end,
-      Card = #groups_user{id = Id, nickname = Nick,
-        role = Role, avatar = AvatarEl, badge = Badge, present = Present,
-        subscription = Subs},
-      WithoutJID = IsAnon andalso RequesterUser /= Username andalso
-        RequesterUserRole /= <<"owner">>,
-      if
-        WithoutJID -> Card;
-        true -> Card#groups_user{jid = jid:from_string(Username)}
-      end
-    end, RawData).
-
 get_users_from_p2p(Server, Group)->
  sql_users_from_p2p(Server, Group).
-
-user_role(Server, User, Group) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(role)s from groupchat_users "
-    " where chatgroup=%(Group)s and username=%(User)s")) of
-    {selected,[{Role}]} -> Role;
-    _ -> <<"member">>
-  end.
-
-
-change_user_permitted(Server, Group, Actor, User) ->
-  Roles =
-    case ejabberd_sql:sql_query(
-      Server,
-      ?SQL("select @(username)s,@(role)s from groupchat_users "
-      " where chatgroup=%(Group)s and "
-      " (username=%(User)s or username=%(Actor)s)")) of
-      {selected, Result} -> Result;
-      _ -> []
-    end,
-  ActorRole = proplists:get_value(Actor, Roles, <<"member">>),
-  UserRole = proplists:get_value(User, Roles, <<"member">>),
-  if
-    UserRole == <<"owner">> -> false;
-    ActorRole == <<"owner">> -> true;
-    UserRole == <<"admin">> -> false;
-    true ->
-      ejabberd_hooks:run_fold(groups_is_permitted, Server, false,
-        [change_user_info, Group, Actor, []])
-  end.
 
 is_permitted(Server, Group, Member, Action, true, Atts) ->
   ejabberd_hooks:run_fold(groups_is_permitted, Server, true,
@@ -1221,13 +1043,3 @@ replace_nulls(List) when is_list(List) ->
                (V) -> V
             end, List);
 replace_nulls(Data) -> Data.
-
-
--spec set_value(binary() | atom(), any()) -> any().
-set_value(Val, Default) ->
-  NoneValues = [undefined, null, <<>>, <<"">>],
-  case lists:member(Val, NoneValues) of
-    true -> Default;
-    _ when is_binary(Val) -> str:strip(Val);
-    _ -> Val
-  end.

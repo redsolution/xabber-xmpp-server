@@ -504,9 +504,7 @@ mark_stored_msg(#message{meta = #{stanza_id := ID, delivery_time := TimeStamp}} 
 
 -spec identify_conversation_type(stanza(), atom()) -> stanza().
 identify_conversation_type(Pkt, Dir) ->
-  IsGroup = (Dir == recv andalso (xmpp:has_subtag(Pkt, #groups_x{
-    xmlns = ?NS_GROUPS_SYSTEM_MESSAGE}) orelse
-    xmpp:has_subtag(Pkt, #groups_x{xmlns = ?NS_GROUPS}))),
+  IsGroup = Dir == recv andalso xmpp:has_subtag(Pkt, #groups_x{}),
   Peer  = case Dir of
             recv -> xmpp:get_from(Pkt);
             _ -> xmpp:get_to(Pkt)

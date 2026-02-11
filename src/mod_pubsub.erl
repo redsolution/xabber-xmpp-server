@@ -1071,7 +1071,7 @@ iq_sm(#iq{from = From, to = To, sub_els = [SubEl]} = IQ) ->
 	#jid{lserver = LServer, luser = LUser} = To,
 	IsTheSame = (jid:remove_resource(From) == jid:remove_resource(To)),
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
-		group when IsTheSame =/= true -> mod_groups_vcard:handle_iq(IQ);
+		group when IsTheSame =/= true -> mod_groups_vcard:handle_pubsub_iq(IQ);
 		_ ->
 			LOwner = jid:tolower(jid:remove_resource(To)),
 			Res = case xmpp:get_ns(SubEl) of

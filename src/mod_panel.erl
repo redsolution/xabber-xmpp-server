@@ -945,19 +945,19 @@ add_group(Args) ->
         GroupHost, GroupName, Privacy, Index, Membership)
   end.
 
-add_group(Owner, LocalPart,GroupHost, GroupName,
+add_group(Owner, LocalPart, GroupHost, GroupName,
     Privacy, Index, Membership) ->
-  GroupInfo = [
-    #groups_localpart{cdata = LocalPart},
-    #groups_name{cdata = GroupName},
-    #groups_index{cdata = Index},
-    #groups_privacy{cdata = Privacy},
-    #groups_membership{cdata = Membership}
-    ],
-  case mod_groups_chats:create_chat(GroupHost, Owner, GroupInfo) of
+  Info = #groups_info{name = GroupName},
+  Settings = #groups_settings{
+    membership = binary_to_atom(Membership, latin1),
+    index = binary_to_atom(Index, latin1)},
+  Group = #groups_group{localpart = LocalPart,
+    privacy = binary_to_atom(Privacy, latin1),
+    info = Info, settings = Settings},
+  case mod_groups_chats:create_group(GroupHost, Owner, Group) of
     {ok, _ , _, _} ->
       {201, <<"Group created">>};
-    exist ->
+    {error, conflict} ->
       {409, <<"JID already exists">> };
     _ ->
       {500, <<>>}
@@ -1004,7 +1004,7 @@ get_groups(Args) ->
 
 get_groups_count(Args) ->
   Host = extract_host(Args),
-  Count = mod_groups_chats:get_count_chats(Host),
+  Count = mod_groups_chats:numbers_of_groups(Host),
   {200, {[{count, Count}]}}.
 
 update_vcard(Args) ->

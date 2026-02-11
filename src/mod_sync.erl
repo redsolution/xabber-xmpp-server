@@ -159,7 +159,7 @@ handle_call(_Request, _From, State) ->
   Reply = ok,
   {reply, Reply, State}.
 
-handle_cast({eg_save_message, Record , TS, IsService},
+handle_cast({eg_save_message, Record , TS},
     #state{eg_last_message = Acc} = State) ->
 %% Acc stores last N saved messages
 %% to prevent overwrites in the database of the same message
@@ -170,10 +170,7 @@ handle_cast({eg_save_message, Record , TS, IsService},
            true -> Acc;
            _ ->
              eg_store_last_msg(Record),
-             case IsService of
-               false -> eg_store_message1(Group_SID, UserID , TS);
-               _ -> ok
-             end,
+             eg_store_message1(Group_SID, UserID, TS),
              save_last_action(Acc, Group_SID)
           end,
   {noreply, State#state{eg_last_message = Acc1}};
@@ -235,18 +232,21 @@ handle_cast({user_send, #iq{from = From, to = To} = IQ}, State) ->
     _ -> ok
   end,
   {noreply, State};
-handle_cast({user_send, #presence{type = Type, from = From, to = To}}, State)
+handle_cast({user_send, #presence{type = Type,
+  from = From, to = To}}, State)
   when Type == subscribe orelse Type == subscribed  ->
   {LUser, LServer,_} = jid:tolower(From),
   {PUser, PServer,_} = jid:tolower(To),
   delete_invite(LUser,LServer,PUser,PServer),
   {noreply, State};
-handle_cast({user_send, #presence{type = unsubscribe, from = From, to = To}}, State) ->
+handle_cast({user_send, #presence{type = unsubscribe,
+  from = From, to = To}}, State) ->
   {LUser, LServer,_} = jid:tolower(From),
   {PUser, PServer,_} = jid:tolower(To),
   maybe_delete_invite_and_conversation(LUser,LServer,PUser,PServer),
   {noreply, State};
-handle_cast({user_send, #presence{type = unsubscribed, from = From, to = To}}, State) ->
+handle_cast({user_send, #presence{type = unsubscribed,
+  from = From, to = To}}, State) ->
   {LUser, LServer,_} = jid:tolower(From),
   maybe_delete_invite_or_presence(LUser, LServer, To),
   {noreply, State};
@@ -254,13 +254,13 @@ handle_cast({sm, #presence{type = subscribe,from = From,
   to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
   case mod_xabber_entity:is_group(LUser, LServer) of
     false ->
-      X = xmpp:get_subtag(Presence, #groups_x{xmlns = ?NS_GROUPS}),
       Type =
-        case X of
+        case xmpp:get_subtag(Presence, #groups_group{}) of
           false ->
-            maybe_push_notification(LUser, LServer,jid:to_string(jid:remove_resource(From)),
-              ?NS_XABBER_CHAT,<<"subscribe">>,#presence{type = subscribe, from = From}),
-            {?NS_XABBER_CHAT, <<>>};
+            maybe_push_notification(LUser, LServer,
+              jid:to_string(jid:remove_resource(From)), ?NS_XABBER_CHAT,
+              <<"subscribe">>, #presence{type = subscribe, from = From}),
+            ?NS_XABBER_CHAT;
           _ ->
             ?NS_GROUPS
         end,
@@ -490,17 +490,18 @@ process_message(in, #message{type = chat, from = Peer, to = To,
           end,
   if
     Invite  =/= false ->
-      #groups_invite{jid = ChatJID} = Invite,
-      case ChatJID of
+      #groups_invite{jid = GroupJID} = Invite,
+      case GroupJID of
         undefined ->
           %% Bad invite
           ok;
         _ ->
-          Chat = jid:to_string(jid:remove_resource(ChatJID)),
-          store_invite(LUser, LServer, ChatJID, integer_to_binary(TS)),
-          create_conversation(LServer,LUser,Chat,<<>>,false,?NS_GROUPS),
-          maybe_push_notification(LUser,LServer,Conversation,?NS_XABBER_CHAT,
-            <<"message">>,#stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)})
+          Group = jid:to_string(jid:remove_resource(GroupJID)),
+          store_invite(LUser, LServer, GroupJID, integer_to_binary(TS)),
+          create_conversation(LServer,LUser, Group, <<>>, false, ?NS_GROUPS),
+          maybe_push_notification(LUser ,LServer, Conversation, ?NS_XABBER_CHAT,
+            <<"message">>, #stanza_id{id = integer_to_binary(TS),
+              by = jid:remove_resource(To)})
       end;
     Type == ?NS_GROUPS ->
       FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
@@ -521,7 +522,8 @@ process_message(in, #message{type = chat, from = Peer, to = To,
               ok
           end,
           update_metainfo(LServer,LUser,Conversation, Type),
-          maybe_push_notification(LUser,LServer,Conversation,Type,<<"message">>,StanzaID)
+          maybe_push_notification(LUser, LServer, Conversation,
+            Type, <<"message">>, StanzaID)
       end;
     true ->
       case check_voip_msg(in, Pkt) of
@@ -746,7 +748,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
     ?NS_GROUPS when IsLocal == true ->
       User = jid:to_string(jid:make(LUser,LServer)),
       Chat = jid:to_string(jid:make(PUser,PServer)),
-      Status = mod_groups_users:check_user_if_exist(LServer,User,Chat),
+      Status = mod_groups_users:user_subscription(LServer,User,Chat),
       Count = lg_get_count_messages(User,Chat,Read,Status),
       LastMessage = lg_get_last_message(LUser, LServer, PUser, PServer,Status),
       Unread = #sync_unread{count = Count, 'after' = Read},
@@ -944,9 +946,7 @@ eg_is_last_message(Group, ID) ->
 eg_store_message(LServer, LastMessage, TS) when is_integer(TS) ->
   eg_store_message(LServer, LastMessage, integer_to_binary(TS));
 eg_store_message(LServer, LastMessage, TS) ->
-  #external_group_last_msg{packet = Pkt} = LastMessage,
-  IsService = xmpp:get_subtag(Pkt,#groups_x{xmlns = ?NS_GROUPS_SYSTEM_MESSAGE}),
-  send_cast(LServer, {eg_save_message, LastMessage, TS, IsService}).
+  send_cast(LServer, {eg_save_message, LastMessage, TS}).
 
 eg_store_message1(Group_SID, UserID, TS) ->
   case {mnesia:table_info(external_group_msgs, disc_only_copies),
@@ -1054,22 +1054,11 @@ eg_change_last_msg(Replace, LastMsg) ->
   eg_store_last_msg(NewLastMsg).
 
 get_user_id(Pkt) ->
-  case get_user_card(Pkt) of
-    #groups_user{id = ID} -> ID;
+  case xmpp:get_subtag(Pkt, #groups_x{}) of
+    #groups_x{author = #groups_user{id = ID}} ->
+      ID;
     _ -> false
   end.
-
-get_user_card(Pkt) ->
-  Path = [#groups_x{xmlns = ?NS_GROUPS}, #xmppreference{}, #groups_user{}],
-  get_user_card(Path, Pkt).
-
-get_user_card([], Card) ->
-  Card;
-get_user_card([H|T], Elem) when is_tuple(Elem)->
-  Result = xmpp:get_subtag(Elem, H),
-  get_user_card(T, Result);
-get_user_card(_, _) ->
-  false.
 
 
 %%eg_store_message(PUser, PServer, UserID, StanzaID, false) ->
@@ -1542,13 +1531,14 @@ lg_get_last_message(_LUser, _LServer, GUser, GServer, <<"both">>) ->
 lg_get_last_message(LUser, LServer, GUser, GServer, _) ->
   get_invite(LServer,LUser,GUser, GServer).
 
-lg_get_count_messages(BareUser,Chat,TS,<<"both">>) ->
-  {ChatUser, ChatServer, _ } = jid:tolower(jid:from_string(Chat)),
-  case ejabberd_sql:sql_query(ChatServer,
+lg_get_count_messages(BareUser, Group, TS, <<"both">>) ->
+  {GroupUser, GroupServer, _ } = jid:tolower(jid:from_string(Group)),
+  case ejabberd_sql:sql_query(
+    GroupServer,
     ?SQL("select @(count(*))d from archive "
-    " where username=%(ChatUser)s and txt notnull and txt !='' "
-    " and bare_peer not in (%(BareUser)s,%(Chat)s) and timestamp > %(TS)d "
-    " and %(ChatServer)H")) of
+    " where username=%(GroupUser)s and txt notnull and txt !='' "
+    " and bare_peer!=%(BareUser)s and timestamp > %(TS)d "
+    " and %(GroupServer)H")) of
     {selected,[{Count}]} ->
       Count;
     _ ->
@@ -1629,7 +1619,7 @@ handle_sub_els(headline, #retract_message{version =  undefined, id = _ID,
   conversation = _Conv}, _From, _To) ->
   ok;
 handle_sub_els(headline, #retract_message{type = Type, version = Version, id = StanzaID,
-  conversation = ConversationJID} = Retract, _From, To) ->
+  conversation = ConversationJID}, _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
@@ -1639,15 +1629,10 @@ handle_sub_els(headline, #retract_message{type = Type, version = Version, id = S
   end,
   Conversation = jid:to_string(ConversationJID),
   TS = time_now(),
-  case update_retract(LServer,LUser,Conversation,Version,Type, TS) of
-    ok ->
-      send_push_about_retract(LServer,LUser,Conversation,Retract,Type,TS);
-    _->
-      pass
-  end,
+  update_retract(LServer,LUser,Conversation,Version,Type, TS),
   ok;
 handle_sub_els(headline, #retract_user{version = Version, id = UserID,
-  conversation = ConversationJID} = Retract, _From, To) ->
+  conversation = ConversationJID}, _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
@@ -1658,10 +1643,10 @@ handle_sub_els(headline, #retract_user{version = Version, id = UserID,
   Conversation = jid:to_string(ConversationJID),
   TS = time_now(),
   update_retract(LServer,LUser,Conversation,Version,<<>>,TS),
-  send_push_about_retract(LServer,LUser,Conversation,Retract,<<>>,TS);
+  ok;
 handle_sub_els(headline,
   #retract_all{type = Type, version = Version,
-  conversation = ConversationJID} = Retract, _From, To)
+  conversation = ConversationJID}, _From, To)
   when ConversationJID =/= undefined andalso Version =/= undefined ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
@@ -1673,7 +1658,7 @@ handle_sub_els(headline,
     _ -> ok
   end,
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
-  send_push_about_retract(LServer,LUser,Conversation,Retract,Type,TS);
+  ok;
 handle_sub_els(headline, #replace{version = undefined, conversation = _ConversationJID} = _Retract,
     _From, _To) ->
   ok;
@@ -1683,23 +1668,19 @@ handle_sub_els(headline, #replace{type = Type, version = Version, conversation =
   Conversation = jid:to_string(ConversationJID),
   eg_maybe_change_last_msg(LServer, ConversationJID, Replace),
   TS = time_now(),
-  case update_retract(LServer,LUser,Conversation,Version,Type,TS) of
-    ok ->
-      send_push_about_retract(LServer,LUser,Conversation,Replace,Type,TS);
-    _->
-      pass
-  end,
+  update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_sub_els(headline, #delivery_x{ sub_els = [Message]}, From, To) ->
-  MessageD = xmpp:decode(Message),
-  %% Bad server or client may send an error message
-  if
-    MessageD#message.type == chat;
-    MessageD#message.type == normal ->
-      process_delivery_msg(MessageD, From, To),
-      ok;
-    true ->
-      ok
+handle_sub_els(headline, #groups_x{} = GroupX, From, To) ->
+  case xmpp:get_subtag(GroupX, #forwarded{}) of
+    #forwarded{sub_els = [Message]} ->
+      MessageD = xmpp:decode(Message),
+      %% Bad server or client may send an error message
+      if
+        MessageD#message.type == chat ->
+          process_delivery_msg(MessageD, From, To);
+        true -> ok
+      end;
+    _ -> ok
   end;
 handle_sub_els(_Type, _SubEl, _From, _To) ->
   ok.
@@ -2087,18 +2068,18 @@ maybe_push_notification(_, _, _, _, _, _) ->
   %%  ignore notifications from yourself
   pass.
 
-send_push_about_retract(LServer,LUser,Conversation,PushPayload,RetractType,TS) ->
-  CType = case RetractType of
-            <<>> ->
-              case get_conversation_type(LServer,LUser,Conversation) of
-                [T] -> T;
-                _-> ?NS_XABBER_CHAT
-              end;
-            _ -> RetractType
-          end,
-  make_sync_push(LServer,LUser,Conversation, TS, CType),
-  maybe_push_notification(LUser,LServer,Conversation,CType,
-    <<"update">>,xmpp:decode(PushPayload)).
+%%send_push_about_retract(LServer,LUser,Conversation,PushPayload,RetractType,TS) ->
+%%  CType = case RetractType of
+%%            <<>> ->
+%%              case get_conversation_type(LServer,LUser,Conversation) of
+%%                [T] -> T;
+%%                _-> ?NS_XABBER_CHAT
+%%              end;
+%%            _ -> RetractType
+%%          end,
+%%  make_sync_push(LServer,LUser,Conversation, TS, CType),
+%%  maybe_push_notification(LUser,LServer,Conversation,CType,
+%%    <<"update">>,xmpp:decode(PushPayload)).
 
 get_sync_data(LUser, LServer, PUser, PServer) ->
   FN = fun()->

@@ -80,6 +80,9 @@ handle_cast(#iq{type = result, sub_els = [#pubsub{}]} = Iq, State) ->
 handle_cast(#iq{type = result, sub_els = [#vcard_temp{}]} = Iq, State) ->
   process_vcard(Iq),
   {noreply, State};
+handle_cast(#iq{type = get, sub_els = [#disco_info{}]} = Iq, State) ->
+  process_disco_info(Iq),
+  {noreply, State};
 handle_cast(#iq{} = Iq, State) ->
   ?INFO_MSG("IQ ~p",[Iq]),
 %%  make_action(Iq),
@@ -306,10 +309,10 @@ process_iq_local(#iq{from = From, to = To, type = set,
   sub_els = [#groups_delete{group = GroupJID}]} = IQ) ->
   Server = To#jid.lserver,
   case mod_groups_chats:delete_group_query(Server, From, GroupJID) of
-        {error, Err} ->
-          xmpp:make_error(IQ, Err);
-        _ ->
-          xmpp:make_iq_result(IQ)
+    {error, Err} ->
+      xmpp:make_error(IQ, Err);
+    _ ->
+      xmpp:make_iq_result(IQ)
   end;
 process_iq_local(IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).
@@ -418,7 +421,12 @@ process_vcard(#iq{sub_els = [Vcard]} = Iq ) ->
   {Server, _Group, User} = host_group_user(Iq),
   mod_groups_vcard:handle_vcard(Server, User, Vcard).
 
-
+process_disco_info(Iq) ->
+  Group = jid:to_string(jid:remove_resource(Iq#iq.to)),
+  [Privacy] = mod_groups_chats:get_info(Group, [privacy]),
+  Info = mod_groups_discovery:client_disco_info(Privacy),
+  Result = xmpp:make_iq_result(Iq, Info),
+  ejabberd_router:route(Result).
 
 host_group_user(Pkt) ->
   User = jid:to_string(jid:remove_resource(xmpp:get_from(Pkt))),
@@ -468,7 +476,7 @@ replace_id_to_jid(Query, Server, Group) ->
     _ -> Query
   end.
 
-return_result(ignore, _Iq) ->  ignore;
+return_result(ignore, _Iq) -> ignore;
 return_result({error, Err}, Iq) -> xmpp:make_error(Iq, Err);
 return_result(Result, Iq) when is_tuple(Result) ->
   xmpp:make_iq_result(Iq, Result);

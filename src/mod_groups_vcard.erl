@@ -54,7 +54,8 @@
 -export([send_pep_msg/3, async_send_pep_msg/3, async_send_pep_msg/2,
   request_vcard/2, request_pubsub_metadata/2]).
 -export([download_avatar/5, do_http_request/5]).
--export([get_user_avatar/3, user_update_avatar/5, group_avatar_url/2]).
+-export([get_user_avatar/3, user_update_avatar/5, group_avatar_url/2,
+  process_pubsub_event/1]).
 
 
 -include("ejabberd_sql_pt.hrl").
@@ -480,17 +481,45 @@ request_vcard(Group, User) ->
   end.
 
 request_pubsub_metadata(Group, User) ->
- case mod_groups_chats:is_anon(Group) of
-   false ->
-     case get_avatar_request(User) of
-       false ->
-         ?INFO_MSG("REQ AVA",[]),
-         add_avatar_request(User),
-         do_request_pubsub_metadata(Group, User);
-       _ -> ok
-     end;
-   _ -> ok
- end.
+  case mod_groups_chats:is_anon(Group) of
+    false ->
+      case get_avatar_request(User) of
+        false ->
+          add_avatar_request(User),
+          do_request_pubsub_metadata(Group, User);
+        _ -> ok
+      end;
+    _ -> ok
+  end.
+
+process_pubsub_event(#message{sub_els = [Event], from = From, to = To}) ->
+  #ps_event{items = ItemsEl} = Event,
+  Metadata = try
+               #ps_items{items = Items, node = Node} = ItemsEl,
+               case Node of
+                 <<"urn:xmpp:avatar:metadata">> ->
+                   #ps_item{sub_els = Els} = hd(Items),
+                   xmpp:decode(hd(Els));
+                 _ -> undefined
+               end
+             catch
+               _:_  -> undefined
+             end,
+  case Metadata of
+    #avatar_meta{} ->
+      User = jid:to_string(jid:remove_resource(From)),
+      case get_avatar_request(User) of
+        false ->
+          add_avatar_request(User),
+          mod_groups_vcard:handle_avatar_meta(
+            jid:replace_resource(To,<<"Group">>),
+            jid:remove_resource(From),
+            Metadata);
+        _ -> ok
+      end;
+    _ ->
+      ok
+  end.
 
 do_request_pubsub_metadata(Group, User) ->
   Query = #pubsub{items = #ps_items{node = ?NS_AVATAR_METADATA}},
@@ -620,7 +649,7 @@ update_avatar_request(User, AvatarInfo) ->
 
 del_avatar_request(Server, User) ->
   Proc = gen_mod:get_module_proc(Server, ?MODULE),
-  erlang:send_after(timer:seconds(2), Proc, {delete_as, User}).
+  erlang:send_after(timer:seconds(10), Proc, {delete_as, User}).
 
 %% deprecated
 %%---------------------------------------------------------
@@ -782,23 +811,23 @@ handle_decoded_request(Iq) ->
   #ps_items{node = Node} = Items,
   NewIq = Iq#iq{from = To},
   Result = case Node of
-    <<"urn:xmpp:avatar:data">> ->
-      xmpp:make_error(Iq, xmpp:err_item_not_found());
-    <<"urn:xmpp:avatar:metadata">> ->
-      Group = jid:to_string(jid:remove_resource(To)),
-      case mod_groups_chats:get_info(Group, [parent]) of
-        [<<"0">>] ->
-          mod_pubsub:iq_sm(NewIq);
-        [_] ->
-          ps_result_p2p_group(Iq);
-        _ ->
-          xmpp:make_error(Iq, xmpp:err_item_not_found())
-      end;
-    <<"http://jabber.org/protocol/nick">> ->
-      mod_pubsub:iq_sm(NewIq);
-    _ ->
-      xmpp:make_error(Iq, xmpp:err_item_not_found())
-  end,
+             <<"urn:xmpp:avatar:data">> ->
+               xmpp:make_error(Iq, xmpp:err_item_not_found());
+             <<"urn:xmpp:avatar:metadata">> ->
+               Group = jid:to_string(jid:remove_resource(To)),
+               case mod_groups_chats:get_info(Group, [parent]) of
+                 [<<"0">>] ->
+                   mod_pubsub:iq_sm(NewIq);
+                 [_] ->
+                   ps_result_p2p_group(Iq);
+                 _ ->
+                   xmpp:make_error(Iq, xmpp:err_item_not_found())
+               end;
+             <<"http://jabber.org/protocol/nick">> ->
+               mod_pubsub:iq_sm(NewIq);
+             _ ->
+               xmpp:make_error(Iq, xmpp:err_item_not_found())
+           end,
   Result#iq{from = To, to = From}.
 
 ps_result_p2p_group(Iq) ->

@@ -51,7 +51,7 @@
   user = <<"">>                               :: binary() | '_',
   stanza_id = <<>>                            :: binary() | '_',
   displayed                                   :: xmpp_element() | '_'
-  }).
+}).
 
 
 %%====================================================================
@@ -153,113 +153,44 @@ process_messages() ->
   end.
 
 %% Internal functions
-%% todo: check this
-process_message(#message{type = headline, body=[],
-  from = From, to = From, sub_els = Sub} = _Message) ->
-  %% todo: delete this
-  %% When a group changes something in its PEP, it receives the notification about it.
-  %% The group then forwards these notifications on behalf of itself to all members.
-  ?INFO_MSG("IN SELF MSG ~p",[Sub]);
-%%  Event = lists:keyfind(ps_event,1,Sub),
-%%  FromChat = jid:remove_resource(From),
-%%  case Event of
-%%    false ->
-%%      ok;
-%%    _ ->
-%%      Chat = jid:to_string(From),
-%%      #ps_event{items = Items} = Event,
-%%      #ps_items{items = ItemList, node = Node} = Items,
-%%      Item = lists:keyfind(ps_item,1,ItemList),
-%%      #ps_item{sub_els = Els} = Item,
-%%      Decoded = lists:map(fun(N) -> xmpp:decode(N) end, Els),
-%%      [El|_R] = Decoded,
-%%      case El of
-%%        {nick,Nickname} when Node == <<"http://jabber.org/protocol/nick">> ->
-%%          mod_groups_vcard:change_nick_in_vcard(From#jid.luser,From#jid.lserver,Nickname),
-%%          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
-%%          send_message(Message,AllUsers,FromChat);
-%%        {avatar_meta,AvatarInfo,_Smth} when Node == <<"urn:xmpp:avatar:metadata">> ->
-%%          AvatarI = hd(AvatarInfo),
-%%          IdAvatar = AvatarI#avatar_info.id,
-%%          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
-%%          send_message(Message,AllUsers,FromChat),
-%%          mod_groups_vcard:update_chat_avatar_id(From#jid.lserver,Chat,IdAvatar);
-%%        {avatar_meta,_AvatarInfo,_Smth} ->
-%%          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
-%%          send_message(Message,AllUsers,FromChat);
-%%        {nick,_Nickname} ->
-%%          AllUsers = mod_groups_users:users_to_send(From#jid.lserver,Chat),
-%%          send_message(Message,AllUsers,FromChat);
-%%        _ ->
-%%          ok
-%%      end
-%%  end;
-process_message(#message{type = headline, body=[],
-  from = From, to = To, sub_els = Sub}) ->
-  ?INFO_MSG("IN headline MSG from ~p to ~p:\n~p",[From, To, Sub]);
-%%  Event = lists:keyfind(ps_event,1,Sub),
-%%  Chat = jid:to_string(jid:remove_resource(To)),
-%%  User = jid:to_string(jid:remove_resource(From)),
-%%  LServer = To#jid.lserver,
-%%  case Event of
-%%    false ->
-%%      ok;
-%%    _ ->
-%%      #ps_event{items = Items} = Event,
-%%      #ps_items{items = ItemList, node = Node} = Items,
-%%      Item = lists:keyfind(ps_item,1,ItemList),
-%%      #ps_item{sub_els = Els} = Item,
-%%      AvatarMeta = case Els of
-%%                     [] -> undefined;
-%%                     _ -> xmpp:decode(hd(Els))
-%%                   end,
-%%      case AvatarMeta of
-%%        #avatar_meta{info = AvatarInfo} when Node == <<"urn:xmpp:avatar:metadata">> ->
-%%          AvatarI = hd(AvatarInfo),
-%%          IdAvatar = AvatarI#avatar_info.id,
-%%          OldID = mod_groups_vcard:get_image_id(LServer,User, Chat),
-%%          case OldID of
-%%            IdAvatar -> ok;
-%%            _ ->
-%%              mod_groups_vcard:handle_avatar_meta(
-%%                jid:replace_resource(To,<<"Group">>),
-%%                jid:remove_resource(From),
-%%                AvatarMeta)
-%%          end;
-%%        _ ->
-%%          ok
-%%      end
-%%  end;
+process_message(#message{from = From, to = From}) ->
+  ok;
+process_message(#message{type = headline, body=[]} = Msg) ->
+  try xmpp:decode_els(Msg) of
+    MsgD ->
+      case xmpp:get_subtag(MsgD, #ps_event{}) of
+        false -> ok;
+        Event ->
+          mod_groups_vcard:process_pubsub_event(
+            MsgD#message{sub_els = [Event]})
+      end
+  catch _:{xmpp_codec, _Why} ->
+    ok
+  end;
 process_message(#message{body=[], from = From, type = Type, to = To} = Msg)
   when Type == normal orelse Type == chat ->
-  {_, LServer, _} = jid:tolower(To),
+  LServer = To#jid.lserver,
   GroupJID = jid:remove_resource(To),
-  SUser = jid:to_string(jid:remove_resource(From)),
-  Displayed = is_displayed(Msg, GroupJID),
-  PresentType = lists:foldl(fun(CType, Result) ->
-    case xmpp:get_subtag(Msg, #chatstate{type = CType}) of
-      false -> Result;
-      _ when CType == active -> present;
-      _ -> not_present
-    end end, false, [active, gone, inactive]),
+  User = jid:to_string(jid:remove_resource(From)),
+  Displayed = get_displayed(Msg, GroupJID),
+  PresentType = get_present_type(Msg),
   IsAllowed = case {Displayed, PresentType} of
-              {false, false} -> false;
-              _ ->
-                mod_groups_users:check_if_exist(LServer,
-                  jid:to_string(GroupJID), SUser)
-            end,
+                {false, false} -> false;
+                _ ->
+                  mod_groups_users:check_if_exist(LServer,
+                    jid:to_string(GroupJID), User)
+              end,
   if
     Displayed /= false  andalso IsAllowed ->
       #mark_displayed{id = OriginID} = Displayed,
       StanzaID = get_stanza_id(Displayed, GroupJID, LServer, OriginID),
-      ejabberd_hooks:run(groupchat_got_displayed,LServer,[From, GroupJID,StanzaID]),
       send_displayed(GroupJID, StanzaID);
     PresentType /= false andalso IsAllowed ->
       change_present_state(To, From, PresentType);
     true ->
       ok
   end;
-process_message(#message{body=_Body, type = Type} = Msg)
+process_message(#message{type = Type} = Msg)
   when Type == normal orelse Type == chat ->
   case xmpp:get_subtag(Msg, #groups_invite{}) of
     false ->
@@ -328,7 +259,7 @@ check_permission_write(User,Chat, Pkt) ->
       notexist
   end.
 
-is_displayed(Pkt, GroupJID) ->
+get_displayed(Pkt, GroupJID) ->
   case xmpp:get_subtag(Pkt, #mark_displayed{}) of
     #mark_displayed{sub_els = Els} = D ->
       NewEls = lists:filtermap(
@@ -351,6 +282,14 @@ is_displayed(Pkt, GroupJID) ->
     _ ->
       false
   end.
+
+get_present_type(Msg) ->
+  lists:foldl(fun(CType, Result) ->
+    case xmpp:get_subtag(Msg, #chatstate{type = CType}) of
+      false -> Result;
+      _ when CType == active -> present;
+      _ -> not_present
+    end end, false, [active, gone, inactive]).
 
 get_stanza_id(Pkt, BareJID, LServer, OriginID) ->
   case xmpp:get_subtag(Pkt, #stanza_id{}) of
@@ -482,9 +421,9 @@ clean_sub_els(Els) ->
       IsGroup = str:prefix(?NS_GROUPS, NS),
       if
         (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
-          (Name == <<"time">> andalso NS == ?NS_UNIQUE);
-          (Name == <<"stanza-id">> andalso NS == ?NS_SID_0);
-          IsGroup ->
+        (Name == <<"time">> andalso NS == ?NS_UNIQUE);
+        (Name == <<"stanza-id">> andalso NS == ?NS_SID_0);
+        IsGroup ->
           false;
         true ->
           true

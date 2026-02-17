@@ -107,8 +107,12 @@ do_send_presence(From, To, Type, GroupEl) ->
            inactive -> xa;
            _ -> chat
          end,
+  DiscoInfo = mod_groups_discovery:client_disco_info(
+    GroupEl#groups_group.privacy),
+  DiscoHash = mod_caps:compute_disco_hash(DiscoInfo, sha),
+  Caps = #caps{hash = <<"sha-1">>, node = ?NS_GROUPS, version = DiscoHash},
   P = #presence{type = Type, id = randoms:get_string(),
-    sub_els = [GroupEl], status = Status, show = Show},
+    sub_els = [GroupEl, Caps], status = Status, show = Show},
   ejabberd_router:route(From, To , P).
 
 send_presence(_, [], _, _, _, _)  ->  ok;
@@ -152,7 +156,7 @@ process_presence(_, Packet) ->
 
 is_group(SubEls) ->
   case lists:keyfind(groups_group, 1, SubEls) of
-     false -> false;
+    false -> false;
     _ -> true
   end.
 
@@ -165,6 +169,7 @@ answer_presence(#presence{type = available,
   Decoded = PresenceD#presence.sub_els,
   case is_group(Decoded) of
     true ->
+      %% Thr user account became the group account
       process_unsubscribe(UserJID, GroupJID, unsubscribe);
     false ->
       case mod_groups_users:check_if_exist(Server, Group, User) of
@@ -183,9 +188,9 @@ answer_presence(#presence{type = subscribe,
          end,
   DenyUserAvatar = case xmpp:get_subtag(Presence,
     #groups_deny_user_avatar{}) of
-                    false -> false;
-                    _ -> true
-                    end,
+                     false -> false;
+                     _ -> true
+                   end,
   case check_access(Server, Group, UserJID) of
     error ->
       ejabberd_router:route(GroupFJID, UserJID,
@@ -241,7 +246,6 @@ answer_presence(Presence) ->
 
 process_available(UserJID, GroupJID, _SubEls)->
   Group = jid:to_string(jid:remove_resource(GroupJID)),
-  User = jid:to_string(jid:remove_resource(UserJID)),
   Server = GroupJID#jid.lserver,
 %%  todo: move to user settings
 %%  case lists:keyfind(groups_ban_ptp, 1, SubEls) of
@@ -252,7 +256,6 @@ process_available(UserJID, GroupJID, _SubEls)->
 %%  end,
   mod_groups_vcard:send_pep_msg(Server, Group, UserJID),
   send_presence([UserJID], Group, available, []),
-  mod_groups_vcard:request_pubsub_metadata(Group, User),
   ok.
 
 process_subscribe(Server, Group, UserJID, Nick, DenyUserAvatar)->

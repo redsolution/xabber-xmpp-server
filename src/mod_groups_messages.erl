@@ -41,7 +41,7 @@
 -export([process_messages/0, send_message/3]).
 -export([modify/1, shift_references/2]).
 -export([delete_all_sessions/1, get_present/1, select_sessions/2,
-  delete_all_user_sessions/2, change_present_state/3]).
+  delete_all_user_sessions/2, change_present_state/3, set_displayed/4]).
 
 -record(state, {host :: binary()}).
 -record(participant_session, {group, username, server, resource, ts}).
@@ -184,7 +184,7 @@ process_message(#message{body=[], from = From, type = Type, to = To} = Msg)
     Displayed /= false  andalso IsAllowed ->
       #mark_displayed{id = OriginID} = Displayed,
       StanzaID = get_stanza_id(Displayed, GroupJID, LServer, OriginID),
-      send_displayed(GroupJID, StanzaID);
+      check_displayed(GroupJID, From, StanzaID);
     PresentType /= false andalso IsAllowed ->
       change_present_state(To, From, PresentType);
     true ->
@@ -294,11 +294,10 @@ get_present_type(Msg) ->
 get_stanza_id(Pkt, BareJID, LServer, OriginID) ->
   case xmpp:get_subtag(Pkt, #stanza_id{}) of
     #stanza_id{by = BareJID, id = StanzaID} ->
-      StanzaID;
+      binary_to_integer(StanzaID);
     _ ->
-      SIDInt = mod_unique:get_stanza_id_by_origin_id(LServer,
-        OriginID, BareJID#jid.luser),
-      integer_to_binary(SIDInt)
+      mod_unique:get_stanza_id_by_origin_id(LServer,
+        OriginID, BareJID#jid.luser)
   end.
 
 re_sent_msg(#message{from = From, to = To, id = Id} = Pkt) ->
@@ -423,6 +422,9 @@ clean_sub_els(Els) ->
         (Name == <<"archived">> andalso NS == ?NS_MAM_TMP);
         (Name == <<"time">> andalso NS == ?NS_UNIQUE);
         (Name == <<"stanza-id">> andalso NS == ?NS_SID_0);
+        NS == ?NS_CARBONS_1;
+        NS == ?NS_CARBONS_2;
+        NS == ?NS_HINTS;
         IsGroup ->
           false;
         true ->
@@ -435,7 +437,7 @@ send_received(Pkt, UserJID, GroupJID) ->
   #message{meta = #{stanza_id := StanzaID}, id = OriginID} = Pkt,
   Pkt2 = xmpp:set_from_to(Pkt, UserJID, GroupJID),
   Forwarded = #forwarded{sub_els = [Pkt2]},
-  set_displayed(GroupJID, UserJID, integer_to_binary(StanzaID), OriginID),
+  set_displayed(GroupJID, UserJID, StanzaID, OriginID),
   Received = #groups_x{sub_els = [Forwarded]},
   Confirmation = #message{
     from = GroupJID,
@@ -448,32 +450,57 @@ set_displayed(GroupJID, UserJID, StanzaID, OriginID) ->
   GroupS = jid:to_string(jid:remove_resource(GroupJID)),
   UserS = jid:to_string(jid:remove_resource(UserJID)),
   Displayed = #mark_displayed{id = OriginID,
-    sub_els = [#stanza_id{id = StanzaID, by = GroupJID}]},
+    sub_els = [#stanza_id{id = integer_to_binary(StanzaID), by = GroupJID}]},
   mnesia:dirty_write(#groups_send_displayed{
     group = GroupS, user = UserS,
     stanza_id = StanzaID, displayed = Displayed}).
 
-send_displayed(_ChatJID, empty) ->
+check_displayed(GroupJID, UserJID, StanzaID) ->
+  Group = jid:to_string(jid:remove_resource(GroupJID)),
+  User = jid:to_string(jid:remove_resource(UserJID)),
+  Msgs = mnesia:dirty_read(groups_send_displayed, Group),
+  case lists:keyfind(StanzaID, #groups_send_displayed.stanza_id, Msgs) of
+    false -> ok;
+    #groups_send_displayed{user = Group} = Msg ->
+      Sorted = lists:reverse(lists:keysort(
+        #groups_send_displayed.stanza_id, Msgs)),
+      Msgs1 = [M || M <- Sorted,
+        M#groups_send_displayed.stanza_id < StanzaID],
+      case Msgs1 of
+        [] ->
+          mnesia:dirty_delete_object(Msg);
+        _ ->
+          LM = hd(Msgs1),
+          if
+            LM#groups_send_displayed.user == User ->
+              ok;
+            true ->
+              NewSID = LM#groups_send_displayed.stanza_id,
+              send_displayed(GroupJID, NewSID, Msgs1)
+          end
+      end;
+    _ ->
+      send_displayed(GroupJID, StanzaID, Msgs)
+  end.
+
+send_displayed(_GroupJID, _StanzaID, []) ->
   ok;
-send_displayed(GroupJID, StanzaID) ->
-  GroupS = jid:to_string(jid:remove_resource(GroupJID)),
-  Msgs = mnesia:dirty_read(groups_send_displayed, GroupS),
-  lists:foreach(fun(Msg) ->
-    #groups_send_displayed{user = User, displayed = D,
-      stanza_id = SID} = Msg,
-    if
-      SID == StanzaID ->
-        mnesia:dirty_delete_object(Msg),
-        M = #message{type = chat, from = GroupJID,
-          to = jid:from_string(User), sub_els = [D],
-          id=randoms:get_string()},
-        ejabberd_router:route(M);
-      SID < StanzaID ->
-        mnesia:dirty_delete_object(Msg);
-      true ->
-        ok
-    end
-                end, Msgs).
+send_displayed(GroupJID, StanzaID, [Msg|Msgs]) ->
+  #groups_send_displayed{user = User, displayed = D,
+    stanza_id = SID} = Msg,
+  if
+    SID == StanzaID ->
+      mnesia:dirty_delete_object(Msg),
+      M = #message{type = chat, from = GroupJID,
+        to = jid:from_string(User), sub_els = [D],
+        id=randoms:get_string()},
+      ejabberd_router:route(M);
+    SID < StanzaID ->
+      mnesia:dirty_delete_object(Msg);
+    true ->
+      ok
+  end,
+  send_displayed(GroupJID, StanzaID, Msgs).
 
 shift_references(Els, Length) ->
   lists:filtermap(

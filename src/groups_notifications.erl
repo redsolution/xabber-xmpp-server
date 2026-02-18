@@ -185,7 +185,7 @@ system_message(update, Server, Group, User, NewCard, OldCard) ->
   OldName = get_name(OldCard),
   Txt =  <<OldName/binary," is now known as ",NewName/binary>>,
   send_sys_msg(Server, Group, User, OldCard, <<"update">>, Txt, []);
-system_message(user_avatar, Server, Group, User, UserCard, Nick) ->
+system_message(user_avatar, Server, Group, User, UserCard, _Nick) ->
   send_sys_msg(Server, Group, User, UserCard, <<"update">>, <<>>, []);
 system_message(_, _, _, _, _, _) ->
   ok.
@@ -216,7 +216,8 @@ send_sys_msg(Server, Group, _User, UserCard, Type, Txt, SubEls) ->
 send_to_all(Server, Group, OriginID, Msg) ->
   #message{meta = #{stanza_id := TS}} = Msg,
   GroupJID = jid:from_string(Group),
-%%  mod_groups_messages:set_displayed(GroupJID, GroupJID, TS, OriginID),
+  mod_groups_messages:set_displayed(GroupJID, GroupJID,
+    TS, OriginID),
   Users = mod_groups_users:users_to_send(Server, Group),
   lists:foreach(fun(To) ->
     ejabberd_router:route(jid:replace_resource(GroupJID,<<"Group">>),

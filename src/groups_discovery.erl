@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_discovery.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose : Discovery for group chats on server
-%%% Created : 09 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : groups_discovery.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Purpose : Service Discovery.
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,21 +23,21 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_discovery).
--author('andrey.gagarin@redsolution.com').
+-module(groups_discovery).
+-author('ilya.kalashnikov@redsolution.com').
+-compile([{parse_transform, ejabberd_sql_pt}]).
 -behaviour(gen_mod).
 
-%% API
--export([start/2, stop/1, reload/3, process_disco_items/1]).
--export([get_local_items/5, get_local_identity/5, get_local_features/5,
-  depends/2, mod_options/1, client_disco_info/1]).
--include("ejabberd.hrl").
 -include("logger.hrl").
--include("translate.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
--compile([{parse_transform, ejabberd_sql_pt}]).
--type disco_acc() :: {error, stanza_error()} | {result, [binary()]} | empty.
+
+%% gen_mod
+-export([start/2, stop/1, reload/3, process_disco_items/1]).
+%% API
+-export([get_local_items/5, get_local_identity/5, get_local_features/5,
+  depends/2, mod_options/1, client_disco_info/1]).
+
 
 %%====================================================================
 %% gen_mod API
@@ -107,7 +107,6 @@ get_local_features(Acc, _From, _To, ?NS_GROUPS, _Lang) ->
 get_local_features(Acc, _From, _To, _Node, _Lang) ->
   Acc.
 
--spec get_local_identity(disco_acc(), jid(), jid(), binary(), binary()) -> disco_acc().
 get_local_identity(_Acc, _From, _To, ?NS_GROUPS, _Lang) ->
   [#identity{category = <<"conference">>,
     type = <<"text">>,
@@ -159,7 +158,7 @@ process_disco_items(#iq{lang = Lang} = IQ) ->
 %%%===================================================================
 
 make_sql_query(LServer, User, UserHost, RSM) ->
-  {Max, Direction, Chat} = get_max_direction_chat(RSM),
+  {Max, Direction, Group} = get_max_direction_chat(RSM),
   SServer = ejabberd_sql:escape(LServer),
   SUser = ejabberd_sql:escape(User),
   LimitClause = if is_integer(Max), Max >= 0 ->
@@ -167,20 +166,18 @@ make_sql_query(LServer, User, UserHost, RSM) ->
                   true ->
                     []
                 end,
-  ChatDiscovery = [<<"select chatgroup,name
-    from groupchat_users inner join groupchats on jid=chatgroup
-    where chatgroup IN ((select jid from groupchats
-    where model='open' and (searchable='local' or searchable='global') EXCEPT select chatgroup from groupchat_block
-    where blocked = '">>,SUser,<<"' or blocked = '">>,UserHost,<<"')
-   UNION (select jid from groupchats where model='private' and (searchable='local' or searchable='global'))
-   INTERSECT select chatgroup from groupchat_users where username = '">>,SUser,<<"')">>],
-  PageClause = case Chat of
+  ChatDiscovery = [<<"select jid,name from groupchats where searchable!='none' and
+    jid not in (select chatgroup from groupchat_block where blocked = '">>,SUser,<<"'
+    or blocked = '">>,UserHost,<<"')  and (model='open' or (model='private' and
+    (select true from groupchat_users where username='">>,SUser,<<"'
+     and chatgroup=jid and subscription='wait')))">>],
+  PageClause = case Group of
                  B when is_binary(B) ->
                    case Direction of
                      before ->
-                       [<<" AND chatgroup < '">>, Chat,<<"' ">>];
+                       [<<" AND jid < '">>, Group,<<"' ">>];
                      'after' ->
-                       [<<" AND chatgroup > '">>, Chat,<<"' ">>];
+                       [<<" AND jid > '">>, Group,<<"' ">>];
                      _ ->
                        []
                    end;
@@ -201,20 +198,20 @@ make_sql_query(LServer, User, UserHost, RSM) ->
       % XEP-0059: Result Set Management
       % 2.5 Requesting the Last Page in a Result Set
       [<<"SELECT * FROM (">>, Query,
-        <<"GROUP BY chatgroup,name ORDER BY chatgroup DESC ">>,
-        LimitClause, <<") AS c ORDER BY chatgroup ASC;">>];
+        <<"GROUP BY jid,name ORDER BY chatgroup DESC ">>,
+        LimitClause, <<") AS c ORDER BY jid ASC;">>];
     _ ->
-      [Query, <<"GROUP BY chatgroup,name ORDER BY chatgroup ASC ">>,
+      [Query, <<"GROUP BY jid,name ORDER BY jid ASC ">>,
         LimitClause, <<";">>]
   end,
   case ejabberd_sql:use_new_schema() of
     true ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,ChatDiscovery,<<" and server_host='">>,
         SServer, <<"'">>,
-        <<" GROUP BY chatgroup,name) as subquery;">>]};
+        <<" GROUP BY jid,name) as subquery;">>]};
     false ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,ChatDiscovery,
-        <<" GROUP BY chatgroup,name) as subquery;">>]}
+        <<" GROUP BY jid,name) as subquery;">>]}
   end.
 
 get_max_direction_chat(RSM) ->

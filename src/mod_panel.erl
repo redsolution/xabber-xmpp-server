@@ -5,7 +5,7 @@
 %%% Created : 24 Jan 2022 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2022   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -954,7 +954,7 @@ add_group(Owner, LocalPart, GroupHost, GroupName,
   Group = #groups_group{localpart = LocalPart,
     privacy = binary_to_atom(Privacy, latin1),
     info = Info, settings = Settings},
-  case mod_groups_chats:create_group(GroupHost, Owner, Group) of
+  case groups_groups:create_group(GroupHost, Owner, Group) of
     {ok, _ , _, _} ->
       {201, <<"Group created">>};
     {error, conflict} ->
@@ -986,7 +986,7 @@ remove_group(Args) ->
   Group = jid:to_string(jid:make(LUser, LServer)),
   case mod_xabber_entity:is_group(LUser, LServer) of
     true ->
-      mod_groups_chats:delete_group(Group),
+      groups_groups:delete_group(Group),
       {200, <<>>};
     _ ->
       {404, <<"Group does not exist">>}
@@ -996,7 +996,7 @@ get_groups(Args) ->
   Host = extract_host(Args),
 %%  Limit = binary_to_integer(proplists:get_value(limit, Args, <<"250">>)),
 %%  Page = binary_to_integer(proplists:get_value(page, Args, <<"1">>)),
-  Groups = mod_groups_chats:get_all_groups_info(Host),
+  Groups = groups_groups:get_all_groups_info(Host),
   GroupArray = lists:map(fun({{LocalPart, LServer, _}, InfoMap}) ->
     InfoMap1 = InfoMap#{localpart => LocalPart, host => LServer},
     {maps:to_list(InfoMap1)} end, Groups),
@@ -1004,7 +1004,7 @@ get_groups(Args) ->
 
 get_groups_count(Args) ->
   Host = extract_host(Args),
-  Count = mod_groups_chats:numbers_of_groups(Host),
+  Count = groups_groups:numbers_of_groups(Host),
   {200, {[{count, Count}]}}.
 
 update_vcard(Args) ->

@@ -1,11 +1,27 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_chats.erl
+%%% File    : groups_notifications.erl
 %%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%  Purpose : Notifications in Groups
 %%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
-%%% @copyright (C) 2026, Redsolution
-
-%%%-------------------------------------------------------------------
+%%%
+%%%
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
+%%%
+%%% This program is free software; you can redistribute it and/or
+%%% modify it under the terms of the GNU General Public License as
+%%% published by the Free Software Foundation; either version 2 of the
+%%% License, or (at your option) any later version.
+%%%
+%%% This program is distributed in the hope that it will be useful,
+%%% but WITHOUT ANY WARRANTY; without even the implied warranty of
+%%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+%%% General Public License for more details.
+%%%
+%%% You should have received a copy of the GNU General Public License along
+%%% with this program; if not, write to the Free Software Foundation, Inc.,
+%%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+%%%
+%%%----------------------------------------------------------------------
 -module(groups_notifications).
 -author('ilya.kalashnikov@redsolution.com').
 -behavior(gen_mod).
@@ -52,12 +68,12 @@ group_created(Server, User, Group) ->
   system_message(create, Server, Group, User).
 
 group_changed(Server, Group, State) ->
-  Users = mod_groups_users:users_to_send(Server, Group),
+  Users = groups_members:users_to_send(Server, Group),
   case State of
     active ->
       send_notice(Users, Group, [full]);
     _ ->
-      [Privacy] = mod_groups_chats:get_info(Group, [privacy]),
+      [Privacy] = groups_groups:get_info(Group, [privacy]),
       Settings = #groups_settings{state = inactive},
       GroupEl = #groups_group{privacy = Privacy,
         settings = Settings},
@@ -69,8 +85,8 @@ group_changed(Server, Group, State) ->
   maybe_send_to_index(Server, Group).
 
 pinned_changed(Server, Group, User, Messages) ->
-  Members = mod_groups_users:users_to_send(Server, Group),
-  [Privacy] = mod_groups_chats:get_info(Group, [privacy]),
+  Members = groups_members:users_to_send(Server, Group),
+  [Privacy] = groups_groups:get_info(Group, [privacy]),
   GroupEl = #groups_group{privacy = Privacy, pinned = Messages},
   GroupJID = jid:from_string(Group),
   lists:foreach(fun(Member) ->
@@ -82,20 +98,19 @@ pinned_changed(Server, Group, User, Messages) ->
   end.
 
 user_changed(Server, Group, User, OldCard) ->
-  UserCard = mod_groups_users:user_card(User, Group),
+  UserCard = groups_members:user_card(User, Group),
   system_message(update, Server, Group, User, UserCard, OldCard).
 
 user_avatar_changed(Server, Group, User) ->
   system_message(user_avatar, Server, Group, User).
 
 user_left(Server, Group, User) ->
-  Users = mod_groups_users:users_to_send(Server, Group),
+  Users = groups_members:users_to_send(Server, Group),
   send_notice(Users, Group, [members, present]),
   system_message(left, Server, Group, User).
 
 user_join(Acc, {Server, UserJID, Group}) ->
-  ?INFO_MSG("JOIN ~p ~p ~p",[Server, UserJID, Group]),
-  Users = mod_groups_users:users_to_send(Server, Group),
+  Users = groups_members:users_to_send(Server, Group),
   send_notice(Users, Group, [members, present]),
   User = jid:to_string(jid:remove_resource(UserJID)),
   system_message(join, Server, Group, User),
@@ -103,7 +118,7 @@ user_join(Acc, {Server, UserJID, Group}) ->
 
 %% API
 send_present(Group, Users, Present) ->
-  [Privacy, Members] = mod_groups_chats:get_info(Group,
+  [Privacy, Members] = groups_groups:get_info(Group,
     [privacy, user_count]),
   GroupEl = #groups_group{privacy = Privacy, members = Members,
     present = Present},
@@ -117,7 +132,7 @@ send_present(Group, Users, Present) ->
 send_notice(Users, Group, Opts) ->
   GroupJID = jid:replace_resource(jid:from_string(Group), <<"Group">>),
   Server = GroupJID#jid.lserver,
-  GroupEl =  case mod_groups_chats:group_details(Server,
+  GroupEl =  case groups_groups:group_details(Server,
     undefined, Group, Opts) of
                %% Happens when deleting a group
                error -> #groups_group{};
@@ -140,11 +155,11 @@ send_notice(true, [UserJID | Users], GroupJID, GroupEl, Full) ->
   GroupS = jid:to_string(jid:remove_resource(GroupJID)),
   Server = GroupJID#jid.lserver,
   Info = GroupEl#groups_group.info,
-  Name = mod_groups_chats:get_name(GroupS, UserS, true,
+  Name = groups_groups:get_name(GroupS, UserS, true,
     Info#groups_info.name),
   Avatar = case Full of
              true ->
-               mod_groups_chats:get_avatar(Server, GroupS,
+               groups_groups:get_avatar(Server, GroupS,
                  UserS, true);
              _ -> undefined
            end,
@@ -160,12 +175,12 @@ do_send_notice(From, To, GroupEl) ->
   ejabberd_router:route(From, To , Msg).
 
 system_message(Type, Server, Group, User) ->
-  UserCard = mod_groups_users:user_card(User, Group),
+  UserCard = groups_members:user_card(User, Group),
   Nick = get_name(UserCard),
   system_message(Type, Server, Group, User, UserCard, Nick).
 
 system_message(create, Server, Group, User, UserCard, Nick) ->
-  Anonymous = case mod_groups_chats:get_info(Group, [privacy]) of
+  Anonymous = case groups_groups:get_info(Group, [privacy]) of
               [imcognito] -> <<" anonymous ">>;
               _ -> <<" ">>
             end,
@@ -216,9 +231,9 @@ send_sys_msg(Server, Group, _User, UserCard, Type, Txt, SubEls) ->
 send_to_all(Server, Group, OriginID, Msg) ->
   #message{meta = #{stanza_id := TS}} = Msg,
   GroupJID = jid:from_string(Group),
-  mod_groups_messages:set_displayed(GroupJID, GroupJID,
+  groups_messages:set_displayed(GroupJID, GroupJID,
     TS, OriginID),
-  Users = mod_groups_users:users_to_send(Server, Group),
+  Users = groups_members:users_to_send(Server, Group),
   lists:foreach(fun(To) ->
     ejabberd_router:route(jid:replace_resource(GroupJID,<<"Group">>),
       To, Msg) end, Users).

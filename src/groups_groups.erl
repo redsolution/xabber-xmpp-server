@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_chats.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose :  Work with group chats
-%%% Created : 19 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : groups_groups.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Purpose : Group management.
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,29 +23,21 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_chats).
--author('andrey.gagarin@redsolution.com').
+-module(groups_groups).
+-author('ilya.kalashnikov@redsolution.com').
+-compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
--include("ejabberd.hrl").
+
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
--compile([{parse_transform, ejabberd_sql_pt}]).
-%% API
+
+%% gen_mod
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
+%% API
 -export([get_all_groups_info/1, numbers_of_groups/1 ]).
-
 -export([get_info/1, db_get_info/2]).
-
-% Presence unsubscribed hook
--export([maybe_delete_group/3, delete_user_p2p_groups/3]).
-
-%% Search
--export([search/7]).
-
-
-
 -export([group_info_query/3, update_user_counter/1, is_anon/1, create_group_query/3, create_group/3, create_p2p_group/4,
   get_info/2, group_details/3, group_details/4, get_name/4, get_avatar/4,
   group_is_active/1,
@@ -53,6 +45,11 @@
   delete_group_query/3, delete_group/1, change_pinned_query/4, change_pinned/3,
   delete_all_pinned/2]).
 
+% Presence unsubscribed hook
+-export([maybe_delete_group/3, delete_user_p2p_groups/3]).
+
+%% Search
+-export([search/7]).
 
 -define(DEFAULT_STATUS, <<"Discussion">>).
 
@@ -87,7 +84,7 @@ maybe_delete_group(Server, Group, _User)->
     end,
   case Result of
     pass ->
-      case mod_groups_users:get_owners(Server, Group) of
+      case groups_members:get_owners(Server, Group) of
         [] -> delete_group(Group, false);
         _ -> ok
       end;
@@ -161,7 +158,7 @@ create_group(Server, Creator, GroupEl) ->
         contacts => Contacts, domains => Domains, parent => <<"0">>,
         user_count => 1, gstate => active, gstatus => Status},
       groups_sm:activate(Server, LocalPart, SInfo),
-      mod_groups_users:add_user(Server, Creator, <<"owner">>, Group, <<"both">>, Creator),
+      groups_members:add_user(Server, Creator, <<"owner">>, Group, <<"both">>, Creator),
       ejabberd_hooks:run(groups_add_owner, Server, [Server, Group, Creator, Creator]),
       Result = create_result_query(Group, Name, Desc, Privacy, Membership, Index,
         Settings#groups_settings.contacts, Settings#groups_settings.domains),
@@ -171,7 +168,7 @@ create_group(Server, Creator, GroupEl) ->
   end.
 
 create_p2p_group(LServer, Creator, InvitedID, ParentGroup) ->
-  case mod_groups_users:check_if_exist(LServer, ParentGroup, Creator) of
+  case groups_members:check_if_exist(LServer, ParentGroup, Creator) of
     false ->
       {error, not_allowed};
     _ ->
@@ -184,7 +181,7 @@ delete_group_query(LServer, UserJID, GroupJID) ->
     true ->
       Group = jid:to_string(GroupJID),
       User = jid:to_string(jid:remove_resource(UserJID)),
-      case mod_groups_users:is_owner(LServer, Group, User) of
+      case groups_members:is_owner(LServer, Group, User) of
         true -> delete_group(Group);
         _ -> {error, xmpp:err_not_allowed()}
       end;
@@ -227,7 +224,7 @@ group_info_query(Server, User, Group) ->
                 error -> false;
                 [open] -> true;
                 _ ->
-                  mod_groups_users:is_in_group(Server, Group, User)
+                  groups_members:is_in_group(Server, Group, User)
               end,
   case IsAllowed of
     true ->
@@ -237,7 +234,7 @@ group_info_query(Server, User, Group) ->
   end.
 
 change_group_settings(Server, Group, User, Settings) ->
-  case mod_groups_users:is_permitted(Server, Group, User,
+  case groups_members:is_permitted(Server, Group, User,
     change_group_settings, false, []) of
     true ->
       change_group_settings(Server, Group, Settings);
@@ -246,7 +243,7 @@ change_group_settings(Server, Group, User, Settings) ->
   end.
 
 change_group_info(Server, Group, User, Iq) ->
-  case mod_groups_users:is_permitted(Server, Group, User,
+  case groups_members:is_permitted(Server, Group, User,
     change_group_info, true, []) of
     true ->
       change_group_info(Server, Group, Iq);
@@ -255,7 +252,7 @@ change_group_info(Server, Group, User, Iq) ->
   end.
 
 change_pinned_query(Server, Group, User, PinnedMsg) ->
-  case mod_groups_users:is_permitted(Server, Group, User,
+  case groups_members:is_permitted(Server, Group, User,
     pin_messages, true, []) of
     true ->
       change_pinned(Server, Group, User, PinnedMsg);
@@ -348,7 +345,7 @@ create_p2p_cpg(LServer, Creator, InvitedID, ParentGroup) ->
   end.
 
 create_p2p_ciu(LServer, Creator, InvitedID, ParentGroup) ->
-  case mod_groups_users:check_invited_to_p2p(LServer,
+  case groups_members:check_invited_to_p2p(LServer,
     ParentGroup, InvitedID) of
     false ->
       {error, not_allowed};
@@ -365,8 +362,8 @@ create_p2p_cp2p(LServer, Creator, Invited, ParentGroup) ->
 create_p2p_exists(not_found, LServer, Creator, Invited, ParentGroup) ->
   do_create_p2p_group(LServer, Creator, Invited, ParentGroup);
 create_p2p_exists(P2PGroup, LServer, Creator, Invited, ParentGroup) ->
-  CreatorSub = mod_groups_users:user_subscription(LServer, Creator, P2PGroup),
-  InvitedSub = mod_groups_users:user_subscription(LServer, Invited, P2PGroup),
+  CreatorSub = groups_members:user_subscription(LServer, Creator, P2PGroup),
+  InvitedSub = groups_members:user_subscription(LServer, Invited, P2PGroup),
   if
     InvitedSub == <<"none">>; InvitedSub == <<"wait">> ->
       send_invite_to_p2p(LServer, Creator, Invited, P2PGroup, ParentGroup);
@@ -394,8 +391,8 @@ do_create_p2p_group(Server, Creator, Invited, ParentGroup) ->
 %%  Create group.
   LocalPart = create_localpart(),
   Group = <<LocalPart/binary,"@", Server/binary>>,
-  CreatorNick = mod_groups_users:get_nick_in_chat(Server, Creator, ParentGroup),
-  InvitedNick = mod_groups_users:get_nick_in_chat(Server, Invited, ParentGroup),
+  CreatorNick = groups_members:get_nick_in_chat(Server, Creator, ParentGroup),
+  InvitedNick = groups_members:get_nick_in_chat(Server, Invited, ParentGroup),
   GroupName = <<CreatorNick/binary," and ", InvitedNick/binary, " chat">>,
   P2PUsers = [{Creator, CreatorNick}, {Invited, InvitedNick}],
   Desc = <<"Private chat">>,
@@ -411,29 +408,30 @@ do_create_p2p_group(Server, Creator, Invited, ParentGroup) ->
     parent => ParentGroup, user_count => 0, gstate => active,
     gstatus => ?DEFAULT_STATUS, p2pusers => P2PUsers},
   groups_sm:activate(Server, LocalPart, Info),
-  Info1 = add_user_to_peer_to_peer_chat(Server, Invited, Group, ParentGroup),
-  Info2 = add_user_to_peer_to_peer_chat(Server, Creator, Group, ParentGroup),
-%%  mod_groups_vcard:create_p2p_avatar(Server, Group, element(3,Info1), element(3,Info2)),
+%%  Info1 = add_user_to_peer_to_peer_chat(Server, Invited, Group, ParentGroup),
+%%  Info2 = add_user_to_peer_to_peer_chat(Server, Creator, Group, ParentGroup),
+%%  groups_avatars:create_p2p_avatar(Server, Group, element(3,Info1), element(3,Info2)),
+  add_users_to_p2p_group(Server, [Invited, Creator], Group, ParentGroup),
 %%  Send invite.
   send_invite_to_p2p(Server, Creator, Group, ParentGroup, Invited,
     CreatorNick, InvitedNick),
 %%  Return response.
   Created = create_result_query(Group, InvitedNick, Desc,
     Privacy, Membership, Index, #groups_contacts{}, #groups_domains{}),
-  InvitedAvatar = mod_groups_vcard:get_user_avatar(Server, Invited, ParentGroup),
+  InvitedAvatar = groups_avatars:get_user_avatar(Server, Invited, ParentGroup),
   Created1= Created#groups_group{info = Created#groups_group.info#groups_info{
     avatar = InvitedAvatar}},
   {ok, Created1}.
 
 send_invite_to_p2p(LServer, Creator, Invited, Group, ParentGroup) ->
-  CreatorNick = mod_groups_users:get_nick_in_chat(LServer, Creator, ParentGroup),
-  InvitedNick = mod_groups_users:get_nick_in_chat(LServer, Invited, ParentGroup),
+  CreatorNick = groups_members:get_nick_in_chat(LServer, Creator, ParentGroup),
+  InvitedNick = groups_members:get_nick_in_chat(LServer, Invited, ParentGroup),
   send_invite_to_p2p(LServer, Creator, Group, ParentGroup, Invited, CreatorNick,
     InvitedNick).
 
 send_invite_to_p2p(LServer, Creator, Group, ParentGroup, Invited,
     CreatorNick, InvitedNick) ->
-  Avatar = mod_groups_vcard:get_user_avatar(LServer, Creator, ParentGroup),
+  Avatar = groups_avatars:get_user_avatar(LServer, Creator, ParentGroup),
   GroupSettings = #groups_settings{membership = private, index = none},
   GroupInfo = #groups_info{name = CreatorNick, description = <<"Private chat">>,
     avatar = Avatar},
@@ -468,16 +466,16 @@ delete_group(Group, IsP2P) ->
     _ -> ok
   end,
   groups_sm:deactivate(LServer,LocalPart),
-  AllUserMeta = mod_groups_vcard:get_all_image_metadata(LServer, Group),
-  mod_groups_users:unsubscribe_all_for_delete(LServer, Group),
-  mod_groups_messages:delete_all_sessions(Group),
+  AllUserMeta = groups_avatars:get_all_image_metadata(LServer, Group),
+  groups_members:unsubscribe_all_for_delete(LServer, Group),
+  groups_messages:delete_all_sessions(Group),
   sql_delete_group(LServer, Group),
 %%  delete archive
   mod_mam:remove_user(LocalPart, LServer),
 %%  delete user avatars
-  mod_groups_vcard:maybe_delete_file(LServer,AllUserMeta),
+  groups_avatars:maybe_delete_file(LServer,AllUserMeta),
 %%  delete group avatar
-  mod_groups_vcard:delete_group_avatar_file(Group),
+  groups_avatars:delete_group_avatar_file(Group),
   ejabberd_hooks:run(groups_group_removed, LServer, [LServer,  Group]).
 
 group_details(Server, User, Group) ->
@@ -494,7 +492,7 @@ group_details(Data, Server, User, Group, Opts) ->
     Domains, Parent, State, Status} = Data,
   Present = case proplists:get_value(present, Opts) of
               true when Status == inactive -> 0;
-              true -> mod_groups_messages:get_present(Group);
+              true -> groups_messages:get_present(Group);
               _ -> undefined
             end,
   ParentJID = case Parent of
@@ -557,18 +555,18 @@ get_name(Group, User, _Parent, _Name)->
   Name1.
 
 get_avatar(Server, Group, _User, <<"0">>) ->
-  mod_groups_vcard:get_group_avatar(Server, Group);
+  groups_avatars:get_group_avatar(Server, Group);
 get_avatar(Server, Group, undefined, _Parent) ->
-  mod_groups_vcard:get_group_avatar(Server, Group);
+  groups_avatars:get_group_avatar(Server, Group);
 get_avatar(Server, Group, User, _Parent)->
   [Users] = get_info(Group, [p2pusers]),
   {User2, _} = hd(lists:keydelete(User, 1, Users)),
-  mod_groups_vcard:get_user_avatar(Server, User2, Group).
+  groups_avatars:get_user_avatar(Server, User2, Group).
 
 change_group_info(Server, Group, #iq{type = get}) ->
   {Name, _, _, _, Desc, _, _,
     _, _, _, Status} = get_info(Group),
-  Avatar = mod_groups_vcard:get_group_avatar(Server, Group),
+  Avatar = groups_avatars:get_group_avatar(Server, Group),
   #groups_info{name = Name, description = Desc,
     status = Status, avatar = Avatar};
 change_group_info(Server, Group, Iq) ->
@@ -585,7 +583,7 @@ change_group_info(Server, Group, Iq) ->
 update_group_info(Server, Group, GroupInfo) ->
   #groups_info{name = NewName, description = NewDesc,
     status = NewStatus} = GroupInfo,
-  Avatar = mod_groups_vcard:get_group_avatar(Server, Group),
+  Avatar = groups_avatars:get_group_avatar(Server, Group),
   {CurName, _Privacy, Index, Mbrshp, CurDesc, _Msgs,
     Cs, Ds, _Parent, State, CurStatus} =
     db_get_info(Server, Group),
@@ -614,7 +612,7 @@ update_group_info(Server, Group, GroupInfo) ->
 
 change_group_avatar(Server, Group, NewAvatar, Iq) ->
   #groups_avatar{info = NewInfo, data = Data} = NewAvatar,
-  CurAvatar = mod_groups_vcard:get_group_avatar(Server, Group),
+  CurAvatar = groups_avatars:get_group_avatar(Server, Group),
   CurID = case CurAvatar of
             #groups_avatar{info = #avatar_info{id = V}} ->
               V;
@@ -635,7 +633,7 @@ change_group_avatar(Server, Group, NewAvatar, Iq) ->
             xmpp:err_feature_not_implemented()),
           ejabberd_router:route(Err);
         _ ->
-          mod_groups_vcard:download_avatar(Server, Group,
+          groups_avatars:download_avatar(Server, Group,
             <<>>, NewInfo, Iq)
       end
   end.
@@ -665,7 +663,7 @@ change_group_settings(Server, Group, Settings) ->
   ejabberd_hooks:run(groups_group_changed, Server, [Server, Group, State]),
   if
     NewState == inactive andalso CurState == active->
-      mod_groups_messages:delete_all_sessions(Group);
+      groups_messages:delete_all_sessions(Group);
     true ->
       ok
   end,
@@ -701,8 +699,14 @@ count_users(Server, Group) ->
       end
   end.
 
-add_user_to_peer_to_peer_chat(Server, User, P2PGroup, ParentGroup) ->
-  mod_groups_users:add_user_to_p2p_group(Server, User, P2PGroup, ParentGroup).
+add_users_to_p2p_group(Server, Users, P2PGroup, ParentGroup) ->
+  lists:map(fun(User) ->
+    groups_members:add_user_to_p2p_group(Server, User,
+      P2PGroup, ParentGroup)
+            end, Users).
+
+%%add_user_to_peer_to_peer_chat(Server, User, P2PGroup, ParentGroup) ->
+%%  groups_members:add_user_to_p2p_group(Server, User, P2PGroup, ParentGroup).
 
 create_localpart() ->
   S = list_to_binary(

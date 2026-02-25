@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_iq_handler.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose : Handle iq for group chats
-%%% Created : 9 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : groups_iq_handler.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Purpose : IQ processing.
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,20 +23,25 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_iq_handler).
+-module(groups_iq_handler).
 -author('andrey.gagarin@redsolution.com').
 -behavior(gen_mod).
 -behavior(gen_server).
+
 -include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
+
+%% gen_mod, gen_server
 -export([start/2, stop/1, depends/2, mod_options/1,
   init/1, handle_call/3, handle_cast/2, terminate/2]).
--export([process_iq_local/1, process_iq_sm/1, make_action/1]).
 
+%% API
+-export([process_iq_local/1, process_iq_sm/1, make_action/1]).
 
 %% records
 -record(state, {host = <<"">> :: binary()}).
+
 
 start(Host, Opts) ->
   gen_mod:start_child(?MODULE, Host, Opts).
@@ -69,7 +74,7 @@ handle_call(_Request, _From, _State) ->
   erlang:error(not_implemented).
 
 handle_cast({group_created, Server, User, Group}, State) ->
-  mod_groups_vcard:make_group_avatar(Server, Group),
+  groups_avatars:make_group_avatar(Server, Group),
   ejabberd_hooks:run(groups_group_created, Server, [Server, User, Group]),
   {noreply, State};
 handle_cast(#iq{type = error}, State) ->
@@ -84,8 +89,7 @@ handle_cast(#iq{type = get, sub_els = [#disco_info{}]} = Iq, State) ->
   process_disco_info(Iq),
   {noreply, State};
 handle_cast(#iq{} = Iq, State) ->
-  ?INFO_MSG("IQ ~p",[Iq]),
-%%  make_action(Iq),
+  ?WARNING_MSG("Unknown IQ ~p",[Iq]),
   {noreply, State};
 handle_cast(_Request, State) ->
   {noreply, State}.
@@ -147,7 +151,7 @@ process_iq_sm(#iq{type = Type, sub_els = [#groups_details{}]} = Iq) ->
 process_iq_sm(#iq{sub_els = [#groups_info{}]} = Iq) ->
   case check_from_to(Iq) of
     {Server, Group, User} ->
-      R = mod_groups_chats:change_group_info(Server, Group, User, Iq),
+      R = groups_groups:change_group_info(Server, Group, User, Iq),
       return_result(R, Iq);
     _ ->
       xmpp:make_error(Iq, xmpp:err_not_allowed())
@@ -156,7 +160,7 @@ process_iq_sm(#iq{sub_els = [#groups_info{}]} = Iq) ->
 process_iq_sm(#iq{type = set, sub_els = [#groups_members{}]} = Iq) ->
   case check_from_to(Iq) of
     {Server, Group, User} ->
-      R = mod_groups_users:update_member_query(Server, Group, User, Iq),
+      R = groups_members:update_member_query(Server, Group, User, Iq),
       return_result(R, Iq);
     _ ->
       xmpp:make_error(Iq, xmpp:err_not_allowed())
@@ -172,7 +176,7 @@ process_iq_sm(#iq{type = Type, sub_els = Els} = Iq) ->
 
 %%Add owner
 process_iq_sm(set, [#groups_owner{id = MemberID}], Server, Group, User) ->
-  case mod_groups_users:add_owner(Server, Group, User, MemberID) of
+  case groups_members:add_owner(Server, Group, User, MemberID) of
     {error, not_allowed} ->
       {error, xmpp:err_not_allowed()};
     {error, not_found} ->
@@ -183,7 +187,7 @@ process_iq_sm(set, [#groups_owner{id = MemberID}], Server, Group, User) ->
 
 %% Group Info Query
 process_iq_sm(get, [#groups_details{}], Server, Group, User) ->
-  case mod_groups_chats:group_info_query(Server, User, Group) of
+  case groups_groups:group_info_query(Server, User, Group) of
     {ok, Info} ->
       Info;
     Err ->
@@ -197,61 +201,62 @@ process_iq_sm(Type,[#groups_settings{} = S], Server, Group, User) ->
                get -> undefined;
                _ -> S
              end,
-  mod_groups_chats:change_group_settings(Server, Group, User, Settings);
+  groups_groups:change_group_settings(Server, Group, User, Settings);
 
 %% Block users/domains
 process_iq_sm(get, [#groups_block{}], Server, Group, User) ->
-  mod_groups_block:block_list(Server, Group, User);
+  groups_block:block_list(Server, Group, User);
 process_iq_sm(set, [#groups_block{jids = JIDs}], Server, Group, User) ->
-  mod_groups_block:block(Server, Group, User, JIDs);
+  groups_block:block(Server, Group, User, JIDs);
 
 %% Unblock users/domains
 process_iq_sm(set, [#groups_unblock{jid = JID}], Server, Group, User) ->
-  mod_groups_block:unblock(Server, Group, User, JID);
+  groups_block:unblock(Server, Group, User, JID);
 
 %% Kick user
 process_iq_sm(set, [#groups_kick{jid = JID}], Server, Group, User) ->
-  mod_groups_block:kick(Server, Group, User, JID);
+  groups_block:kick(Server, Group, User, JID);
 
 %% Group Members
 process_iq_sm(get, [#groups_members{id = ID, version = Ver, xdata = Filters}],
     Server, Group, User) ->
   case ID of
     undefined ->
-      mod_groups_users:get_group_members(Server, Group, User,
+      groups_members:get_group_members(Server, Group, User,
         undefined, Ver, Filters);
     _ ->
-      mod_groups_users:get_group_member(Server, Group, User, ID)
+      groups_members:get_group_member(Server, Group, User, ID)
   end;
 %%process_iq_sm(set, [#groups_members{id = ID, members = [UserCard]}],
 %%    Server, Group, User) ->
-%%  mod_groups_users:update_member_query(Server, Group, User,
+%%  groups_members:update_member_query(Server, Group, User,
 %%    ID, UserCard);
 
 %% Invite user
 process_iq_sm(set, [#groups_invite{} = Invite], Server, Group, User) ->
-  mod_groups_invites:invite_user(Server, Group, User, Invite);
+  groups_invites:invite_user(Server, Group, User, Invite);
 
 %% Revoke invite
 process_iq_sm(set, [#groups_revoke{jid = JID}], Server, Group, User) ->
   JIDS = jid:to_string(jid:remove_resource(JID)),
-  mod_groups_invites:revoke(Server, Group, User, JIDS);
+  groups_invites:revoke(Server, Group, User, JIDS);
 
 %% Decline invite
 process_iq_sm(set, [#groups_decline{}], Server, Group, User) ->
-  mod_groups_invites:revoke(Server, Group, User);
+  groups_invites:revoke(Server, Group, User);
 
 %% List of invitations
 process_iq_sm(get, [#groups_invites{}], Server, Group, User) ->
-  mod_groups_invites:get_invites(Server, Group, User);
+  groups_invites:get_invites(Server, Group, User);
 
 %% Pin/unpin message
 process_iq_sm(set, [#groups_pinned_message{} = P ], Server, Group, User) ->
-  mod_groups_chats:change_pinned_query(Server, Group, User, P);
+  groups_groups:change_pinned_query(Server, Group, User, P);
 
 %% Not implemented
-process_iq_sm(Type, SubEls, _Server, _Group, _User) ->
-  ?INFO_MSG("~p ~p",[Type, SubEls]),
+process_iq_sm(Type, SubEls, _Server, Group, _User) ->
+  ?WARNING_MSG("Unknown IQ. Group: ~p, Type: ~p, Query: ~p",
+    [Group, Type, SubEls]),
   {error, xmpp:err_feature_not_implemented()}.
 
 
@@ -265,7 +270,7 @@ process_iq_local(#iq{type = set, sub_els = [
   #groups_create{group = GroupEl, p2p = undefined}]} = IQ) ->
   UserJID= IQ#iq.from,
   {_, Server, _} = jid:tolower(IQ#iq.to),
-  case mod_groups_chats:create_group_query(Server, UserJID, GroupEl) of
+  case groups_groups:create_group_query(Server, UserJID, GroupEl) of
     {ok, GroupElR, Group, User} ->
       Proc = gen_mod:get_module_proc(Server, ?MODULE),
       gen_server:cast(Proc, {group_created, Server, User, Group}),
@@ -281,7 +286,7 @@ process_iq_local(#iq{type = set, sub_els = [
   Creator = jid:to_string(jid:remove_resource(IQ#iq.from)),
   ParentGroup =  jid:to_string(jid:remove_resource(ParentGroupJID)),
   {_, Server, _} = jid:tolower(IQ#iq.to),
-  Result = mod_groups_chats:create_p2p_group(Server, Creator,
+  Result = groups_groups:create_p2p_group(Server, Creator,
     InvitedID, ParentGroup),
   case Result of
     {ok, Created} ->
@@ -303,12 +308,12 @@ process_iq_local(#iq{type = set, sub_els = [
 %%  Server = To#jid.lserver,
 %%  UserHost = From#jid.lserver,
 %%  UserJid = jid:to_string(jid:remove_resource(From)),
-%%  Query = mod_groups_chats:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
+%%  Query = groups_groups:search(Server,Name,Anon,Model,Desc,UserJid,UserHost),
 %%  xmpp:make_iq_result(Iq,Query);
 process_iq_local(#iq{from = From, to = To, type = set,
   sub_els = [#groups_delete{group = GroupJID}]} = IQ) ->
   Server = To#jid.lserver,
-  case mod_groups_chats:delete_group_query(Server, From, GroupJID) of
+  case groups_groups:delete_group_query(Server, From, GroupJID) of
     {error, Err} ->
       xmpp:make_error(IQ, Err);
     _ ->
@@ -332,15 +337,15 @@ make_action(#iq{type = Type, from = From, sub_els = Els} = Iq) ->
 
 make_action(get, [#retract_query{version = undefined, 'less-than' = undefined}],
     Server, Group, _User, _UserJID) ->
-  mod_groups_retract:get_version_reply(Server, Group);
+  groups_retract:get_version_reply(Server, Group);
 make_action(get, [#retract_query{version = Version, 'less-than' = Less}],
     Server, Group, _User, UserJID) ->
-  CurrentVer =  mod_groups_retract:send_rewrite_archive(Server, UserJID,
+  CurrentVer =  groups_retract:send_rewrite_archive(Server, UserJID,
     Group, Version, Less),
   #retract_query{version=CurrentVer};
 make_action(set, [#retract_message{symmetric = true, id = ID}],
     Server, Group, User, _) ->
-  case mod_groups_retract:retract_message(Server, Group, User, ID) of
+  case groups_retract:retract_message(Server, Group, User, ID) of
     ok -> ok;
     {error, not_found} ->
       {error, xmpp:err_item_not_found()};
@@ -351,26 +356,27 @@ make_action(set, [#retract_message{symmetric = true, id = ID}],
   end;
 make_action(set, [#retract_user{symmetric = true, id =ID}],
     Server, Group, User, _) ->
-  case mod_groups_retract:retract_user_messages(
+  case groups_retract:retract_user_messages(
     Server, Group, User, ID) of
     ok -> ok;
     _ -> {error, xmpp:err_not_allowed()}
   end;
 make_action(set, [#retract_all{symmetric = true}],
     Server, Group, User, _) ->
-  case mod_groups_retract:retract_all_messages(
+  case groups_retract:retract_all_messages(
     Server, Group, User) of
     ok -> ok;
     _ -> {error, xmpp:err_not_allowed()}
   end;
 make_action(set, [#replace{} = Replace], Server, Group, User, _) ->
-  case mod_groups_retract:rewrite_message(
+  case groups_retract:rewrite_message(
     Server, Group, User, Replace) of
     ok -> ok;
     _ -> {error, xmpp:err_not_allowed()}
   end;
-make_action(Type, SubEls, _, _, _, _) ->
-  ?INFO_MSG("~p ~p",[Type, SubEls]),
+make_action(Type, SubEls, _, Group, _, _) ->
+  ?WARNING_MSG("Unknown IQ. Group: ~p, Type: ~p, Query: ~p",
+    [Group, Type, SubEls]),
   {error, xmpp:err_bad_request()}.
 
 process_mam_iq(#iq{from = From, to = To, lang = Lang,
@@ -378,7 +384,7 @@ process_mam_iq(#iq{from = From, to = To, lang = Lang,
   User = jid:to_string(jid:remove_resource(From)),
   Server = To#jid.lserver,
   Group = jid:to_string(jid:remove_resource(To)),
-  case mod_groups_users:check_if_exist(Server, Group, User) of
+  case groups_members:check_if_exist(Server, Group, User) of
     true ->
       QueryD = xmpp:decode(Query),
       case change_query(QueryD, Server, Group, Lang) of
@@ -400,7 +406,7 @@ process_pubsub(#iq{from = UserJID, to = GroupJID,
   try
     MD = lists:map(fun(E) -> xmpp:decode(E) end, SubEls),
     Meta = lists:keyfind(avatar_meta,1,MD),
-    mod_groups_vcard:handle_avatar_meta(GroupJID, UserJID, Meta)
+    groups_avatars:handle_avatar_meta(GroupJID, UserJID, Meta)
   catch _:_ ->
     ok
   end;
@@ -410,7 +416,7 @@ process_pubsub(#iq{from = UserJID, to = GroupJID,
   try
     MD = lists:map(fun(E) -> xmpp:decode(E) end, SubEls),
     Data = lists:keyfind(avatar_data,1,MD),
-    mod_groups_vcard:handle_avatar_data(GroupJID, UserJID,
+    groups_avatars:handle_avatar_data(GroupJID, UserJID,
       Hash, Data)
   catch _:_ ->
     ok
@@ -419,12 +425,12 @@ process_pubsub(_) -> ok.
 
 process_vcard(#iq{sub_els = [Vcard]} = Iq ) ->
   {Server, _Group, User} = host_group_user(Iq),
-  mod_groups_vcard:handle_vcard(Server, User, Vcard).
+  groups_avatars:handle_vcard(Server, User, Vcard).
 
 process_disco_info(Iq) ->
   Group = jid:to_string(jid:remove_resource(Iq#iq.to)),
-  [Privacy] = mod_groups_chats:get_info(Group, [privacy]),
-  Info = mod_groups_discovery:client_disco_info(Privacy),
+  [Privacy] = groups_groups:get_info(Group, [privacy]),
+  Info = groups_discovery:client_disco_info(Privacy),
   Result = xmpp:make_iq_result(Iq, Info),
   ejabberd_router:route(Result).
 
@@ -438,7 +444,7 @@ check_from_to(Pkt) ->
   {GUser, _, _} = jid:tolower(jid:from_string(Group)),
   case mod_xabber_entity:get_entity_type(GUser, Server) of
     group ->
-      case mod_groups_users:check_if_exist(Server, Group, User) of
+      case groups_members:check_if_exist(Server, Group, User) of
         true -> {Server, Group, User};
         _ -> false
       end;
@@ -467,7 +473,7 @@ replace_id_to_jid(Query, Server, Group) ->
   case lists:keyfind('with', 1, Query) of
     {_, Value} ->
       ID = jid:to_string(Value),
-      case mod_groups_users:get_user_by_id(Server, Group, ID) of
+      case groups_members:get_user_by_id(Server, Group, ID) of
         none -> error;
         JS ->
           lists:keyreplace('with', 1, Query,

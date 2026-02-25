@@ -1,28 +1,44 @@
 %%%-------------------------------------------------------------------
-%%% @author Andrey Gagarin andrey.gagarin@redsolution.ru
-%%% @copyright (C) 2020, Redsolution Inc.
-%%% @doc
+%%% File    : groups_sm.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%  Purpose : Group session management.
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
-%%% @end
-%%% Created : 20. нояб. 2020 11:48
-%%%-------------------------------------------------------------------
+%%%
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
+%%%
+%%% This program is free software; you can redistribute it and/or
+%%% modify it under the terms of the GNU General Public License as
+%%% published by the Free Software Foundation; either version 2 of the
+%%% License, or (at your option) any later version.
+%%%
+%%% This program is distributed in the hope that it will be useful,
+%%% but WITHOUT ANY WARRANTY; without even the implied warranty of
+%%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+%%% General Public License for more details.
+%%%
+%%% You should have received a copy of the GNU General Public License along
+%%% with this program; if not, write to the Free Software Foundation, Inc.,
+%%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+%%%
+%%%----------------------------------------------------------------------
 -module(groups_sm).
--author("andrey.gagarin@redsolution.ru").
-
+-author('ilya.kalashnikov@redsolution.com').
 -behaviour(gen_server).
+
+-include("logger.hrl").
+-include("xmpp.hrl").
+
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+  terminate/2, code_change/3]).
 
 %% API
 -export([start_link/0]).
+-export([activate/3, deactivate/2, update_group_session_info/2]).
 
-%% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-  code_change/3]).
--export([activate/3, deactivate/2,update_group_session_info/2]).
--define(SERVER, ?MODULE).
--define(MYHOSTS, ejabberd_config:get_myhosts()).
 -record(xabber_sm_state, {pid = <<>>}).
--include("logger.hrl").
--include("xmpp.hrl").
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -31,7 +47,7 @@
 -spec(start_link() ->
   {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
 start_link() ->
-  gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+  gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 
 %%%===================================================================
@@ -95,14 +111,14 @@ handle_cast(_Request, State = #xabber_sm_state{}) ->
   {noreply, NewState :: #xabber_sm_state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #xabber_sm_state{}}).
 handle_info({route, #presence{to = To} = Packet}, State) ->
-  Proc = gen_mod:get_module_proc(To#jid.lserver, mod_groups_presence),
+  Proc = gen_mod:get_module_proc(To#jid.lserver, groups_presences),
   gen_server:cast(Proc, Packet),
   {noreply, State};
 handle_info({route, #iq{to = To} = Iq}, State) ->
   try xmpp:decode_els(Iq) of
     DecodedIq ->
       Proc = gen_mod:get_module_proc(To#jid.lserver,
-        mod_groups_iq_handler),
+        groups_iq_handler),
       gen_server:cast(Proc, DecodedIq)
   catch _:_ ->
     ?ERROR_MSG("Decoding error ~p",[Iq])
@@ -113,7 +129,7 @@ handle_info({route, #message{} = Packet}, State) ->
   ProcName = binary_to_atom(<<LUser/binary,$_,LServer/binary,"_messages">>, utf8),
   Proc = case whereis(ProcName) of
            undefined ->
-             PID = spawn(mod_groups_messages,process_messages,[]),
+             PID = spawn(groups_messages, process_messages, []),
              register(ProcName, PID),
              PID;
             PID ->
@@ -149,13 +165,13 @@ code_change(_OldVsn, State = #xabber_sm_state{}, _Extra) ->
 start_entities(Pid) ->
   lists:foreach(fun(Host) ->
     try
-      Groups = mod_groups_chats:get_all_groups_info(Host),
+      Groups = groups_groups:get_all_groups_info(Host),
       start_entities(Groups, Pid)
     catch
         _:Why ->
           ?ERROR_MSG("Group sessions cannot be started: ~p",[Why])
     end
-                end, ?MYHOSTS).
+                end, ejabberd_config:get_myhosts()).
 
 start_entities(GroupsInfo, Pid) ->
   lists:foreach(fun({{LUser, LServer, Resource}, Info}) ->

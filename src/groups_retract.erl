@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_retract.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose : Retract messages in group chats
-%%% Created : 06 Nov 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : groups_retract.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Purpose : Message retraction in Groups.
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,8 +23,8 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_retract).
--author('andrey.gagarin@redsolution.com').
+-module(groups_retract).
+-author('ilya.kalashnikov@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
 
@@ -32,6 +32,7 @@
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
 
+%% gen_mod
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 %% API
@@ -84,7 +85,7 @@ do_rewrite_message(Server, Group, UserS, Replace) ->
   UserJID = jid:from_string(UserS),
   Msg = #message{from = UserJID, to = GroupJID,
     body = [#text{data = Text}], sub_els = SubEls},
-  GrMsg = mod_groups_messages:modify(Msg),
+  GrMsg = groups_messages:modify(Msg),
   OldMsg = get_msg_from_archive(Server, GroupJID, ID),
   Replaced = #replaced{stamp = erlang:timestamp()},
   NewEls = [#origin_id{id = OldMsg#message.id} | GrMsg#message.sub_els],
@@ -249,7 +250,7 @@ check_permissions(retract, Server, User, Group, [ID]) ->
 check_permissions(retract_all, Server, User, Group, _) ->
   is_permitted(Server, User, Group);
 check_permissions(retract_user, Server, User, Group, [UserID]) ->
-  case mod_groups_users:get_user_by_id(Server, Group, UserID) of
+  case groups_members:get_user_by_id(Server, Group, UserID) of
     User -> {ok, User};
     Val ->
       case is_permitted(Server, User, Group) of
@@ -261,7 +262,7 @@ check_permissions(user_exist, _, _, _, _) ->
   ok.
 
 is_permitted(Server, User, Group) ->
-  case mod_groups_users:is_permitted(Server, Group, User,
+  case groups_members:is_permitted(Server, Group, User,
     delete_messages, false, []) of
     true -> ok;
     _ -> {error, not_allowed}
@@ -279,7 +280,7 @@ send_notifications(Server, Group, Element) ->
 notify(Server, Group, Stanza) ->
   FromBare = jid:from_string(Group),
   From = jid:replace_resource(FromBare,<<"Group">>),
-  UserList = mod_groups_users:users_to_send(Server, Group),
+  UserList = groups_members:users_to_send(Server, Group),
   lists:foreach(fun(To) ->
     ejabberd_router:route(From, To, Stanza) end, UserList).
 
@@ -287,7 +288,7 @@ get_message_author(Server, Group, ID) ->
   sql_message_author(Server, Group, ID).
 
 delete_pinned_message(Server, Group, {user, User}) ->
-  [Pinned]= mod_groups_chats:get_info(Group, [messages]),
+  [Pinned]= groups_groups:get_info(Group, [messages]),
   IDs = [ID || #groups_pinned_message{id = ID}
     <- Pinned#groups_pinned.messages],
   MsgOwners = lists:map(fun(SID) ->
@@ -296,20 +297,20 @@ delete_pinned_message(Server, Group, {user, User}) ->
   lists:foreach(fun({Owner, SID}) ->
     case Owner of
       User ->
-        mod_groups_chats:change_pinned(Server, Group,
+        groups_groups:change_pinned(Server, Group,
           #groups_pinned_message{id = SID, status = remove});
       _ ->
         ok
     end end, MsgOwners);
 delete_pinned_message(Server, Group, all) ->
-  mod_groups_chats:delete_all_pinned(Server, Group);
+  groups_groups:delete_all_pinned(Server, Group);
 delete_pinned_message(Server, Group, ID) ->
   [#groups_pinned{messages = Pinned}] =
-    mod_groups_chats:get_info(Group, [messages]),
+    groups_groups:get_info(Group, [messages]),
   case lists:keyfind(ID, #groups_pinned_message.id, Pinned) of
     false -> ok;
     Msg ->
-      mod_groups_chats:change_pinned(Server, Group,
+      groups_groups:change_pinned(Server, Group,
         Msg#groups_pinned_message{status = remove})
   end.
 

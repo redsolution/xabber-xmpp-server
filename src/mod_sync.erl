@@ -748,7 +748,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
     ?NS_GROUPS when IsLocal == true ->
       User = jid:to_string(jid:make(LUser,LServer)),
       Chat = jid:to_string(jid:make(PUser,PServer)),
-      Status = mod_groups_users:user_subscription(LServer,User,Chat),
+      Status = groups_members:user_subscription(LServer,User,Chat),
       Count = lg_get_count_messages(User,Chat,Read,Status),
       LastMessage = lg_get_last_message(LUser, LServer, PUser, PServer,Status),
       Unread = #sync_unread{count = Count, 'after' = Read},

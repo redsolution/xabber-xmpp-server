@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_invites.erl
+%%% File    : groups_invites.erl
 %%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%% Purpose : Processing invitations.
-%%% Created : 06 Sep 2023 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2023   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,13 +23,13 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_invites).
+-module(groups_invites).
 -author('ilya.kalashnikov@redsolution.com').
+-compile([{parse_transform, ejabberd_sql_pt}]).
 
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
--compile([{parse_transform, ejabberd_sql_pt}]).
 
 %%API
 -export([get_invites/3,
@@ -61,7 +61,7 @@ invite_user(Server, Group, User, Invite) ->
   end.
 
 get_invites(Server, Group, User) ->
-  case mod_groups_users:is_permitted(Server, Group, User,
+  case groups_members:is_permitted(Server, Group, User,
     get_invited_users, false, []) of
     true ->
       get_invited_users(Server, Group);
@@ -73,7 +73,7 @@ revoke(Server, Group, JIDS) ->
   remove_invite(Server, Group, JIDS).
 
 revoke(Server, Group, User, JIDS) ->
-  case mod_groups_users:is_permitted(Server, Group, User,
+  case groups_members:is_permitted(Server, Group, User,
     revoke_invite, false, []) of
     true ->
       remove_invite(Server, Group, JIDS);
@@ -85,9 +85,9 @@ revoke(Server, Group, User, JIDS) ->
 %%Internal
 
 invite_allowed(Server, Group, User) ->
-  case mod_groups_chats:get_info(Group, [parent]) of
+  case groups_groups:get_info(Group, [parent]) of
     [<<"0">>] ->
-      mod_groups_users:is_permitted(Server, Group, User,
+      groups_members:is_permitted(Server, Group, User,
         add_members, true, []);
     _ ->
       false
@@ -103,9 +103,9 @@ check_target(Server, Group, UserJID) ->
   if
     not IsGroup ->
       User = jid:to_string(jid:remove_resource(UserJID)),
-      case mod_groups_block:is_blocked(Server, Group, User) of
+      case groups_block:is_blocked(Server, Group, User) of
         false ->
-          Subs = mod_groups_users:user_subscription(Server,
+          Subs = groups_members:user_subscription(Server,
             User, Group),
           if
             Subs == <<"both">> orelse  Subs == <<"wait">> ->
@@ -121,7 +121,7 @@ check_target(Server, Group, UserJID) ->
   end.
 
 add_user_to_group(Server, Group, Actor, User, Send, Reason) ->
-  mod_groups_users:add_invited_user(Server, Group, User, Actor),
+  groups_members:add_invited_user(Server, Group, User, Actor),
   case Send of
     true ->
       send_invite(Server, Group, User, Reason);
@@ -130,7 +130,7 @@ add_user_to_group(Server, Group, Actor, User, Send, Reason) ->
   end.
 
 send_invite(Server, Group, User, Reason) ->
-  GroupDetails = mod_groups_chats:group_details(Server, User, Group,
+  GroupDetails = groups_groups:group_details(Server, User, Group,
     [{full, true}, {members, true}]),
   Text = <<"You have been invited to the group chat ",Group/binary,".
    Please add it to your contacts to join">>,

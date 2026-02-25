@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_users.erl
+%%% File    : groups_members.erl
 %%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
-%%% Purpose : Manage users in groupchats
+%%% Purpose : Manage users in Groups.
 %%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2026   Redsolution
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,14 +23,14 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_users).
+-module(groups_members).
 -author('ilya.kalashnikov@redsolution.com').
+-compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
 
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
--compile([{parse_transform, ejabberd_sql_pt}]).
 
 %% gen_mod
 -export([start/2, stop/1, depends/2, mod_options/1]).
@@ -139,15 +139,15 @@ get_group_member(Server, Group, User, ID) ->
 
   case get_user_info(Server, Group, User1, ID1) of
     [Username, Id, _Sub, Badge, Nick, LastSeen, Role] ->
-      IsAnon = mod_groups_chats:is_anon(Group),
-      AvatarEl = mod_groups_vcard:get_user_avatar(Server, Username, Group),
-      Last = case mod_groups_messages:select_sessions(Username, Group) of
+      IsAnon = groups_groups:is_anon(Group),
+      AvatarEl = groups_avatars:get_user_avatar(Server, Username, Group),
+      Last = case groups_messages:select_sessions(Username, Group) of
                [] ->
                  Stamp = misc:usec_to_now(LastSeen * 1000000),
                  #groups_last{stamp = Stamp};
                _ -> undefined
              end,
-      CanSeeJID = mod_groups_users:is_permitted(Server, Group, User,
+      CanSeeJID = groups_members:is_permitted(Server, Group, User,
         block_user, false, []),
       JID = if
               IsAnon andalso not CanSeeJID  -> undefined;
@@ -198,7 +198,7 @@ user_role(Server, User, Group) ->
 
 kick_user(Server, Group, User) ->
   kick_user_from_chat(Server, Group, User),
-  mod_groups_chats:update_user_counter(Group),
+  groups_groups:update_user_counter(Group),
   ejabberd_hooks:run(groups_user_left, Server, [Server, Group, User]),
   ok.
 
@@ -220,7 +220,7 @@ process_subscribed(_Acc, {Server, UserJID, Group}) ->
   case Status of
     <<"wait">> ->
       change_subscription(Server, Group, User, <<"both">>),
-      mod_groups_chats:update_user_counter(Group),
+      groups_groups:update_user_counter(Group),
       ok;
     <<"both">> ->
       {stop, both};
@@ -233,14 +233,14 @@ process_subscribed(_Acc, {Server, UserJID, Group}) ->
 %%Internal
 
 make_query(Server, RawData, Requester, Group) ->
-  IsAnon = mod_groups_chats:is_anon(Group),
-  CanSeeJID = mod_groups_users:is_permitted(Server, Group, Requester,
+  IsAnon = groups_groups:is_anon(Group),
+  CanSeeJID = groups_members:is_permitted(Server, Group, Requester,
     block_user, false, []),
   lists:map(
     fun(UserInfo) ->
       [Username, Id, Badge, LastSeen, Nick, Role] = UserInfo,
-      AvatarEl = mod_groups_vcard:get_user_avatar(Server, Username, Group),
-      Last = case mod_groups_messages:select_sessions(Username, Group) of
+      AvatarEl = groups_avatars:get_user_avatar(Server, Username, Group),
+      Last = case groups_messages:select_sessions(Username, Group) of
                   [] ->
                     LSI = binary_to_integer(LastSeen),
                     Stamp = misc:usec_to_now(LSI * 1000000),
@@ -266,9 +266,9 @@ get_user_info(User, Group) ->
   Server = ChatJID#jid.lserver,
   case get_user_info(Server, User, Group) of
     [Username, UserId, _Subs, Badge, Nick, _Last, Role] ->
-      IsAnon = mod_groups_chats:is_anon(Group),
+      IsAnon = groups_groups:is_anon(Group),
       UserJID = jid:from_string(User),
-      Avatar = mod_groups_vcard:get_user_avatar(Server,Username, Group),
+      Avatar = groups_avatars:get_user_avatar(Server,Username, Group),
       {Role, UserJID, Badge, UserId, Nick, Avatar, IsAnon};
     _ ->
       error
@@ -359,15 +359,15 @@ update_avatar(_Server, _Group, _User, _Iq, undefined) ->
   continue;
 update_avatar(Server, Group, User, Iq, #groups_avatar{info = undefined}) ->
 %% delete_avatar
-  mod_groups_vcard:user_update_avatar(Server, Group, User, Iq, undefined),
+  groups_avatars:user_update_avatar(Server, Group, User, Iq, undefined),
   ignore;
 update_avatar(Server, Group, User, Iq, #groups_avatar{info = Info} = Avatar) ->
   ID = Info#avatar_info.id,
-  case  mod_groups_vcard:get_user_avatar(Server, User, Group) of
+  case  groups_avatars:get_user_avatar(Server, User, Group) of
     #groups_avatar{info = #avatar_info{id = ID}} ->
       ok;
     _ ->
-      mod_groups_vcard:user_update_avatar(Server,Group, User, Iq, Avatar),
+      groups_avatars:user_update_avatar(Server,Group, User, Iq, Avatar),
       ignore
   end.
 
@@ -377,7 +377,7 @@ get_chat_version(Server, Group) ->
 kick_user_from_chat(Server, Group, User) ->
   case sql_kick_user(Server, Group, User) of
     ok ->
-      mod_groups_messages:delete_all_user_sessions(User, Group),
+      groups_messages:delete_all_user_sessions(User, Group),
       UserJID = jid:from_string(User),
       ChatJID = jid:from_string(Group),
       ejabberd_router:route(ChatJID, UserJID,
@@ -397,8 +397,8 @@ delete_user(Server, Group, User) ->
     " last_seen = (now() at time zone 'utc') where "
     " username=%(User)s and chatgroup=%(Group)s and subscription != 'none'")) of
     {updated,1} when IsBoth ->
-      mod_groups_messages:delete_all_user_sessions(User, Group),
-      mod_groups_chats:update_user_counter(Group),
+      groups_messages:delete_all_user_sessions(User, Group),
+      groups_groups:update_user_counter(Group),
       ok;
     _ ->
       {stop,no_user}
@@ -410,7 +410,7 @@ change_subscription(Server, Group, User, Sub) ->
 change_auto_nickname(_Server, _Group, _User, false) ->
   ok;
 change_auto_nickname(Server, Group, User, Nick) ->
-   case mod_groups_chats:is_anon(Group) of
+   case groups_groups:is_anon(Group) of
      false -> sql_change_auto_nickname(Server, Group,
        User, Nick);
      _ ->
@@ -475,9 +475,8 @@ sql_add_invited_user(Server, Group, User, InvitedBy) ->
 sql_add_user(Server, User, Role, Group, Subs, InvitedBy, Nick) ->
   ID = str:to_lower(randoms:get_alphanum_string(16)),
   {_, Privacy, _, _, _, _, _, _, _, _, _} =
-    mod_groups_chats:db_get_info(Server, Group),
-%%  IsAnon = mod_groups_chats:is_anon(Group),
-  ?INFO_MSG("!!!!!!!~p ~p",[Group, Privacy]),
+    groups_groups:db_get_info(Server, Group),
+%%  IsAnon = groups_groups:is_anon(Group),
   F = fun() ->
     {ANN, UseUserAvatar} =
       case Privacy of
@@ -525,7 +524,7 @@ sql_kick_user(Server, Group, User) ->
     ?SQL("update groupchat_users set subscription = 'none', role = 'none', "
     " user_updated_at = (now() at time zone 'utc'), "
     " last_seen = (now() at time zone 'utc') where "
-    " username=%(User)s and chatgroup=%(Group)s and subscription != 'none'")) of
+    " username=%(User)s and chatgroup=%(Group)s")) of
     {updated, 1} -> ok;
     _ ->
       error
@@ -619,7 +618,7 @@ is_owner(Server, Group, Member) ->
   lists:member(Member, get_owners(Server, Group)).
 
 add_owner(Server, Group, Requester, MemberID) ->
-  case mod_groups_users:get_user_by_id(Server, Group, MemberID) of
+  case groups_members:get_user_by_id(Server, Group, MemberID) of
     none -> {error, not_found};
     Requester -> {error, not_allowed};
     Member ->
@@ -777,7 +776,7 @@ make_nick_avatar(LServer, User, Group, UserID)->
   RandomNick =
     case mod_nick_avatar:random_nick_and_avatar(LServer) of
       {Nick, {_FileName, Bin}} ->
-        mod_groups_vcard:store_user_avatar_file(LServer, Group,
+        groups_avatars:store_user_avatar_file(LServer, Group,
           User, UserID, Bin),
         Nick;
       {Nick, _} -> Nick;

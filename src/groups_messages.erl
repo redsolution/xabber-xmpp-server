@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_messages.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose : Work with message in group chats
-%%% Created : 17 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : groups_messages.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Purpose : Message processing.
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,21 +23,22 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_messages).
--author('andrey.gagarin@redsolution.com').
+-module(groups_messages).
+-author('ilya.kalashnikov@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
 -behaviour(gen_server).
 
--include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
 -include_lib("stdlib/include/ms_transform.hrl").
 
+%% gen_mod, gen_server
 -export([start/2, stop/1, depends/2, mod_options/1]).
 -export([init/1, handle_call/3, handle_cast/2,
   handle_info/2, terminate/2, code_change/3]).
+%% API
 -export([process_messages/0, send_message/3]).
 -export([modify/1, shift_references/2]).
 -export([delete_all_sessions/1, get_present/1, select_sessions/2,
@@ -161,7 +162,7 @@ process_message(#message{type = headline, body=[]} = Msg) ->
       case xmpp:get_subtag(MsgD, #ps_event{}) of
         false -> ok;
         Event ->
-          mod_groups_vcard:process_pubsub_event(
+          groups_avatars:process_pubsub_event(
             MsgD#message{sub_els = [Event]})
       end
   catch _:{xmpp_codec, _Why} ->
@@ -177,7 +178,7 @@ process_message(#message{body=[], from = From, type = Type, to = To} = Msg)
   IsAllowed = case {Displayed, PresentType} of
                 {false, false} -> false;
                 _ ->
-                  mod_groups_users:check_if_exist(LServer,
+                  groups_members:check_if_exist(LServer,
                     jid:to_string(GroupJID), User)
               end,
   if
@@ -232,7 +233,7 @@ is_permitted(#message{to =To, from = From} = Pkt) ->
   User = jid:to_string(jid:remove_resource(From)),
   Group = jid:to_string(jid:remove_resource(To)),
   UserStatus = check_permission_write(User, Group, Pkt),
-  ChatState = mod_groups_chats:group_is_active(Group),
+  ChatState = groups_groups:group_is_active(Group),
   if
     UserStatus == restricted ->
       {false, <<"You are not allowed to send such messages to this group.">>};
@@ -248,9 +249,9 @@ is_permitted(#message{to =To, from = From} = Pkt) ->
 check_permission_write(User,Chat, Pkt) ->
   ChatJID = jid:from_string(Chat),
   Server = ChatJID#jid.lserver,
-  case mod_groups_users:check_if_exist(Server,Chat,User) of
+  case groups_members:check_if_exist(Server,Chat,User) of
     true ->
-      case mod_groups_users:is_permitted(Server, Chat, User,
+      case groups_members:is_permitted(Server, Chat, User,
         send_message, true, [{message,Pkt}]) of
         true -> allowed;
         _ -> restricted
@@ -329,7 +330,7 @@ modify_and_send(#message{to = To, from = From} = Pkt) ->
   Msg = modify(Pkt),
   Server = To#jid.lserver,
   GroupS = jid:to_string(jid:remove_resource(To)),
-  AllUsers = mod_groups_users:users_to_send(Server, GroupS),
+  AllUsers = groups_members:users_to_send(Server, GroupS),
   UserBareJID = jid:remove_resource(From),
   Users = AllUsers -- [UserBareJID],
   send_received_and_message(Msg, From, To, Users).
@@ -338,7 +339,7 @@ modify(#message{to = To, from = From, body = Body} = Pkt) ->
   GroupS = jid:to_string(jid:remove_resource(To)),
   UserS = jid:to_string(jid:remove_resource(From)),
   UserBareJID = jid:remove_resource(From),
-  UserCard = mod_groups_users:user_card(UserS, GroupS),
+  UserCard = groups_members:user_card(UserS, GroupS),
   Username = UserCard#groups_user.nickname,
   Header = <<Username/binary, ":", "\n">>,
   Length = misc:escaped_text_len(Header),
@@ -361,7 +362,7 @@ send_received_and_message(Pkt, UserJID, GroupJID, Users) ->
 send_message_to_index(GroupJID, Message) ->
   Server = GroupJID#jid.lserver,
   Group = jid:to_string(jid:remove_resource(GroupJID)),
-  [Index] = mod_groups_chats:get_info(Group, [index]),
+  [Index] = groups_groups:get_info(Group, [index]),
   case Index of
     global ->
       GlobalIndexes = mod_groups:get_option(Server, global_indexs),
@@ -380,14 +381,14 @@ send_notifications(Message, GroupJID, AuthorJID, Users) ->
   case xmpp:get_subtag(Message, #groups_mentions{}) of
     #groups_mentions{members = []} ->
       Author = jid:to_string(jid:remove_resource(AuthorJID)),
-      case mod_groups_users:user_role(Server, Author, Group) of
+      case groups_members:user_role(Server, Author, Group) of
         <<"member">> -> {error, not_allowed};
         _ ->
           send_notifications(Message, GroupJID, Users)
       end;
     #groups_mentions{members = Members} ->
       MemberIDs = [ ID || #groups_user{id = ID} <- Members, ID /= <<>>],
-      MemberJIDSs = [mod_groups_users:get_user_by_id(Server, Group, ID)
+      MemberJIDSs = [groups_members:get_user_by_id(Server, Group, ID)
         || ID <- MemberIDs],
       MemberJIDs = [jid:from_string(S) || S <- MemberJIDSs],
       send_notifications(Message, GroupJID, MemberJIDs);
@@ -571,7 +572,7 @@ change_present_state(GroupJID, UserJID, PresentType) ->
               not_present ->
                 delete_session(Group, UserJID)
             end,
-  mod_groups_users:update_last_seen(Server, Username, Group),
+  groups_members:update_last_seen(Server, Username, Group),
   case Result of
     ok ->
       send_present(UserJID, GroupJID, PresentNum, PresentType);

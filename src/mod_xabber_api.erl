@@ -489,10 +489,10 @@ sum(Acc,[F|R]) ->
 
 xabber_registered_chats(_Host,_Limit,_Page) ->
   [].
-%%  mod_groups_chats:get_all_info(Host,Limit,Page).
+%%  groups_groups:get_all_info(Host,Limit,Page).
 
 xabber_registered_chats_count(Host) ->
-  mod_groups_chats:numbers_of_groups(Host).
+  groups_groups:numbers_of_groups(Host).
 
 xabber_registered_users_count(Host) ->
   length(xabber_registered_users(Host)).
@@ -509,7 +509,7 @@ xabber_register_chat(_Server,_Creator,_Host,_Name,_LocalJid,_Anon,_Searchable,_M
 %%        #groups_membership{cdata = Model}
 %%      ],
 %%      Owner = jid:to_string(jid:make(Creator, Host)),
-%%      case mod_groups_chats:create_chat(Server, Owner, GroupInfo) of
+%%      case groups_groups:create_chat(Server, Owner, GroupInfo) of
 %%        {ok, _, _, _} ->
 %%          ok;
 %%        _ ->

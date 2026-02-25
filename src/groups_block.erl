@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_block.erl
+%%% File    : groups_block.erl
 %%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%% Purpose : Manage blocklists.
-%%% Created : 09 Dec 2024 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2024   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,9 +23,8 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_block).
+-module(groups_block).
 -author('ilya.kalashnikov@redsolution.com').
-
 -compile([{parse_transform, ejabberd_sql_pt}]).
 
 -include("logger.hrl").
@@ -40,7 +39,7 @@
 %%%% API
 
 block(Server, Group, Admin, JIDs) ->
-  case mod_groups_users:is_permitted(Server, Group, Admin,
+  case groups_members:is_permitted(Server, Group, Admin,
     block_user, false, []) of
     true ->
       do_block(Server, Group, Admin,
@@ -50,7 +49,7 @@ block(Server, Group, Admin, JIDs) ->
   end.
 
 unblock(Server, Group, Admin, JID) ->
-  case mod_groups_users:is_permitted(Server, Group, Admin,
+  case groups_members:is_permitted(Server, Group, Admin,
     block_user, false, []) of
     true ->
       do_unblock(Server, Group, JID);
@@ -63,7 +62,7 @@ is_blocked(Server, Group, User) ->
 
 
 block_list(Server, Group, User) ->
-  case mod_groups_users:is_permitted(Server, Group, User,
+  case groups_members:is_permitted(Server, Group, User,
     block_user, false, []) of
     true ->
       block_list(Server, Group);
@@ -72,7 +71,7 @@ block_list(Server, Group, User) ->
   end.
 
 kick(Server, Group, Admin, JID) ->
-  case mod_groups_users:is_permitted(Server, Group, Admin,
+  case groups_members:is_permitted(Server, Group, Admin,
     kick_user, false, []) of
     true ->
       JIDS = validate_jid(Server, Group, JID),
@@ -107,13 +106,13 @@ do_unblock(Server, Group, JID) ->
 do_kick(_Server, _Group, _Admin, false) ->
   {error, xmpp:err_not_allowed()};
 do_kick(Server, Group, _Admin, User) ->
-  mod_groups_users:kick_user(Server, Group, User),
+  groups_members:kick_user(Server, Group, User),
   ok.
 
 validate_jids(Server, Group, JIDs) ->
   BareJIDs = [jid:remove_resource(J) || J <- JIDs],
   Owners = [jid:from_string(O) || O <-
-    mod_groups_users:get_owners(Server, Group)],
+    groups_members:get_owners(Server, Group)],
   case BareJIDs -- Owners of
     BareJIDs -> [jid:to_string(I) || I <- BareJIDs];
     _ -> false
@@ -121,7 +120,7 @@ validate_jids(Server, Group, JIDs) ->
 
 validate_jid(Server, Group, JID)  ->
   JIDS = jid:to_string(jid:remove_resource(JID)),
-  case mod_groups_users:user_role(Server, JIDS, Group) of
+  case groups_members:user_role(Server, JIDS, Group) of
     <<"member">> -> JIDS;
     _ -> false
   end.

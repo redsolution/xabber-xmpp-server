@@ -5,7 +5,7 @@
 %%% Created : 06 Oct 2025 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2026   Redsolution
+%%% xabberserver, Copyright (C) 2007-2026   redsolution
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -116,7 +116,7 @@ add_owner(Server, Group, Requester, Member) ->
 
 copy_newbies_perms(Acc, {Server, UserJID, Group}) ->
   User = jid:to_string(jid:remove_resource(UserJID)),
-  case mod_groups_users:is_owner(Server, Group, User) of
+  case groups_members:is_owner(Server, Group, User) of
     true -> ok;
     _ ->
       Perms = newbies_perms(Server, Group),
@@ -124,7 +124,7 @@ copy_newbies_perms(Acc, {Server, UserJID, Group}) ->
   end,
   Acc.
 
-user_left(Server,Group, User)->
+user_left(Server, Group, User)->
   delete_admin_perms(Server, Group, User).
 
 group_removed(Server, Group) ->
@@ -361,7 +361,7 @@ set_perms_query(Group, Requester, UserId, Perms)->
   Server = Group#jid.lserver,
   GroupS = jid:to_string(jid:remove_resource(Group)),
   RequesterS = jid:to_string(jid:remove_resource(Requester)),
-  case mod_groups_users:get_user_by_id(Server, GroupS, UserId) of
+  case groups_members:get_user_by_id(Server, GroupS, UserId) of
     none -> {error, not_found};
     RequesterS -> {error, not_allowed};
     Member ->
@@ -411,7 +411,7 @@ get_perms_query(Group, Requester, UserId)->
   Server = Group#jid.lserver,
   GroupS = jid:to_string(jid:remove_resource(Group)),
   RequesterS = jid:to_string(jid:remove_resource(Requester)),
-  case mod_groups_users:get_user_by_id(Server, GroupS, UserId) of
+  case groups_members:get_user_by_id(Server, GroupS, UserId) of
     none -> {error, not_found};
     Member ->
       get_perms_query(Server, GroupS, RequesterS, Member)
@@ -429,7 +429,7 @@ perms_delete(Group, Requester, UserId) when is_binary(UserId) ->
   Server = Group#jid.lserver,
   GroupS = jid:to_string(jid:remove_resource(Group)),
   RequesterS = jid:to_string(jid:remove_resource(Requester)),
-  case mod_groups_users:get_user_by_id(Server, GroupS, UserId) of
+  case groups_members:get_user_by_id(Server, GroupS, UserId) of
     none -> {error, not_found};
     RequesterS -> {error, not_allowed};
     Member ->
@@ -819,7 +819,7 @@ update_user(Server, Group, _IssuedBy, Member, {_, WasAdmin})->
       delete_admin_perms(Server, Group, Member);
     true -> ok
   end,
-  mod_groups_users:update_user_status(Server, Member, Group, Role),
+  groups_members:update_user_status(Server, Member, Group, Role),
   ok.
 
 remove_expired_perms(_Server, _Group, _Member, _ActivePerms, []) -> ok;
@@ -829,7 +829,7 @@ remove_expired_perms(Server, Group, Member, ActivePerms, Expired) ->
   {RoleA, _} = calculate_perms([], ActivePerms),
   case {RoleE, RoleA} of
     {<<"admin">>, <<"member">>} ->
-      mod_groups_users:update_user_status(Server, Member, Group, RoleA);
+      groups_members:update_user_status(Server, Member, Group, RoleA);
     _ -> ok
   end.
 

@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_vcard.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose : Storage vcard of group chat users
-%%% Created : 17 May 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : groups_avatars.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Purpose : Manage avatars in Groups.
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,16 +23,22 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_vcard).
--author('andrey.gagarin@redsolution.com').
+-module(groups_avatars).
+-author('ilya.kalashnikov@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
 -behaviour(gen_server).
 
+-include("ejabberd_sql_pt.hrl").
+-include("logger.hrl").
+-include("xmpp.hrl").
+
+%% gen_mod, gen_server
 -export([start/2, stop/1, depends/2, mod_options/1]).
 -export([init/1, handle_call/3, handle_cast/2,
   handle_info/2, terminate/2, code_change/3]).
 
+%% API
 -export([
   handle_request/1,
   get_all_image_metadata/2,
@@ -56,11 +62,6 @@
 -export([download_avatar/5, do_http_request/5]).
 -export([get_user_avatar/3, user_update_avatar/5, group_avatar_url/2,
   process_pubsub_event/1]).
-
-
--include("ejabberd_sql_pt.hrl").
--include("logger.hrl").
--include("xmpp.hrl").
 
 -record(state, {host :: binary()}).
 
@@ -301,56 +302,11 @@ make_group_avatar(Server, Group)->
       ok
   end.
 
-publish_avatar(Group, Data, FileName) when is_binary(Group) ->
-  publish_avatar(jid:from_string(Group), Data, FileName);
-publish_avatar(#jid{lserver = Server} = GroupJID, Data, FileName)->
-  JIDinURL = gen_mod:get_module_opt(Server,mod_http_upload,jid_in_url),
-  UserStr = make_user_string(GroupJID, JIDinURL),
-  DocRoot = get_docroot(Server),
-  FileName1 = make_user_string(GroupJID, salt),
-  FullPath = filename:join([DocRoot, UserStr, "avatar", FileName1]),
-  case do_store_file(FullPath, Data, undefined, undefined) of
-    ok ->
-      Url = get_root_url(Server),
-      Size = byte_size(Data),
-      HashID = get_hash(Data),
-      Ext = lists:last(binary:split(FileName,<<".">>)),
-      ImageType = <<"image/",Ext/binary>>,
-      AvatarUrl = <<Url/binary, $/,UserStr/binary,$/,"avatar",$/,
-        FileName1/binary,"?v=",HashID/binary>>,
-      AvatarInfo = #avatar_info{type = ImageType, bytes = Size,
-        id = HashID, url = AvatarUrl},
-      AvatarMeta = #avatar_meta{info = [AvatarInfo]},
-%%      MetaItems = #ps_item{id = HashID, sub_els = [xmpp:encode(AvatarMeta)]},
-%%      PublishMetaData = #pubsub{publish = #ps_publish{node = ?NS_AVATAR_METADATA, items = [MetaItems]}},
-      LBJID = jid:tolower(GroupJID),
-
-      case mod_pubsub:publish_item(LBJID, Server,
-        ?NS_AVATAR_METADATA, GroupJID, HashID, [AvatarMeta]) of
-        {result, _} -> ok;
-        {error, StanzaErr} ->
-          ?ERROR_MSG("Error piblish group avatar: ~p",[StanzaErr])
-      end;
-
-%%      IQMeta = #iq{from = jid:replace_resource(GroupJID,?RESOURCE),
-%%        to = jid:replace_resource(GroupJID,<<>>),
-%%        id = randoms:get_string(),
-%%        type = set,
-%%        sub_els = [PublishMetaData],
-%%        meta = #{}},
-%%      mod_pubsub:iq_sm(IQMeta);
-    Err ->
-      ?ERROR_MSG("Error storing group avatar: ~p ~p ~p",[GroupJID, FullPath, Err]),
-      Err
-  end;
-publish_avatar(_, _, _) ->
-  ok.
-
 store_user_avatar(Server, <<>> , User, AvatarInfo, _Iq, Data) ->
   del_avatar_request(Server, User),
   store_user_auto_avatar(Server, User, AvatarInfo, Data);
 store_user_avatar(Server, Group , User, AvatarInfo, Iq, Data) ->
-  UserId = mod_groups_users:get_user_id(Server, User, Group),
+  UserId = groups_members:get_user_id(Server, User, Group),
   #avatar_info{id = ID, type = ImgType, bytes = Size} = AvatarInfo,
 %%  Hash = base64:encode(crypto:hash(sha, Data)),
   Url = update_data_user_put(Server, UserId, Data, ID),
@@ -391,7 +347,7 @@ send_pep_msg(Server, Group, UserJID) ->
   spawn(?MODULE, async_send_pep_msg,[Server, Group, UserJID]).
 
 async_send_pep_msg(Server, Group, UserJID) ->
-  case mod_groups_chats:get_info(Group, [parent, p2pusers]) of
+  case groups_groups:get_info(Group, [parent, p2pusers]) of
     [<<"0">>, _] ->
       case get_group_avatar(Server, Group) of
         undefined -> ok;
@@ -411,7 +367,7 @@ send_pep_msg(Server, Group) ->
   spawn(?MODULE, async_send_pep_msg,[Server, Group]).
 
 async_send_pep_msg(Server, Group) ->
-  case mod_groups_chats:get_info(Group, [parent, p2pusers]) of
+  case groups_groups:get_info(Group, [parent, p2pusers]) of
     [<<"0">>, _] ->
       case get_group_avatar(Server, Group) of
         undefined -> ok;
@@ -419,13 +375,13 @@ async_send_pep_msg(Server, Group) ->
           GroupJID = jid:from_string(Group),
           NodeId = Info#avatar_info.id,
           Metadata = #avatar_meta{info = [Info]},
-          Users = mod_groups_users:users_to_send(Server, Group),
+          Users = groups_members:users_to_send(Server, Group),
           lists:foreach(fun(UserJID) ->
             send_avatar_meta(GroupJID, UserJID, NodeId, Metadata)
                         end, Users)
       end;
     [_, P2PUsers] ->
-      Users = mod_groups_users:users_to_send(Server, Group),
+      Users = groups_members:users_to_send(Server, Group),
       lists:foreach(fun(UserJID) ->
         send_p2p_avatar(Server, Group, UserJID, P2PUsers)
                     end, Users);
@@ -475,13 +431,13 @@ get_group_avatar(Server, Group)->
   end.
 
 request_vcard(Group, User) ->
-  case mod_groups_chats:is_anon(Group) of
+  case groups_groups:is_anon(Group) of
     false -> send_iq(Group, User, [#vcard_temp{}]);
     _ -> ok
   end.
 
 request_pubsub_metadata(Group, User) ->
-  case mod_groups_chats:is_anon(Group) of
+  case groups_groups:is_anon(Group) of
     false ->
       case get_avatar_request(User) of
         false ->
@@ -511,7 +467,7 @@ process_pubsub_event(#message{sub_els = [Event], from = From, to = To}) ->
       case get_avatar_request(User) of
         false ->
           add_avatar_request(User),
-          mod_groups_vcard:handle_avatar_meta(
+          groups_avatars:handle_avatar_meta(
             jid:replace_resource(To,<<"Group">>),
             jid:remove_resource(From),
             Metadata);
@@ -742,8 +698,8 @@ store_user_auto_avatar(Server, User, AvatarInfo, Data) ->
 get_vcard(User, Server) ->
   Chat = jid:to_string(jid:make(User,Server)),
   {Name, Privacy, Index, Membership, Desc, _ChatMessage, _Contacts,
-    _Domains, ParentChat, _State, Status} = mod_groups_chats:get_info(Chat),
-  Members =  case mod_groups_chats:get_info(Chat, [user_count]) of
+    _Domains, ParentChat, _State, Status} = groups_groups:get_info(Chat),
+  Members =  case groups_groups:get_info(Chat, [user_count]) of
                error -> 0;
                [C] -> C
              end,
@@ -815,7 +771,7 @@ handle_decoded_request(Iq) ->
                xmpp:make_error(Iq, xmpp:err_item_not_found());
              <<"urn:xmpp:avatar:metadata">> ->
                Group = jid:to_string(jid:remove_resource(To)),
-               case mod_groups_chats:get_info(Group, [parent]) of
+               case groups_groups:get_info(Group, [parent]) of
                  [<<"0">>] ->
                    mod_pubsub:iq_sm(NewIq);
                  [_] ->
@@ -835,7 +791,7 @@ ps_result_p2p_group(Iq) ->
   Server =GroupJID#jid.lserver,
   Group = jid:to_string(jid:remove_resource(GroupJID)),
   User = jid:to_string(jid:remove_resource(UserJID)),
-  [Users] = mod_groups_chats:get_info(Group, [p2pusers]),
+  [Users] = groups_groups:get_info(Group, [p2pusers]),
   {User2, _} = hd(lists:keydelete(User, 1, Users)),
   #groups_avatar{info = Info} = get_user_avatar(Server, User2, Group),
   Metadata = #avatar_meta{info = [Info]},

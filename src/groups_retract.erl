@@ -36,7 +36,6 @@
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 %% API
--export([get_version/2]).
 -export([rewrite_message/4, retract_message/4,
   retract_all_messages/3, retract_user_messages/4,
   send_rewrite_archive/5, get_version_reply/2]).

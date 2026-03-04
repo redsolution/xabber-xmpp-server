@@ -47,7 +47,7 @@ start(Host, _Opts) ->
   ejabberd_hooks:add(groups_pinned_changed, Host, ?MODULE, pinned_changed, 10),
   ejabberd_hooks:add(groups_user_changed, Host, ?MODULE, user_changed, 25),
   ejabberd_hooks:add(groups_presence_subscribed, Host, ?MODULE, user_join, 80),
-  ejabberd_hooks:add(groups_user_left, Host, ?MODULE, user_left, 60).
+  ejabberd_hooks:add(groups_user_left, Host, ?MODULE, user_left, 40).
 
 stop(Host) ->
   ejabberd_hooks:delete(groups_group_created, Host, ?MODULE, group_created, 10),
@@ -55,7 +55,7 @@ stop(Host) ->
   ejabberd_hooks:delete(groups_pinned_changed, Host, ?MODULE, pinned_changed, 10),
   ejabberd_hooks:delete(groups_update_user, Host, ?MODULE, user_changed, 25),
   ejabberd_hooks:delete(groups_presence_subscribed, Host, ?MODULE, user_join, 80),
-  ejabberd_hooks:delete(groups_user_left, Host, ?MODULE, user_left, 60).
+  ejabberd_hooks:delete(groups_user_left, Host, ?MODULE, user_left, 40).
 
 depends(_Host, _Opts) ->  [].
 
@@ -116,7 +116,7 @@ user_join(Acc, {Server, UserJID, Group}) ->
   system_message(join, Server, Group, User),
   Acc.
 
-%% API
+%% External API
 send_present(Group, Users, Present) ->
   [Privacy, Members] = groups_groups:get_info(Group,
     [privacy, user_count]),
@@ -127,7 +127,7 @@ send_present(Group, Users, Present) ->
     do_send_notice(GroupJID, Member, GroupEl)
                 end, Users).
 
-%% Internal
+%% Internal functions
 
 send_notice(Users, Group, Opts) ->
   GroupJID = jid:replace_resource(jid:from_string(Group), <<"Group">>),

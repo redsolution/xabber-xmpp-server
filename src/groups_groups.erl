@@ -36,16 +36,30 @@
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 %% API
--export([get_all_groups_info/1, numbers_of_groups/1 ]).
--export([get_info/1, db_get_info/2]).
--export([group_info_query/3, update_user_counter/1, is_anon/1, create_group_query/3, create_group/3, create_p2p_group/4,
-  get_info/2, group_details/3, group_details/4, get_name/4, get_avatar/4,
+-export([get_all_groups_info/1,
+  numbers_of_groups/1,
+  get_info/1,
+  group_info_query/3,
+  update_user_counter/1,
+  is_anon/1,
+  create_group_query/3,
+  create_group/3,
+  create_p2p_group/4,
+  get_info/2,
+  group_details/3,
+  group_details/4,
+  get_name/4,
+  get_avatar/4,
   group_is_active/1,
-  change_group_settings/4, change_group_info/4,
-  delete_group_query/3, delete_group/1, change_pinned_query/4, change_pinned/3,
+  change_group_settings/4,
+  change_group_info/4,
+  delete_group_query/3,
+  delete_group/1,
+  change_pinned_query/4,
+  change_pinned/3,
   delete_all_pinned/2]).
 
-% Presence unsubscribed hook
+% groups_user_left hook
 -export([maybe_delete_group/3, delete_user_p2p_groups/3]).
 
 %% Search
@@ -53,20 +67,23 @@
 
 -define(DEFAULT_STATUS, <<"Discussion">>).
 
+%% gen_mod
+
 start(Host, _Opts) ->
-  ejabberd_hooks:add(groups_user_left, Host, ?MODULE, maybe_delete_group, 35),
-  ejabberd_hooks:add(groups_user_left, Host, ?MODULE, delete_user_p2p_groups, 40).
+  ejabberd_hooks:add(groups_user_left, Host, ?MODULE, maybe_delete_group, 80),
+  ejabberd_hooks:add(groups_user_left, Host, ?MODULE, delete_user_p2p_groups, 80).
 
 stop(Host) ->
-  ejabberd_hooks:delete(groups_user_left, Host, ?MODULE, maybe_delete_group, 35),
-  ejabberd_hooks:delete(groups_user_left, Host, ?MODULE, delete_user_p2p_groups, 40).
+  ejabberd_hooks:delete(groups_user_left, Host, ?MODULE, maybe_delete_group, 80),
+  ejabberd_hooks:delete(groups_user_left, Host, ?MODULE, delete_user_p2p_groups, 80).
 
 depends(_Host, _Opts) ->  [].
 
 mod_options(_Host) -> [].
 
-%%External
+%% External API
 
+%% groups_user_left hook
 maybe_delete_group(Server, Group, _User)->
   Result =
     case get_info(Group, [parent]) of
@@ -92,17 +109,22 @@ maybe_delete_group(Server, Group, _User)->
   end,
   ok.
 
+%% groups_user_left hook
 delete_user_p2p_groups(Server,  ParentChat, User) ->
   P2PGroups = sql_get_user_p2p_groups(Server, ParentChat, User),
   lists:foreach(fun(G)->
     delete_group(G, true)
                 end, P2PGroups).
 
-
 is_anon(Group) ->
   case get_info(Group, [privacy]) of
-    [incognito] -> true;
-    _ -> false
+    error ->
+      #jid{lserver = LServer} = jid:from_string(Group),
+      is_anon(LServer, Group);
+    [incognito] ->
+      true;
+    _ ->
+      false
   end.
 
 group_is_active(Group) ->
@@ -288,19 +310,67 @@ delete_all_pinned(Server, Group) ->
 
 
 numbers_of_groups(LServer) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(count(*))d from groupchats where %(LServer)H")) of
-    {selected,[{Count}]} ->  Count;
-    _ -> 0
-  end.
+  sql_numbers_of_groups(LServer).
 
 update_user_counter(Group) ->
   {_LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
   Count = sql_get_user_count(LServer, Group),
   groups_sm:update_group_session_info(Group, #{user_count => Count}).
 
-%%Internal
+get_info(Group)->
+  {LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
+  case ejabberd_sm:get_user_info(LUser, LServer, <<"Group">>) of
+    offline -> error;
+    Info ->
+      Name = proplists:get_value(name, Info),
+      Desc = proplists:get_value(description, Info),
+      Privacy = proplists:get_value(privacy, Info),
+      Membership = proplists:get_value(membership, Info),
+      Index = proplists:get_value(index, Info),
+      Messages = proplists:get_value(messages, Info),
+      Contacts = proplists:get_value(contacts, Info),
+      Domains = proplists:get_value(domains, Info),
+      Parent = proplists:get_value(parent, Info),
+      State = proplists:get_value(gstate, Info),
+      Status = proplists:get_value(gstatus, Info),
+      {Name, Privacy, Index, Membership, Desc, Messages, Contacts,
+        Domains, Parent, State, Status}
+  end.
+
+group_details(Server, User, Group) ->
+  group_details(Server, User, Group, [{full, true}]).
+
+group_details(Server, User, Group, Opts) ->
+  Data = get_info(Group),
+  group_details(Data, Server, User, Group, Opts).
+
+get_name(_Group, _User, <<"0">>, Name) ->
+  Name;
+get_name(_Group, undefined, _Parent, Name) ->
+  Name;
+get_name(Group, User, _Parent, _Name)->
+  [Users] = get_info(Group, [p2pusers]),
+  {_, Name1} = hd(lists:keydelete(User, 1, Users)),
+  Name1.
+
+get_avatar(_Server, Group, _User, <<"0">>) ->
+  groups_avatars:get_group_avatar(Group);
+get_avatar(_Server, Group, undefined, _Parent) ->
+  groups_avatars:get_group_avatar(Group);
+get_avatar(Server, Group, User, _Parent)->
+  [Users] = get_info(Group, [p2pusers]),
+  {User2, _} = hd(lists:keydelete(User, 1, Users)),
+  groups_avatars:get_user_avatar(Server, User2, Group).
+
+%% Internal functions
+
+is_anon(Server, Group) ->
+  case db_get_info(Server, Group) of
+    {_, incognito, _, _, _, _, _, _, _, _, _} ->
+      true;
+    _ ->
+      false
+  end.
 
 check_create_query(Server, GroupEl) ->
   LocalPart = case GroupEl#groups_group.localpart of
@@ -345,7 +415,7 @@ create_p2p_cpg(LServer, Creator, InvitedID, ParentGroup) ->
   end.
 
 create_p2p_ciu(LServer, Creator, InvitedID, ParentGroup) ->
-  case groups_members:check_invited_to_p2p(LServer,
+  case groups_members:check_invite_to_p2p(LServer,
     ParentGroup, InvitedID) of
     false ->
       {error, not_allowed};
@@ -391,8 +461,8 @@ do_create_p2p_group(Server, Creator, Invited, ParentGroup) ->
 %%  Create group.
   LocalPart = create_localpart(),
   Group = <<LocalPart/binary,"@", Server/binary>>,
-  CreatorNick = groups_members:get_nick_in_chat(Server, Creator, ParentGroup),
-  InvitedNick = groups_members:get_nick_in_chat(Server, Invited, ParentGroup),
+  CreatorNick = groups_members:get_nick(Server, Creator, ParentGroup),
+  InvitedNick = groups_members:get_nick(Server, Invited, ParentGroup),
   GroupName = <<CreatorNick/binary," and ", InvitedNick/binary, " chat">>,
   P2PUsers = [{Creator, CreatorNick}, {Invited, InvitedNick}],
   Desc = <<"Private chat">>,
@@ -424,8 +494,8 @@ do_create_p2p_group(Server, Creator, Invited, ParentGroup) ->
   {ok, Created1}.
 
 send_invite_to_p2p(LServer, Creator, Invited, Group, ParentGroup) ->
-  CreatorNick = groups_members:get_nick_in_chat(LServer, Creator, ParentGroup),
-  InvitedNick = groups_members:get_nick_in_chat(LServer, Invited, ParentGroup),
+  CreatorNick = groups_members:get_nick(LServer, Creator, ParentGroup),
+  InvitedNick = groups_members:get_nick(LServer, Invited, ParentGroup),
   send_invite_to_p2p(LServer, Creator, Group, ParentGroup, Invited, CreatorNick,
     InvitedNick).
 
@@ -478,13 +548,6 @@ delete_group(Group, IsP2P) ->
   groups_avatars:delete_group_avatar_file(Group),
   ejabberd_hooks:run(groups_group_removed, LServer, [LServer,  Group]).
 
-group_details(Server, User, Group) ->
-  group_details(Server, User, Group, [{full, true}]).
-
-group_details(Server, User, Group, Opts) ->
-  Data = get_info(Group),
-  group_details(Data, Server, User, Group, Opts).
-
 group_details(error, _Server, _User, _Group, _Opts) ->
   error;
 group_details(Data, Server, User, Group, Opts) ->
@@ -525,48 +588,10 @@ group_details(Data, Server, User, Group, Opts) ->
     settings = Settings, pinned = Messages,
     present = Present, members = MembersCount}.
 
-get_info(Group)->
-  {LUser, LServer, _} = jid:tolower(jid:from_string(Group)),
-  case ejabberd_sm:get_user_info(LUser, LServer, <<"Group">>) of
-    offline -> error;
-    Info ->
-      Name = proplists:get_value(name, Info),
-      Desc = proplists:get_value(description, Info),
-      Privacy = proplists:get_value(privacy, Info),
-      Membership = proplists:get_value(membership, Info),
-      Index = proplists:get_value(index, Info),
-      Messages = proplists:get_value(messages, Info),
-      Contacts = proplists:get_value(contacts, Info),
-      Domains = proplists:get_value(domains, Info),
-      Parent = proplists:get_value(parent, Info),
-      State = proplists:get_value(gstate, Info),
-      Status = proplists:get_value(gstatus, Info),
-      {Name, Privacy, Index, Membership, Desc, Messages, Contacts,
-        Domains, Parent, State, Status}
-  end.
-
-get_name(_Group, _User, <<"0">>, Name) ->
-  Name;
-get_name(_Group, undefined, _Parent, Name) ->
-  Name;
-get_name(Group, User, _Parent, _Name)->
-  [Users] = get_info(Group, [p2pusers]),
-  {_, Name1} = hd(lists:keydelete(User, 1, Users)),
-  Name1.
-
-get_avatar(Server, Group, _User, <<"0">>) ->
-  groups_avatars:get_group_avatar(Server, Group);
-get_avatar(Server, Group, undefined, _Parent) ->
-  groups_avatars:get_group_avatar(Server, Group);
-get_avatar(Server, Group, User, _Parent)->
-  [Users] = get_info(Group, [p2pusers]),
-  {User2, _} = hd(lists:keydelete(User, 1, Users)),
-  groups_avatars:get_user_avatar(Server, User2, Group).
-
-change_group_info(Server, Group, #iq{type = get}) ->
+change_group_info(_Server, Group, #iq{type = get}) ->
   {Name, _, _, _, Desc, _, _,
     _, _, _, Status} = get_info(Group),
-  Avatar = groups_avatars:get_group_avatar(Server, Group),
+  Avatar = groups_avatars:get_group_avatar(Group),
   #groups_info{name = Name, description = Desc,
     status = Status, avatar = Avatar};
 change_group_info(Server, Group, Iq) ->
@@ -583,7 +608,7 @@ change_group_info(Server, Group, Iq) ->
 update_group_info(Server, Group, GroupInfo) ->
   #groups_info{name = NewName, description = NewDesc,
     status = NewStatus} = GroupInfo,
-  Avatar = groups_avatars:get_group_avatar(Server, Group),
+  Avatar = groups_avatars:get_group_avatar(Group),
   {CurName, _Privacy, Index, Mbrshp, CurDesc, _Msgs,
     Cs, Ds, _Parent, State, CurStatus} =
     db_get_info(Server, Group),
@@ -612,7 +637,7 @@ update_group_info(Server, Group, GroupInfo) ->
 
 change_group_avatar(Server, Group, NewAvatar, Iq) ->
   #groups_avatar{info = NewInfo, data = Data} = NewAvatar,
-  CurAvatar = groups_avatars:get_group_avatar(Server, Group),
+  CurAvatar = groups_avatars:get_group_avatar(Group),
   CurID = case CurAvatar of
             #groups_avatar{info = #avatar_info{id = V}} ->
               V;
@@ -670,7 +695,6 @@ change_group_settings(Server, Group, Settings) ->
   #groups_settings{index = Index, state = State,
     membership = Mbrshp, contacts = Cs,
     domains = Ds}.
-
 
 db_get_info(Server, Group) ->
   sql_get_info(Server, Group).
@@ -732,6 +756,15 @@ create_result_query(Group, Name, Desc, Privacy, Membership,
 set_value(Default, undefined) -> Default;
 set_value(_Default, Value) -> Value.
 
+%% SQL functions
+
+sql_numbers_of_groups(LServer) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(count(*))d from groupchats where %(LServer)H")) of
+    {selected,[{Count}]} ->  Count;
+    _ -> 0
+  end.
 
 sql_create_group(Server, JID, Privacy, Membership, Name, Index, Desc,
     Contacts, Domains, Status, State, Creator, ParentGroup, LocalPart) ->

@@ -83,7 +83,8 @@ handle_cast(#iq{type = result, sub_els = [#pubsub{}]} = Iq, State) ->
   process_pubsub(Iq),
   {noreply, State};
 handle_cast(#iq{type = result, sub_els = [#vcard_temp{}]} = Iq, State) ->
-  process_vcard(Iq),
+  %% deprecated
+%%  process_vcard(Iq),
   {noreply, State};
 handle_cast(#iq{type = get, sub_els = [#disco_info{}]} = Iq, State) ->
   process_disco_info(Iq),
@@ -423,9 +424,10 @@ process_pubsub(#iq{from = UserJID, to = GroupJID,
   end;
 process_pubsub(_) -> ok.
 
-process_vcard(#iq{sub_els = [Vcard]} = Iq ) ->
-  {Server, _Group, User} = host_group_user(Iq),
-  groups_avatars:handle_vcard(Server, User, Vcard).
+%% deprecated
+%%process_vcard(#iq{sub_els = [Vcard]} = Iq ) ->
+%%  {Server, _Group, User} = host_group_user(Iq),
+%%  groups_avatars:handle_vcard(Server, User, Vcard).
 
 process_disco_info(Iq) ->
   Group = jid:to_string(jid:remove_resource(Iq#iq.to)),

@@ -33,12 +33,13 @@
 
 %%API
 -export([get_invites/3,
-  revoke/3, revoke/4,
+  revoke/3,
+  revoke/4,
   invite_user/4
 ]).
 
 
-%% External
+%% External API
 
 invite_user(Server, Group, User, Invite) ->
   case invite_allowed(Server, Group, User) of
@@ -82,7 +83,7 @@ revoke(Server, Group, User, JIDS) ->
   end.
 
 
-%%Internal
+%% Internal functions
 
 invite_allowed(Server, Group, User) ->
   case groups_groups:get_info(Group, [parent]) of

@@ -38,11 +38,20 @@
 -export([start/2, stop/1, depends/2, mod_options/1]).
 -export([init/1, handle_call/3, handle_cast/2,
   handle_info/2, terminate/2, code_change/3]).
+
+
+%% Sub process
+-export([process_messages/0]).
+
 %% API
--export([process_messages/0, send_message/3]).
--export([modify/1, shift_references/2]).
--export([delete_all_sessions/1, get_present/1, select_sessions/2,
-  delete_all_user_sessions/2, change_present_state/3, set_displayed/4]).
+-export([
+  modify/1,
+  delete_all_sessions/1,
+  get_present/1,
+  select_sessions/2,
+  delete_all_user_sessions/2,
+  change_present_state/3,
+  set_displayed/4]).
 
 -record(state, {host :: binary()}).
 -record(participant_session, {group, username, server, resource, ts}).
@@ -131,13 +140,32 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %% API
 %%--------------------------------------------------------------------
-send_message(Message, [], GroupJID) ->
-  send_message_to_index(GroupJID, Message),
-  ok;
-send_message(Message, Users, GroupJID) ->
-  [User|RestUsers] = Users,
-  ejabberd_router:route(GroupJID, User, Message),
-  send_message(Message, RestUsers, GroupJID).
+
+modify(#message{to = To, from = From, body = Body} = Pkt) ->
+  GroupS = jid:to_string(jid:remove_resource(To)),
+  UserS = jid:to_string(jid:remove_resource(From)),
+  UserBareJID = jid:remove_resource(From),
+  UserCard = groups_members:user_card(UserS, GroupS),
+  Username = UserCard#groups_user.nickname,
+  Header = <<Username/binary, ":", "\n">>,
+  Length = misc:escaped_text_len(Header),
+  GroupEls = [#xmppreference{'begin' = 0, 'end' = Length,
+    type = <<"mutable">>}, #groups_x{author = UserCard}],
+  NewBody = [T#text{data = <<Header/binary, Text/binary >>}
+    || #text{data = Text} = T <- Body],
+  Els1 = clean_sub_els(xmpp:get_els(Pkt)),
+  Els2 = shift_references(Els1, Length),
+  Pkt#message{body = NewBody, sub_els = GroupEls ++ Els2,
+    to = UserBareJID}.
+
+set_displayed(GroupJID, UserJID, StanzaID, OriginID) ->
+  GroupS = jid:to_string(jid:remove_resource(GroupJID)),
+  UserS = jid:to_string(jid:remove_resource(UserJID)),
+  Displayed = #mark_displayed{id = OriginID,
+    sub_els = [#stanza_id{id = integer_to_binary(StanzaID), by = GroupJID}]},
+  mnesia:dirty_write(#groups_send_displayed{
+    group = GroupS, user = UserS,
+    stanza_id = StanzaID, displayed = Displayed}).
 
 %%--------------------------------------------------------------------
 %% Sub process.
@@ -154,6 +182,15 @@ process_messages() ->
   end.
 
 %% Internal functions
+
+send_message(Message, [], GroupJID) ->
+  send_message_to_index(GroupJID, Message),
+  ok;
+send_message(Message, Users, GroupJID) ->
+  [User|RestUsers] = Users,
+  ejabberd_router:route(GroupJID, User, Message),
+  send_message(Message, RestUsers, GroupJID).
+
 process_message(#message{from = From, to = From}) ->
   ok;
 process_message(#message{type = headline, body=[]} = Msg) ->
@@ -335,23 +372,6 @@ modify_and_send(#message{to = To, from = From} = Pkt) ->
   Users = AllUsers -- [UserBareJID],
   send_received_and_message(Msg, From, To, Users).
 
-modify(#message{to = To, from = From, body = Body} = Pkt) ->
-  GroupS = jid:to_string(jid:remove_resource(To)),
-  UserS = jid:to_string(jid:remove_resource(From)),
-  UserBareJID = jid:remove_resource(From),
-  UserCard = groups_members:user_card(UserS, GroupS),
-  Username = UserCard#groups_user.nickname,
-  Header = <<Username/binary, ":", "\n">>,
-  Length = misc:escaped_text_len(Header),
-  GroupEls = [#xmppreference{'begin' = 0, 'end' = Length,
-    type = <<"mutable">>}, #groups_x{author = UserCard}],
-  NewBody = [T#text{data = <<Header/binary, Text/binary >>}
-    || #text{data = Text} = T <- Body],
-  Els1 = clean_sub_els(xmpp:get_els(Pkt)),
-  Els2 = shift_references(Els1, Length),
-  Pkt#message{body = NewBody, sub_els = GroupEls ++ Els2,
-    to = UserBareJID}.
-
 send_received_and_message(Pkt, UserJID, GroupJID, Users) ->
   {Pkt2, _State2} = mod_mam:user_send_packet({Pkt,#{jid => GroupJID}}),
   send_received(Pkt2, UserJID, GroupJID),
@@ -446,15 +466,6 @@ send_received(Pkt, UserJID, GroupJID) ->
     type = headline,
     sub_els = [Received]},
   ejabberd_router:route(Confirmation).
-
-set_displayed(GroupJID, UserJID, StanzaID, OriginID) ->
-  GroupS = jid:to_string(jid:remove_resource(GroupJID)),
-  UserS = jid:to_string(jid:remove_resource(UserJID)),
-  Displayed = #mark_displayed{id = OriginID,
-    sub_els = [#stanza_id{id = integer_to_binary(StanzaID), by = GroupJID}]},
-  mnesia:dirty_write(#groups_send_displayed{
-    group = GroupS, user = UserS,
-    stanza_id = StanzaID, displayed = Displayed}).
 
 check_displayed(GroupJID, UserJID, StanzaID) ->
   Group = jid:to_string(jid:remove_resource(GroupJID)),

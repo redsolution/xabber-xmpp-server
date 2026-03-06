@@ -5,7 +5,7 @@
 %%% Created : 06 Oct 2025 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2026   Redsolution
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -71,7 +71,7 @@ process_iq(#iq{from = From, to = To} = Iq) ->
     group ->
       Group = jid:to_string(jid:remove_resource(To)),
       User = jid:to_string(jid:remove_resource(From)),
-      case mod_groups_users:check_if_exist(GServer, Group, User) of
+      case groups_members:check_if_exist(GServer, Group, User) of
         true ->
           Result = ejabberd_hooks:run_fold(groups_permissions_query, GServer, [], [Iq]),
           make_result(Result, Iq);

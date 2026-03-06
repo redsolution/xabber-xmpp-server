@@ -166,15 +166,12 @@ send_received(
 get_stanza_id_by_origin_id(LServer, OriginID, LUser) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(timestamp)d from archive "
+    ?SQL("select @(COALESCE(max(timestamp),0))d from archive "
     " where username=%(LUser)s and origin_id = %(OriginID)s "
     " and %(LServer)H")) of
-    {selected,[<<>>]} ->
-      0;
-    {selected,[{StanzaID}]} ->
-      StanzaID;
-    _ ->
-      0
+    {selected,[]} -> 0;
+    {selected, [{StanzaID}]} -> StanzaID;
+    _ -> 0
   end.
 
 get_message(LServer, LUser, OriginID) ->

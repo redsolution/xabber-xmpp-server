@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_retract.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose : Retract messages in group chats
-%%% Created : 06 Nov 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : groups_retract.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Purpose : Message retraction in Groups.
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,8 +23,8 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_retract).
--author('andrey.gagarin@redsolution.com').
+-module(groups_retract).
+-author('ilya.kalashnikov@redsolution.com').
 -compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
 
@@ -32,12 +32,12 @@
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
 
+%% gen_mod
 -export([start/2, stop/1, depends/2, mod_options/1]).
 
 %% API
--export([get_version/2]).
--export([rewrite_message/3, retract_message/3,
-  retract_all_messages/2, retract_user_messages/3,
+-export([rewrite_message/4, retract_message/4,
+  retract_all_messages/3, retract_user_messages/4,
   send_rewrite_archive/5, get_version_reply/2]).
 
 start(_Host, _Opts) ->
@@ -52,35 +52,24 @@ mod_options(_Opts) -> [].
 
 %% get version
 
-get_version_reply(UserJID, GroupJID) ->
-  Group = jid:to_string(jid:remove_resource(GroupJID)),
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  Server = GroupJID#jid.lserver,
-  case check_permissions(user_exist, Server, User, Group, []) of
-    ok ->
-      Ver = get_version(Server, Group),
-      {ok, #retract_query{version=Ver}};
-    Err ->
-      Err
-  end.
+get_version_reply(Server, Group) ->
+  Ver = get_version(Server, Group),
+  #retract_query{version=Ver}.
 
 %% rewrite message
 
-rewrite_message(UserJID, GroupJID, #replace{id = ID, 
+rewrite_message(Server, Group, User, #replace{id = ID,
   replace_message = XRM}) ->
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  Group = jid:to_string(jid:remove_resource(GroupJID)),
-  Server = GroupJID#jid.lserver,
   case check_permissions(rewrite, Server, User, Group, [ID]) of
     ok ->
       Ver = get_new_version(Server, Group),
       Notify1 = #replace{id = ID,
         replace_message = XRM,
         version = Ver,
-        conversation = jid:remove_resource(GroupJID),
+        conversation = jid:from_string(Group),
         type = ?NS_GROUPS,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-      Notify2 = rewrite_message(Server, Group, User, Notify1),
+      Notify2 = do_rewrite_message(Server, Group, User, Notify1),
       store_event(Server, Group, Notify2, Ver),
       send_notifications(Server, Group, Notify2),
       ok;
@@ -88,70 +77,65 @@ rewrite_message(UserJID, GroupJID, #replace{id = ID,
       Err
   end.
 
-rewrite_message(Server, Group, UserS, Replace) ->
-  #replace{id = ID,
-    replace_message = ReplaceMsg} = Replace,
-  #replace_message{body = Text,
-    sub_els = SubEls} = ReplaceMsg,
-  NewEls = mod_retract:filter_new_els(SubEls),
+do_rewrite_message(Server, Group, UserS, Replace) ->
+  #replace{id = ID, replace_message = ReplaceMsg} = Replace,
+  #replace_message{body = Text, sub_els = SubEls} = ReplaceMsg,
   GroupJID = jid:from_string(Group),
-  Mod = gen_mod:db_mod(Server, 'mod_mam'),
-  OldMsg = case Mod:select(Server, GroupJID, GroupJID,[{'ids',[ID]}],
-    undefined, chat) of
-         {[{_, _, Forwarded}], true, 1} ->
-           hd(Forwarded#forwarded.sub_els);
-         Err ->
-           %%  message not found in archive
-           ?ERROR_MSG("The message is gone!!! group: ~p, id: ~p.\n ~p",
-             [Group, ID, Err]),
-           error
-       end,
-  ActualCard = mod_groups_users:form_user_card(UserS, Group),
-  UserChoose = mod_groups_users:choose_name(ActualCard),
-  Username = <<UserChoose/binary, ":", "\n">>,
-  Length = misc:escaped_text_len(Username),
-  NewX = #groups_x{xmlns = ?NS_GROUPS,
-    sub_els = [#xmppreference{type = <<"mutable">>, sub_els = [ActualCard],
-      'begin' = 0, 'end' = Length}]},
-  NewElsShifted = mod_groups_messages:shift_references(NewEls, Length),
-  Els2 = [#origin_id{id = OldMsg#message.id}] ++ [NewX] ++ NewElsShifted,
-  NewText = <<Username/binary, Text/binary >>,
-  NewBody = [#text{lang = <<>>,data = NewText}],
+  UserJID = jid:from_string(UserS),
+  Msg = #message{from = UserJID, to = GroupJID,
+    body = [#text{data = Text}], sub_els = SubEls},
+  GrMsg = groups_messages:modify(Msg),
+  OldMsg = get_msg_from_archive(Server, GroupJID, ID),
   Replaced = #replaced{stamp = erlang:timestamp()},
-  NewMsg = OldMsg#message{sub_els = [Replaced|Els2], body = NewBody},
-  XML = fxml:element_to_binary(xmpp:encode(NewMsg)),
-  GUser = GroupJID#jid.luser,
-  ?SQL_UPSERT(
-    Server,
-    "archive",
-    ["!timestamp=%(ID)d",
-      "!username=%(GUser)s",
-      "!server_host=%(Server)s",
-      "xml=%(XML)s",
-      "txt=%(NewText)s"]),
+  NewEls = [#origin_id{id = OldMsg#message.id} | GrMsg#message.sub_els],
+  NewMsg = OldMsg#message{
+    body = GrMsg#message.body,
+    sub_els = [Replaced| NewEls]},
+  change_msg_in_archive(Server, Group, ID, NewMsg),
   Time = #delivery_time{by = GroupJID,
     stamp = misc:usec_to_now(binary_to_integer(ID))},
+  [#text{data = Text1}]  = GrMsg#message.body,
   NewReplaceMsg = ReplaceMsg#replace_message{
     replaced = Replaced,
     stanza_id = #stanza_id{id = ID, by = GroupJID},
-    body = NewText, sub_els = Els2 ++ [Time]},
+    body = Text1, sub_els = [Time | NewEls]},
   Replace#replace{replace_message = NewReplaceMsg}.
+
+get_msg_from_archive(Server, GroupJID, ID) ->
+  Mod = gen_mod:db_mod(Server, 'mod_mam'),
+  case Mod:select(Server, GroupJID,
+    GroupJID,[{'ids',[ID]}], undefined, chat) of
+    {[{_, _, Forwarded}], true, 1} ->
+      hd(Forwarded#forwarded.sub_els);
+    Err ->
+      %%  message not found in archive
+      ?ERROR_MSG("The message is gone!!! group: ~p, id: ~p.\n ~p",
+        [GroupJID, ID, Err]),
+      error
+  end.
+
+change_msg_in_archive(Server, Group, ID, Msg) ->
+  MsgE = xmpp:encode(Msg),
+  {GUser, GHost, _} = jid:tolower(jid:from_string(Group)),
+  XML = fxml:element_to_binary(MsgE),
+  Text = fxml:get_subtag_cdata(MsgE, <<"body">>),
+  ejabberd_sql:sql_query(
+    Server,
+    ?SQL("update archive set xml=%(XML)s, txt=%(Text)s"
+    " where timestamp=%(ID)d and username=%(GUser)s and %(GHost)H")).
 
 %% retract all messages
 
-retract_all_messages(UserJID, GroupJID) ->
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  Group = jid:to_string(jid:remove_resource(GroupJID)),
-  Server = GroupJID#jid.lserver,
+retract_all_messages(Server, Group, User) ->
   case check_permissions(retract_all, Server, User, Group, []) of
     ok ->
       Ver = get_new_version(Server, Group),
       Notify = #retract_all{symmetric = true,
-        conversation = jid:remove_resource(GroupJID),
+        conversation = jid:from_string(Group),
         type = ?NS_GROUPS, version = Ver,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY},
       delete_messages_from_archive(Group),
-      check_if_message_pinned(Server, Group, 0),
+      delete_pinned_message(Server, Group, all),
       store_event(Server, Group, Notify, Ver),
       send_notifications(Server, Group, Notify),
       ok;
@@ -161,21 +145,17 @@ retract_all_messages(UserJID, GroupJID) ->
 
 %% retract user messages
 
-retract_user_messages( UserJID, GroupJID, Retract) ->
-  #retract_user{id = UserID} = Retract,
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  Group = jid:to_string(jid:remove_resource(GroupJID)),
-  Server = GroupJID#jid.lserver,
+retract_user_messages(Server, Group, User, UserID) ->
   case check_permissions(retract_user, Server, User,
     Group, [UserID]) of
     {ok, Peer} ->
       Ver = get_new_version(Server, Group),
       Notify =  #retract_user{id = UserID,
         symmetric = true, type = ?NS_GROUPS,
-        conversation = jid:remove_resource(GroupJID),
+        conversation = jid:from_string(Group),
         version = Ver,
         xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-      check_if_message_pinned(Server, Group, {user, Peer}),
+      delete_pinned_message(Server, Group, {user, Peer}),
       delete_user_messages_from_archive(Group, Peer),
       store_event(Server, Group, Notify, Ver),
       send_notifications(Server, Group, Notify),
@@ -186,28 +166,24 @@ retract_user_messages( UserJID, GroupJID, Retract) ->
 
 %% retract message
 
-retract_message(UserJID, GroupJID, Retract) ->
-  #retract_message{id = ID} = Retract,
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  Group = jid:to_string(jid:remove_resource(GroupJID)),
-  Server = GroupJID#jid.lserver,
+retract_message(Server, Group, User, ID) ->
   case check_permissions(retract, Server, User, Group, [ID]) of
     ok ->
       Notify = #retract_message{id = ID,
         type = ?NS_GROUPS, symmetric = true,
-        conversation = jid:remove_resource(GroupJID),
+        conversation = jid:from_string(Group),
         xmlns = ?NS_XABBER_REWRITE_NOTIFY},
-      retract_message(Server, Group, ID, Notify);
+      do_retract_message(Server, Group, ID, Notify);
     Err ->
       Err
   end.
 
-retract_message(Server, Group, ID, Notify)->
+do_retract_message(Server, Group, ID, Notify)->
   case delete_message_from_archive(Server, Group, ID) of
     ok ->
       Ver = get_new_version(Server, Group),
       Notify1 = Notify#retract_message{version = Ver},
-      check_if_message_pinned(Server, Group, ID),
+      delete_pinned_message(Server, Group, ID),
       store_event(Server, Group, Notify1, Ver),
       send_notifications(Server, Group, Notify1),
       ok;
@@ -218,25 +194,19 @@ retract_message(Server, Group, ID, Notify)->
 %% rewrite archive
 
 send_rewrite_archive(Server, UserJID, Group, Ver, Less) ->
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  case check_permissions(user_exist, Server, User, Group, []) of
-    ok ->
-      {Less1, Ver1}= check_query_params(Less, Ver),
-      Count = get_count_events(Server, Group, Ver1),
-      CurrentVer = get_version(Server, Group),
-      if
-        Count > Less1 ->
-          send_invalidate(UserJID, Group, CurrentVer);
-        true ->
-          send_rewrite_archive(Server, UserJID, Group, Ver1)
-      end,
-      {ok, CurrentVer};
-    Err ->
-      Err
-  end.
+  {Less1, Ver1} = check_query_params(Less, Ver),
+  Count = get_count_events(Server, Group, Ver1),
+  CurrentVer = get_version(Server, Group),
+  if
+    Count > Less1 ->
+      send_invalidate(UserJID, Group, CurrentVer);
+    true ->
+      send_rewrite_archive(Server, UserJID, Group, Ver1)
+  end,
+  CurrentVer.
 
 send_rewrite_archive(Server, UserJID, Group, Ver)->
-  QueryElements = get_query(Server, Group, Ver),
+  QueryElements = get_rewrite_archive(Server, Group, Ver),
   GroupJID = jid:from_string(Group),
   lists:foreach(fun(El) ->
     try xmpp:decode(fxml_stream:parse_element(El)) of
@@ -264,28 +234,22 @@ send_invalidate(UserJID, Group, Ver) ->
 
 %% Internal functions
 
-check_permissions(Action, Server, User, Group, Args)->
-  case mod_groups_users:check_if_exist(Server, Group, User) of
-    true -> check_special_perms(Action, Server, User, Group, Args);
-    _ -> {error, not_allowed}
-  end.
-
-check_special_perms(rewrite, Server, User, Group, [ID]) ->
-  case get_owner_of_message(Server, Group, ID) of
+check_permissions(rewrite, Server, User, Group, [ID]) ->
+  case get_message_author(Server, Group, ID) of
     User -> ok;
     _ ->
       {error, not_allowed}
   end;
-check_special_perms(retract, Server, User, Group, [ID]) ->
-  case get_owner_of_message(Server, Group, ID) of
+check_permissions(retract, Server, User, Group, [ID]) ->
+  case get_message_author(Server, Group, ID) of
     User -> ok;
     _ ->
       is_permitted(Server, User, Group)
   end;
-check_special_perms(retract_all, Server, User, Group, _) ->
+check_permissions(retract_all, Server, User, Group, _) ->
   is_permitted(Server, User, Group);
-check_special_perms(retract_user, Server, User, Group, [UserID]) ->
-  case mod_groups_users:get_user_by_id(Server, Group, UserID) of
+check_permissions(retract_user, Server, User, Group, [UserID]) ->
+  case groups_members:get_user_by_id(Server, Group, UserID) of
     User -> {ok, User};
     Val ->
       case is_permitted(Server, User, Group) of
@@ -293,11 +257,11 @@ check_special_perms(retract_user, Server, User, Group, [UserID]) ->
         Err -> Err
       end
   end;
-check_special_perms(user_exist, _, _, _, _) ->
+check_permissions(user_exist, _, _, _, _) ->
   ok.
 
 is_permitted(Server, User, Group) ->
-  case mod_groups_users:is_permitted(Server, Group, User,
+  case groups_members:is_permitted(Server, Group, User,
     delete_messages, false, []) of
     true -> ok;
     _ -> {error, not_allowed}
@@ -305,7 +269,7 @@ is_permitted(Server, User, Group) ->
 
 store_event(Server, Group, Element, Ver) ->
   XML = fxml:element_to_binary(xmpp:encode(Element)),
-  insert_event(Server, Group, XML, Ver).
+  sql_insert_event(Server, Group, XML, Ver).
 
 send_notifications(Server, Group, Element) ->
   M = #message{type = headline, id = randoms:get_string(),
@@ -315,64 +279,38 @@ send_notifications(Server, Group, Element) ->
 notify(Server, Group, Stanza) ->
   FromBare = jid:from_string(Group),
   From = jid:replace_resource(FromBare,<<"Group">>),
-  UserList = mod_groups_users:users_to_send(Server, Group),
+  UserList = groups_members:users_to_send(Server, Group),
   lists:foreach(fun(To) ->
     ejabberd_router:route(From, To, Stanza) end, UserList).
 
-get_owner_of_message(Server, Group, ID) ->
-  GroupJID = jid:from_string(Group),
-  User = GroupJID#jid.luser,
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("select @(bare_peer)s from archive where username=%(User)s "
-    " and timestamp=%(ID)d and %(Server)H")) of
-    {selected,[<<>>]} ->
-      [];
-    {selected,[{Query}]} ->
-      Query;
-    _ ->
-      []
-  end.
-
-check_if_message_pinned(Server, Group, ID) ->
-  case delete_pinned_message(Server, Group, ID) of
-    ok ->
-      groups_sm:update_group_session_info(Group,#{message => 0}),
-      Users = mod_groups_users:users_to_send(Server, Group),
-      mod_groups_presence:send_presence(Users, Group, available, [present]);
-    _ -> ok
-  end.
+get_message_author(Server, Group, ID) ->
+  sql_message_author(Server, Group, ID).
 
 delete_pinned_message(Server, Group, {user, User}) ->
-  GroupJID = jid:from_string(Group),
-  GUser = GroupJID#jid.luser,
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("update groupchats set message = 0 where jid=%(Group)s "
-    " and message IN (select @(timestamp)s from archive"
-    " where username=%(GUser)s and bare_peer=%(User)s "
-    " and %(Server)H);")) of
-    {updated, 1} -> ok;
-    {updated, 0} -> {error, not_found};
-    _ -> {error, db_error}
-  end;
-delete_pinned_message(Server, Group, 0) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("update groupchats set message = 0 "
-    " where jid=%(Group)s")) of
-    {updated, 1} -> ok;
-    {updated, 0} -> {error, not_found};
-    _ -> {error, db_error}
-  end;
+  [Pinned]= groups_groups:get_info(Group, [messages]),
+  IDs = [ID || #groups_pinned_message{id = ID}
+    <- Pinned#groups_pinned.messages],
+  MsgOwners = lists:map(fun(SID) ->
+    {get_message_author(Server, Group, SID), SID}
+                        end, IDs),
+  lists:foreach(fun({Owner, SID}) ->
+    case Owner of
+      User ->
+        groups_groups:change_pinned(Server, Group,
+          #groups_pinned_message{id = SID, status = remove});
+      _ ->
+        ok
+    end end, MsgOwners);
+delete_pinned_message(Server, Group, all) ->
+  groups_groups:delete_all_pinned(Server, Group);
 delete_pinned_message(Server, Group, ID) ->
-  case ejabberd_sql:sql_query(
-    Server,
-    ?SQL("update groupchats set message = 0 "
-    " where jid=%(Group)s and message=%(ID)d")) of
-    {updated, 1} -> ok;
-    {updated, 0} -> {error, not_found};
-    _ -> {error, db_error}
+  [#groups_pinned{messages = Pinned}] =
+    groups_groups:get_info(Group, [messages]),
+  case lists:keyfind(ID, #groups_pinned_message.id, Pinned) of
+    false -> ok;
+    Msg ->
+      groups_groups:change_pinned(Server, Group,
+        Msg#groups_pinned_message{status = remove})
   end.
 
 -spec delete_user_messages_from_archive(binary(), binary()) ->
@@ -414,15 +352,38 @@ check_query_params(Less, Ver) ->
   {Less1, Ver1}.
 
 get_count_events(Server, Group, Version) ->
+  sql_count_events(Server, Group, Version).
+
+get_rewrite_archive(Server, Group, Version) ->
+  sql_rewrite_archive(Server, Group, Version).
+
+get_version(Server, Group) ->
+  sql_get_version(Server, Group).
+
+get_new_version(Server, Group) ->
+  get_version(Server, Group) + 1.
+
+sql_message_author(Server, Group, ID) ->
+  GroupJID = jid:from_string(Group),
+  GUser = GroupJID#jid.luser,
+  case ejabberd_sql:sql_query(
+    Server,
+    ?SQL("select @(bare_peer)s from archive where username=%(GUser)s "
+    " and timestamp=%(ID)d and %(Server)H")) of
+    {selected,[{User}]} -> User;
+    _ -> error
+  end.
+
+sql_count_events(Server, Group, Version) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(count(*))d from groupchat_retract"
     " where chatgroup=%(Group)s and version > %(Version)d")) of
-    {selected, [{Count}]} ->
-      Count
+    {selected, [{Count}]} -> Count;
+    _ -> 0
   end.
 
-get_query(Server, Group, Version) ->
+sql_rewrite_archive(Server, Group, Version) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select @(xml)s from groupchat_retract where chatgroup=%(Group)s "
@@ -431,24 +392,19 @@ get_query(Server, Group, Version) ->
     _ -> []
   end.
 
-get_version(Server, Group) ->
+sql_get_version(Server, Group) ->
   case ejabberd_sql:sql_query(
     Server,
     ?SQL("select coalesce(max(@(version)d),0) from groupchat_retract "
     " where chatgroup = %(Group)s")) of
-    {selected,[{Version}]} ->
-      Version;
-    {selected,_} ->
-      0;
+    {selected,[{Version}]} -> Version;
+    {selected,_} -> 0;
     Err ->
       ?ERROR_MSG("failed to get retract version: ~p", [Err]),
       0
   end.
 
-get_new_version(Server, Group) ->
-  get_version(Server, Group) + 1.
-
-insert_event(Server, Group, Txt, Version) ->
+sql_insert_event(Server, Group, Txt, Version) ->
   ejabberd_sql:sql_query(
     Server,
     ?SQL_INSERT(

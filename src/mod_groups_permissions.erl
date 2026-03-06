@@ -5,7 +5,7 @@
 %%% Created : 06 Oct 2025 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2026   Redsolution
+%%% xabberserver, Copyright (C) 2007-2026   redsolution
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -36,7 +36,7 @@
 -export([start/2, stop/1, mod_options/1, depends/2, reload/3, mod_opt_type/1]).
 
 %% Hooks
--export([copy_newbies_perms/2, user_left/2, kick_users/3,
+-export([copy_newbies_perms/2, user_left/3,
   add_owner/4, group_removed/2, is_permitted/5, process_iq/2]).
 
 %% Async funcs
@@ -98,27 +98,25 @@ register_hooks(Host) ->
   ejabberd_hooks:add(groups_group_removed, Host, ?MODULE, group_removed, 80),
   ejabberd_hooks:add(groups_permissions_query, Host, ?MODULE, process_iq, 10),
   ejabberd_hooks:add(groups_add_owner, Host, ?MODULE, add_owner, 50),
-  ejabberd_hooks:add(groupchat_users_kicked, Host, ?MODULE, kick_users, 80),
-  ejabberd_hooks:add(groupchat_presence_unsubscribed_hook, Host, ?MODULE, user_left, 30),
-  ejabberd_hooks:add(groupchat_presence_subscribed_hook, Host, ?MODULE, copy_newbies_perms, 40).
+  ejabberd_hooks:add(groups_user_left, Host, ?MODULE, user_left, 80),
+  ejabberd_hooks:add(groups_presence_subscribed, Host, ?MODULE, copy_newbies_perms, 40).
 
 unregister_hooks(Host) ->
   ejabberd_hooks:delete(groups_is_permited, Host, ?MODULE, is_permitted, 10),
   ejabberd_hooks:delete(groups_group_removed, Host, ?MODULE, group_removed, 80),
   ejabberd_hooks:delete(groups_permissions_query, Host, ?MODULE, process_iq, 10),
   ejabberd_hooks:delete(groups_add_owner, Host, ?MODULE, add_owner, 50),
-  ejabberd_hooks:delete(groupchat_users_kicked, Host, ?MODULE, kick_users, 80),
-  ejabberd_hooks:delete(groupchat_presence_unsubscribed_hook, Host, ?MODULE, user_left, 30),
-  ejabberd_hooks:delete(groupchat_presence_subscribed_hook, Host, ?MODULE, copy_newbies_perms, 40).
+  ejabberd_hooks:delete(groups_user_left, Host, ?MODULE, user_left, 30),
+  ejabberd_hooks:delete(groups_presence_subscribed, Host, ?MODULE, copy_newbies_perms, 40).
 
 add_owner(Server, Group, Requester, Member) ->
   Perm = lists:keyfind(<<"owner">>, #perms_permission.name, defaults()),
   Perms = [Perm#perms_permission{status = true}],
   add_personal_perms(Server, Group, Requester, Member, Perms).
 
-copy_newbies_perms(Acc, {Server, UserJID, Group, _Lang}) ->
+copy_newbies_perms(Acc, {Server, UserJID, Group}) ->
   User = jid:to_string(jid:remove_resource(UserJID)),
-  case mod_groups_users:is_owner(Server, Group, User) of
+  case groups_members:is_owner(Server, Group, User) of
     true -> ok;
     _ ->
       Perms = newbies_perms(Server, Group),
@@ -126,14 +124,8 @@ copy_newbies_perms(Acc, {Server, UserJID, Group, _Lang}) ->
   end,
   Acc.
 
-user_left(Acc,{Server, User, Group, _X, _Lang})->
-  delete_admin_perms(Server, Group, User),
-  Acc.
-
-kick_users(Server, Group, Users)->
-  lists:foreach(fun(User) ->
-    delete_admin_perms(Server, Group, User)
-                end, Users).
+user_left(Server, Group, User)->
+  delete_admin_perms(Server, Group, User).
 
 group_removed(Server, Group) ->
   delete_default_perms(Server, Group),
@@ -164,10 +156,12 @@ is_permitted(_, kick_user, Group, User, _Atts)->
   is_permitted(<<"block-users">>, User, Group);
 is_permitted(_, block_user, Group, User, _Atts)->
   is_permitted(<<"block-users">>, User, Group);
-is_permitted(_,change_group_settings, Group, User, _Atts)->
+is_permitted(_, change_group_settings, Group, User, _Atts)->
   is_permitted(<<"change-group-settings">>, User, Group);
-is_permitted(_,change_group_info, Group, User, _Atts)->
+is_permitted(_, change_group_info, Group, User, _Atts)->
   is_permitted(<<"change-group-info">>, User, Group);
+is_permitted(_, pin_messages, Group, User, _Atts)->
+  is_permitted(<<"pin-messages">>, User, Group);
 is_permitted(Acc, _Action, _Group, _User, _Atts)->
   Acc.
 
@@ -367,7 +361,7 @@ set_perms_query(Group, Requester, UserId, Perms)->
   Server = Group#jid.lserver,
   GroupS = jid:to_string(jid:remove_resource(Group)),
   RequesterS = jid:to_string(jid:remove_resource(Requester)),
-  case mod_groups_users:get_user_by_id(Server, GroupS, UserId) of
+  case groups_members:get_user_by_id(Server, GroupS, UserId) of
     none -> {error, not_found};
     RequesterS -> {error, not_allowed};
     Member ->
@@ -417,7 +411,7 @@ get_perms_query(Group, Requester, UserId)->
   Server = Group#jid.lserver,
   GroupS = jid:to_string(jid:remove_resource(Group)),
   RequesterS = jid:to_string(jid:remove_resource(Requester)),
-  case mod_groups_users:get_user_by_id(Server, GroupS, UserId) of
+  case groups_members:get_user_by_id(Server, GroupS, UserId) of
     none -> {error, not_found};
     Member ->
       get_perms_query(Server, GroupS, RequesterS, Member)
@@ -435,7 +429,7 @@ perms_delete(Group, Requester, UserId) when is_binary(UserId) ->
   Server = Group#jid.lserver,
   GroupS = jid:to_string(jid:remove_resource(Group)),
   RequesterS = jid:to_string(jid:remove_resource(Requester)),
-  case mod_groups_users:get_user_by_id(Server, GroupS, UserId) of
+  case groups_members:get_user_by_id(Server, GroupS, UserId) of
     none -> {error, not_found};
     RequesterS -> {error, not_allowed};
     Member ->
@@ -825,7 +819,7 @@ update_user(Server, Group, _IssuedBy, Member, {_, WasAdmin})->
       delete_admin_perms(Server, Group, Member);
     true -> ok
   end,
-  mod_groups_users:update_user_status(Server, Member, Group, Role),
+  groups_members:update_user_status(Server, Member, Group, Role),
   ok.
 
 remove_expired_perms(_Server, _Group, _Member, _ActivePerms, []) -> ok;
@@ -835,7 +829,7 @@ remove_expired_perms(Server, Group, Member, ActivePerms, Expired) ->
   {RoleA, _} = calculate_perms([], ActivePerms),
   case {RoleE, RoleA} of
     {<<"admin">>, <<"member">>} ->
-      mod_groups_users:update_user_status(Server, Member, Group, RoleA);
+      groups_members:update_user_status(Server, Member, Group, RoleA);
     _ -> ok
   end.
 

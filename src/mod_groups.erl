@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
 %%% File    : mod_groups.erl
 %%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
-%%% Purpose : main module of groups
+%%% Purpose : Main module of Groups.
 %%% Created : 22 Jan 2022 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2022   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,8 +23,9 @@
 %%%
 %%%----------------------------------------------------------------------
 -module(mod_groups).
--author("ilya.kalashnikov@redsolution.com").
+-author('ilya.kalashnikov@redsolution.com').
 -behavior(gen_mod).
+
 -include("logger.hrl").
 
 %% gen_mod
@@ -34,18 +35,15 @@
 -export([get_option/2]).
 
 -define(SUBMODULES, [
-  groups_access,
-  mod_groups_block,
-  mod_groups_chats,
-  mod_groups_discovery,
-  mod_groups_invites,
-  mod_groups_iq_handler,
-  mod_groups_messages,
-  mod_groups_presence,
-  mod_groups_retract,
-  mod_groups_system_message,
-  mod_groups_users,
-  mod_groups_vcard]).
+  groups_groups,
+  groups_discovery,
+  groups_iq_handler,
+  groups_messages,
+  groups_presences,
+  groups_retract,
+  groups_members,
+  groups_avatars,
+  groups_notifications]).
 
 
 %% gen_mod
@@ -65,7 +63,8 @@ mod_options(_Host) ->
   [
 %%    {session_lifetime, 45},
     {remove_empty, true},
-    {global_indexs, []}
+    {global_indexs, []},
+    {avatar_max_size, 524288}
   ].
 
 %%mod_opt_type(session_lifetime) ->
@@ -73,9 +72,10 @@ mod_options(_Host) ->
 
 mod_opt_type(remove_empty) ->
   fun (B) when is_boolean(B) -> B end;
-
 mod_opt_type(global_indexs) ->
-  fun (L) -> lists:map(fun iolist_to_binary/1, L) end.
+  fun (L) -> lists:map(fun iolist_to_binary/1, L) end;
+mod_opt_type(avatar_max_size) ->
+  fun (A) when is_integer(A) andalso A >= 0 -> A end.
 
 %% Internal
 start_module(Host, Module) ->

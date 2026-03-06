@@ -504,9 +504,7 @@ mark_stored_msg(#message{meta = #{stanza_id := ID, delivery_time := TimeStamp}} 
 
 -spec identify_conversation_type(stanza(), atom()) -> stanza().
 identify_conversation_type(Pkt, Dir) ->
-  IsGroup = (Dir == recv andalso (xmpp:has_subtag(Pkt, #groups_x{
-    xmlns = ?NS_GROUPS_SYSTEM_MESSAGE}) orelse
-    xmpp:has_subtag(Pkt, #groups_x{xmlns = ?NS_GROUPS}))),
+  IsGroup = Dir == recv andalso xmpp:has_subtag(Pkt, #groups_x{}),
   Peer  = case Dir of
             recv -> xmpp:get_from(Pkt);
             _ -> xmpp:get_to(Pkt)
@@ -566,7 +564,7 @@ pre_process_iq_v0_2(#iq{
 	to = #jid{luser = LUser, lserver = LServer},
 	type = set, sub_els = [#mam_query{}]} = IQ) ->
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
-		group -> mod_groups_iq_handler:make_action(IQ);
+		group -> groups_iq_handler:make_action(IQ);
 		_ -> process_iq_v0_2(IQ)
 	end;
 pre_process_iq_v0_2(IQ) ->
@@ -577,7 +575,7 @@ pre_process_iq_v0_3(#iq{
 	type = set, sub_els = [#mam_query{}]} = IQ) ->
 	case mod_xabber_entity:get_entity_type(LUser,LServer) of
 		group ->
-			mod_groups_iq_handler:make_action(IQ);
+			groups_iq_handler:make_action(IQ);
 		_ -> process_iq_v0_3(IQ)
 	end;
 pre_process_iq_v0_3(IQ) ->
@@ -1197,7 +1195,7 @@ select_and_send(LServer, Query, RSM, FlipPage, #iq{from = From, to = To} = IQ, M
 										true -> lists:reverse(SortedMsgs1);
 										false -> SortedMsgs1
 									end,
-%%		NewSortedMsgs = mod_groups_messages:get_actual_user_info(LServer,SortedMsgs2),
+%%		NewSortedMsgs = groups_messages:get_actual_user_info(LServer,SortedMsgs2),
     send(SortedMsgs, Count, IsComplete, IQ).
 
 select(_LServer, JidRequestor, JidArchive, Query, RSM,

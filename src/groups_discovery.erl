@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
-%%% File    : mod_groups_discovery.erl
-%%% Author  : Andrey Gagarin <andrey.gagarin@redsolution.com>
-%%% Purpose : Discovery for group chats on server
-%%% Created : 09 Oct 2018 by Andrey Gagarin <andrey.gagarin@redsolution.com>
+%%% File    : groups_discovery.erl
+%%% Author  : Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
+%%% Purpose : Service Discovery.
+%%% Created : 22 Jan 2026 by Ilya Kalashnikov <ilya.kalashnikov@redsolution.com>
 %%%
 %%%
-%%% xabberserver, Copyright (C) 2007-2019   Redsolution OÜ
+%%% xabberserver, Copyright (C) 2007-2026   redsolution corp
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -23,26 +23,27 @@
 %%%
 %%%----------------------------------------------------------------------
 
--module(mod_groups_discovery).
--author('andrey.gagarin@redsolution.com').
+-module(groups_discovery).
+-author('ilya.kalashnikov@redsolution.com').
+-compile([{parse_transform, ejabberd_sql_pt}]).
 -behaviour(gen_mod).
 
-%% API
--export([start/2, stop/1, reload/3, process_disco_info/1, process_disco_items/1]).
--export([disco_local_items/5, get_local_items/5, get_local_identity/5, get_local_features/5,
-  depends/2, mod_options/1]).
--include("ejabberd.hrl").
 -include("logger.hrl").
--include("translate.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
--compile([{parse_transform, ejabberd_sql_pt}]).
--type disco_acc() :: {error, stanza_error()} | {result, [binary()]} | empty.
+
+%% gen_mod
+-export([start/2, stop/1, reload/3, process_disco_items/1]).
+%% API
+-export([get_local_items/5, get_local_identity/5, get_local_features/5,
+  depends/2, mod_options/1, client_disco_info/1]).
+
 
 %%====================================================================
 %% gen_mod API
 %%====================================================================
 start(Host, _Opts) ->
+  update_groups_caps(Host),
   ejabberd_hooks:add(disco_local_items, Host, ?MODULE,
     get_local_items, 50),
   ejabberd_hooks:add(disco_local_features, Host, ?MODULE,
@@ -67,6 +68,18 @@ depends(_Host, _Opts) ->
 
 mod_options(_Host) -> [].
 
+client_disco_info(Privacy) ->
+  Notify = case Privacy of
+             public -> [ <<"urn:xmpp:avatar:metadata+notify">>,
+               <<"http://jabber.org/protocol/nick+notify">>];
+             _ -> []
+           end,
+  I = #identity{name = <<"Xabber Groups component">>,
+    category = <<"client">>, type = <<"console">>},
+  FL = [?NS_GROUPS,  ?NS_DISCO_INFO, ?NS_REFERENCES, ?NS_CHATSTATES,
+    <<"urn:xmpp:chat-markers:0">>, ?NS_XABBER_REWRITE] ++ Notify,
+  #disco_info{identities = [I], features = FL}.
+
 get_local_items(Acc, _From, #jid{lserver = LServer} = To,
     <<"">>, _Lang) ->
   case gen_mod:is_loaded(LServer, mod_groups) of
@@ -80,7 +93,7 @@ get_local_items(Acc, _From, #jid{lserver = LServer} = To,
         node = ?NS_GROUPS,
         name = <<"Group Service">>},
       {result,Items ++ [DI]}
-      end;
+  end;
 get_local_items(Acc, _From, _To, _Node, _Lang) ->
   Acc.
 
@@ -89,40 +102,17 @@ get_local_features(Acc, _From, _To, ?NS_GROUPS, _Lang) ->
             {result, Its} -> Its;
             empty -> []
           end,
-  {result, Items ++[?NS_GROUPS,?NS_DISCO_INFO,?NS_DISCO_ITEMS]};
+  {result, Items ++[?NS_GROUPS,?NS_DISCO_INFO, ?NS_VCARD,
+    ?NS_MAM_TMP, ?NS_MAM_0, ?NS_MAM_1, ?NS_MAM_2]};
 get_local_features(Acc, _From, _To, _Node, _Lang) ->
   Acc.
 
--spec get_local_identity(disco_acc(), jid(), jid(), binary(), binary()) -> disco_acc().
 get_local_identity(_Acc, _From, _To, ?NS_GROUPS, _Lang) ->
   [#identity{category = <<"conference">>,
-    type = <<"server">>,
-    name = <<"Group Service">>}];
+    type = <<"text">>,
+    name = <<"Groups Service">>}];
 get_local_identity(Acc, _From, _To, _Node, _Lang) ->
   Acc.
-
-
--spec process_disco_info(iq()) -> iq().
-process_disco_info(#iq{type = set, lang = Lang} = IQ) ->
-  Txt = <<"Value 'set' of 'type' attribute is not allowed">>,
-  xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang));
-process_disco_info(#iq{type = get, to = To, lang = _Lang,
-  sub_els = [#disco_info{node = ?NS_GROUPS}]} = IQ) ->
-  ServerHost = ejabberd_router:host_of_route(To#jid.lserver),
-  Features = [?NS_GROUPS],
-  Name = gen_mod:get_module_opt(ServerHost, ?MODULE, name),
-  Identity = #identity{category = <<"conference">>,
-    type = <<"server">>,
-    name = Name},
-  xmpp:make_iq_result(
-    IQ, #disco_info{features = Features,
-      identities = [Identity]});
-process_disco_info(#iq{type = get, lang = Lang,
-  sub_els = [#disco_info{}]} = IQ) ->
-  xmpp:make_error(IQ, xmpp:err_item_not_found(<<"Node not found">>, Lang));
-process_disco_info(#iq{lang = Lang} = IQ) ->
-  Txt = <<"No module is handling this query">>,
-  xmpp:make_error(IQ, xmpp:err_service_unavailable(Txt, Lang)).
 
 -spec process_disco_items(iq()) -> iq().
 process_disco_items(#iq{type = set, lang = Lang} = IQ) ->
@@ -138,7 +128,7 @@ process_disco_items(#iq{type = get, from = From, to = To, lang = _Lang,
   {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(ServerHost, QueryCount),
   Count = binary_to_integer(CountBinary),
   Items = lists:map(fun(C) ->
-  [ChatJID,ChatName] = C,
+    [ChatJID,ChatName] = C,
     JID = jid:from_string(ChatJID),
     #disco_item{jid = JID, name = ChatName} end,
     Res
@@ -163,40 +153,12 @@ process_disco_items(#iq{lang = Lang} = IQ) ->
   Txt = <<"No module is handling this query">>,
   xmpp:make_error(IQ, xmpp:err_service_unavailable(Txt, Lang)).
 
--spec disco_local_items({error, stanza_error()} | {result, [binary()]} | empty,
-    jid(), jid(), binary(), binary()) ->
-  {error, stanza_error()} | {result, [binary()]}.
-disco_local_items({error, Err}, _From, _To, _Node, _Lang) ->
-  {error, Err};
-disco_local_items(empty, _From, _To, <<"">>, _Lang) ->
-  {result, []};
-disco_local_items(Acc, _From, #jid{lserver = LServer} = _To, <<"">>, _Lang) ->
-  case gen_mod:is_loaded(LServer, mod_adhoc) of
-    false ->
-      Acc;
-    _ ->
-      Items = case Acc of
-                {result, I} -> I;
-                _ -> []
-              end,
-      ServerHost = ejabberd_router:host_of_route(LServer),
-      Name = gen_mod:get_module_opt(ServerHost, ?MODULE, name),
-      D = #disco_item{jid = jid:make(<<"groupchat.", ServerHost/binary>>)},
-      ItemsNew = Items -- [D],
-      Nodes = [#disco_item{jid = jid:make(<<"groupchat.", ServerHost/binary>>),
-        node = ?NS_GROUPS,
-        name = Name}],
-      {result, ItemsNew ++ Nodes}
-  end;
-disco_local_items(Acc, _From, _To, _Node, _Lang) ->
-  Acc.
-
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 
 make_sql_query(LServer, User, UserHost, RSM) ->
-  {Max, Direction, Chat} = get_max_direction_chat(RSM),
+  {Max, Direction, Group} = get_max_direction_chat(RSM),
   SServer = ejabberd_sql:escape(LServer),
   SUser = ejabberd_sql:escape(User),
   LimitClause = if is_integer(Max), Max >= 0 ->
@@ -204,20 +166,18 @@ make_sql_query(LServer, User, UserHost, RSM) ->
                   true ->
                     []
                 end,
-  ChatDiscovery = [<<"select chatgroup,name
-    from groupchat_users inner join groupchats on jid=chatgroup
-    where chatgroup IN ((select jid from groupchats
-    where model='open' and (searchable='local' or searchable='global') EXCEPT select chatgroup from groupchat_block
-    where blocked = '">>,SUser,<<"' or blocked = '">>,UserHost,<<"')
-   UNION (select jid from groupchats where model='member-only' and (searchable='local' or searchable='global'))
-   INTERSECT select chatgroup from groupchat_users where username = '">>,SUser,<<"')">>],
-  PageClause = case Chat of
+  ChatDiscovery = [<<"select jid,name from groupchats where searchable!='none' and
+    jid not in (select chatgroup from groupchat_block where blocked = '">>,SUser,<<"'
+    or blocked = '">>,UserHost,<<"')  and (model='open' or (model='private' and
+    (select true from groupchat_users where username='">>,SUser,<<"'
+     and chatgroup=jid and subscription='wait')))">>],
+  PageClause = case Group of
                  B when is_binary(B) ->
                    case Direction of
                      before ->
-                       [<<" AND chatgroup < '">>, Chat,<<"' ">>];
+                       [<<" AND jid < '">>, Group,<<"' ">>];
                      'after' ->
-                       [<<" AND chatgroup > '">>, Chat,<<"' ">>];
+                       [<<" AND jid > '">>, Group,<<"' ">>];
                      _ ->
                        []
                    end;
@@ -238,20 +198,20 @@ make_sql_query(LServer, User, UserHost, RSM) ->
       % XEP-0059: Result Set Management
       % 2.5 Requesting the Last Page in a Result Set
       [<<"SELECT * FROM (">>, Query,
-        <<"GROUP BY chatgroup,name ORDER BY chatgroup DESC ">>,
-        LimitClause, <<") AS c ORDER BY chatgroup ASC;">>];
+        <<"GROUP BY jid,name ORDER BY chatgroup DESC ">>,
+        LimitClause, <<") AS c ORDER BY jid ASC;">>];
     _ ->
-      [Query, <<"GROUP BY chatgroup,name ORDER BY chatgroup ASC ">>,
+      [Query, <<"GROUP BY jid,name ORDER BY jid ASC ">>,
         LimitClause, <<";">>]
   end,
   case ejabberd_sql:use_new_schema() of
     true ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,ChatDiscovery,<<" and server_host='">>,
         SServer, <<"'">>,
-        <<" GROUP BY chatgroup,name) as subquery;">>]};
+        <<" GROUP BY jid,name) as subquery;">>]};
     false ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,ChatDiscovery,
-        <<" GROUP BY chatgroup,name) as subquery;">>]}
+        <<" GROUP BY jid,name) as subquery;">>]}
   end.
 
 get_max_direction_chat(RSM) ->
@@ -265,3 +225,13 @@ get_max_direction_chat(RSM) ->
     _ ->
       {undefined, undefined, <<>>}
   end.
+
+update_groups_caps(Server) ->
+  Mod = gen_mod:db_mod(Server, mod_caps),
+  lists:foreach(fun(Privacy) ->
+    DiscoInfo = client_disco_info(Privacy),
+    Features = DiscoInfo#disco_info.features,
+    Hash = mod_caps:compute_disco_hash(DiscoInfo, sha),
+    NodePair = {?NS_GROUPS, Hash},
+    Mod:caps_write(Server, NodePair, Features)
+                end, [public, incognito]).

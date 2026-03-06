@@ -372,10 +372,11 @@ CREATE TABLE groupchats (
     description text,
     owner text NOT NULL,
     avatar_id text DEFAULT '',
-    message bigint DEFAULT 0,
+    messages text,
     contacts text,
     domains text,
-    status text NOT NULL DEFAULT 'discussion',
+    state text NOT NULL DEFAULT 'active',
+    status text NOT NULL DEFAULT 'Discussion',
     parent_chat text DEFAULT '0',
     created_at timestamp without time zone not null default now(),
     PRIMARY KEY (server_host, localpart)
@@ -392,8 +393,7 @@ CREATE TABLE groupchat_users (
     avatar_size integer not null default 0,
     nickname text default '',
     auto_nickname text NOT NULL default '',
-    parse_vcard timestamp NOT NULL default timezone('utc'::text, now()),
-    parse_avatar text NOT NULL default 'yes',
+    use_user_avatar boolean NOT NULL default false,
     badge text NOT NULL default '',
     chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
     subscription text NOT NULL,
@@ -406,28 +406,26 @@ CREATE TABLE groupchat_users (
 );
 CREATE INDEX i_groupchat_users_group_subs ON groupchat_users USING btree (chatgroup,subscription);
 
-CREATE TABLE groupchat_present (
-    username text NOT NULL,
-    chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
-    resource text NOT NULL
-);
+--CREATE TABLE groupchat_present (
+--    username text NOT NULL,
+--    chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
+--    resource text NOT NULL
+--);
 
-CREATE TABLE groupchat_users_vcard (
-    jid text PRIMARY KEY,
-    givenfamily text,
-    fn text,
-    nickname text,
-    image text,
-    image_type text,
-    hash text,
-    fullupdate text
-);
+--CREATE TABLE groupchat_users_vcard (
+--    jid text PRIMARY KEY,
+--    givenfamily text,
+--    fn text,
+--    nickname text,
+--    image text,
+--    image_type text,
+--    hash text,
+--    fullupdate text
+--);
 
 CREATE TABLE groupchat_block (
     chatgroup text NOT NULL REFERENCES groupchats (jid) ON DELETE CASCADE,
     blocked text NOT NULL,
-    type text NOT NULL,
-    anonim_id text,
     issued_by text NOT NULL,
     issued_at timestamp NOT NULL,
     CONSTRAINT UC_groupchat_block UNIQUE (chatgroup,blocked)

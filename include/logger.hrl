@@ -1,6 +1,6 @@
 %%%----------------------------------------------------------------------
 %%%
-%%% ejabberd, Copyright (C) 2002-2018   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2019   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -17,28 +17,31 @@
 %%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 %%%
 %%%----------------------------------------------------------------------
+-include_lib("kernel/include/logger.hrl").
 
 -define(PRINT(Format, Args), io:format(Format, Args)).
--compile([{parse_transform, lager_transform}]).
 
 -define(DEBUG(Format, Args),
-	lager:debug(Format, Args)).
+	begin ?LOG_DEBUG(Format, Args), ok end).
 
 -define(INFO_MSG(Format, Args),
-	lager:info(Format, Args)).
+	begin ?LOG_INFO(Format, Args), ok end).
 
 -define(WARNING_MSG(Format, Args),
-	lager:warning(Format, Args)).
+	begin ?LOG_WARNING(Format, Args), ok end).
 
 -define(ERROR_MSG(Format, Args),
-	lager:error(Format, Args)).
+	begin ?LOG_ERROR(Format, Args), ok end).
 
 -define(CRITICAL_MSG(Format, Args),
-	lager:critical(Format, Args)).
+	begin ?LOG_CRITICAL(Format, Args), ok end).
 
 %% Use only when trying to troubleshoot test problem with ExUnit
 -define(EXUNIT_LOG(Format, Args),
-        case lists:keyfind(logger, 1, application:loaded_applications()) of
-            false -> ok;
-            _ -> 'Elixir.Logger':bare_log(error, io_lib:format(Format, Args), [?MODULE])
-        end).
+	case lists:keyfind(logger, 1, application:loaded_applications()) of
+		false -> ok;
+		_ -> 'Elixir.Logger':bare_log(error, io_lib:format(Format, Args), [?MODULE])
+	end).
+
+%% Uncomment if you want to debug p1_fsm/gen_fsm
+%%-define(DBGFSM, true).

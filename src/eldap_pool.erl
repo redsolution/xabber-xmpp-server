@@ -49,14 +49,13 @@ modify_passwd(PoolName, DN, Passwd) ->
 start_link(Name, Hosts, Backups, Port, Rootdn, Passwd,
 	   Opts) ->
     PoolName = make_id(Name),
-    pg2:create(PoolName),
     lists:foreach(fun (Host) ->
 			  ID = list_to_binary(erlang:ref_to_list(make_ref())),
 			  case catch eldap:start_link(ID, [Host | Backups],
 						      Port, Rootdn, Passwd,
 						      Opts)
 			      of
-			    {ok, Pid} -> pg2:join(PoolName, Pid);
+			    {ok, Pid} -> pg:join(PoolName, Pid);
 			    Err ->
                                   ?INFO_MSG("Err = ~p", [Err]),
                                   error
@@ -68,7 +67,7 @@ start_link(Name, Hosts, Backups, Port, Rootdn, Passwd,
 %% Internal functions
 %%====================================================================
 do_request(Name, {F, Args}) ->
-    case pg2:get_closest_pid(make_id(Name)) of
+    case get_member(make_id(Name)) of
       Pid when is_pid(Pid) ->
 	  case catch apply(eldap, F, [Pid | Args]) of
 	    {'EXIT', {timeout, _}} ->
@@ -80,6 +79,13 @@ do_request(Name, {F, Args}) ->
 	    Reply -> Reply
 	  end;
       Err -> Err
+    end.
+
+get_member(Group) ->
+    case pg:get_members(Group) of
+	[] -> {error, {no_process, Group}};
+	Members ->
+	    lists:nth(rand:uniform(length(Members)), Members)
     end.
 
 make_id(Name) ->

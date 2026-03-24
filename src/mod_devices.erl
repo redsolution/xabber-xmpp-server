@@ -401,8 +401,8 @@ validate_device(ESecret, Validator, ValidationKey, Expire) ->
 validate_device(_, _, _, Expire, Now) when Now > Expire ->
   expired;
 validate_device(ESecret, Validator, ValidationKey, _, _) ->
-  Secret = crypto:exor(ESecret, ValidationKey),
-  case crypto:hmac(sha256, ESecret, Secret) of
+  Secret = exor(ESecret, ValidationKey),
+  case crypto:mac(hmac, sha256, ESecret, Secret) of
     Validator ->
       {ok, Secret};
     _ ->
@@ -819,9 +819,15 @@ register_device(LServer, SJID, Expire, Info, Client, ID, IP, Label, DType) ->
 make_secret() ->
   Secret = crypto:strong_rand_bytes(64),
   ValidationKey = crypto:strong_rand_bytes(64),
-  ESecret = crypto:exor(Secret, ValidationKey),
-  Validator = crypto:hmac(sha256, ESecret, Secret),
+  ESecret = exor(Secret, ValidationKey),
+  Validator = crypto:mac(hmac, sha256, ESecret, Secret),
   {Secret, ValidationKey, ESecret, Validator}.
+
+exor(A, B) ->
+  Size = byte_size(A),
+  <<IA:Size/unit:8>> = A,
+  <<IB:Size/unit:8>> = B,
+  <<(IA bxor IB):Size/unit:8>>.
 
 get_time_now() ->
   {{Y,Mo,D}, {H,Mn,S}} = calendar:universal_time(),

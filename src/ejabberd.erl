@@ -51,8 +51,6 @@ stop() ->
     %%ejabberd_cover:stop().
 
 halt() ->
-    application:stop(lager),
-    application:stop(sasl),
     erlang:halt(1, [{flush, true}]).
 
 %% @spec () -> false | string()

@@ -475,8 +475,8 @@ process(_LocalPath, #request{method = Method, host = Host, ip = IP}) ->
 -spec get_proc_name(binary(), atom()) -> atom().
 get_proc_name(ServerHost, ModuleName) ->
     PutURL = gen_mod:get_module_opt(ServerHost, ?MODULE, put_url),
-    {ok, {_Scheme, _UserInfo, Host, _Port, Path, _Query}} =
-	http_uri:parse(binary_to_list(expand_host(PutURL, ServerHost))),
+    #{host := Host, path := Path} =
+	uri_string:parse(binary_to_list(expand_host(PutURL, ServerHost))),
     ProcPrefix = list_to_binary(string:strip(Host ++ Path, right, $/)),
     gen_mod:get_module_proc(ProcPrefix, ModuleName).
 

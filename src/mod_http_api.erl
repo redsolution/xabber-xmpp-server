@@ -193,8 +193,8 @@ process([Call], #request{method = 'POST', data = Data, ip = IPPort} = Req) ->
         _:{error,{_,invalid_json}} = _Err ->
 	    ?DEBUG("Bad Request: ~p", [_Err]),
 	    badrequest_response(<<"Invalid JSON input">>);
-	  _:_Error ->
-            ?DEBUG("Bad Request: ~p ~p", [_Error, erlang:get_stacktrace()]),
+	  _:_Error:_ST ->
+            ?DEBUG("Bad Request: ~p ~p", [_Error, _ST]),
             badrequest_response()
     end;
 process([Call], #request{method = 'GET', q = Data, ip = {IP, _}} = Req) ->
@@ -210,9 +210,9 @@ process([Call], #request{method = 'GET', q = Data, ip = {IP, _}} = Req) ->
         %% TODO We need to refactor to remove redundant error return formatting
         throw:{error, unknown_command} ->
             json_format({404, 44, <<"Command not found.">>});
-        _:_Error ->
+        _:_Error:_ST ->
 
-        ?DEBUG("Bad Request: ~p ~p", [_Error, erlang:get_stacktrace()]),
+        ?DEBUG("Bad Request: ~p ~p", [_Error, _ST]),
         badrequest_response()
     end;
 process([_Call], #request{method = 'OPTIONS', data = <<>>}) ->
@@ -314,8 +314,8 @@ handle(Call, Auth, Args, Version) when is_atom(Call), is_list(Args) ->
 		    {400, misc:atom_to_binary(Error)};
 		  throw:Msg when is_list(Msg); is_binary(Msg) ->
 		    {400, iolist_to_binary(Msg)};
-		  _Error ->
-		    ?ERROR_MSG("REST API Error: ~p ~p", [_Error, erlang:get_stacktrace()]),
+		  _Class:_Error:_ST ->
+		    ?ERROR_MSG("REST API Error: ~p ~p", [_Error, _ST]),
 		    {500, <<"internal_error">>}
 	    end;
         {error, Msg} ->

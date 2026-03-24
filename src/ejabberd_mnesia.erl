@@ -385,8 +385,7 @@ do_transform(OldAttrs, Attrs, Old) ->
 transform_fun(Module, Name) ->
     fun(Obj) ->
 	    try Module:transform(Obj)
-	    catch E:R ->
-		    StackTrace = erlang:get_stacktrace(),
+	    catch E:R:StackTrace ->
 		    ?ERROR_MSG("Failed to transform Mnesia table ~s:~n"
 			       "** Record: ~p~n"
 			       "** Reason: ~p~n"

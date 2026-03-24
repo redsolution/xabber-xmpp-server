@@ -219,7 +219,7 @@ start_module(Host, Module, Opts0, Order, NeedValidation) ->
 		    {ok, Pid} when is_pid(Pid) -> {ok, Pid};
 		    Err -> erlang:error(Err)
 		end
-	    catch Class:Reason ->
+	    catch Class:Reason:ST ->
 		    ets:delete(ejabberd_modules, {Module, Host}),
 		    ErrorText =
 			case Reason == undef andalso
@@ -237,11 +237,11 @@ start_module(Host, Module, Opts0, Order, NeedValidation) ->
 				io_lib:format("Problem starting the module ~s for host "
 					      "~s ~n options: ~p~n ~p: ~p~n~p",
 					      [Module, Host, Opts, Class, Reason,
-					       erlang:get_stacktrace()])
+					       ST])
 			end,
 		    ?CRITICAL_MSG(ErrorText, []),
 		    maybe_halt_ejabberd(),
-		    erlang:raise(Class, Reason, erlang:get_stacktrace())
+		    erlang:raise(Class, Reason, ST)
 	    end;
 	{error, _ErrorText} ->
 	    maybe_halt_ejabberd()
@@ -297,8 +297,7 @@ reload_module(Host, Module, NewOpts, OldOpts, Order) ->
 		    {ok, Pid} when is_pid(Pid) -> {ok, Pid};
 		    Err -> erlang:error(Err)
 		end
-	    catch Class:Reason ->
-		    StackTrace = erlang:get_stacktrace(),
+	    catch Class:Reason:StackTrace ->
 		    ?CRITICAL_MSG("Failed to reload module ~s at ~s:~n"
 				  "** Reason = ~p",
 				  [Module, Host,

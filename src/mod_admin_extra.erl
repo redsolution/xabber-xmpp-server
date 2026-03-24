@@ -1144,7 +1144,7 @@ user_sessions_info(User, Host) ->
       fun(Session) ->
 	      {_U, _S, Resource} = Session#session.usr,
 	      {Now, Pid} = Session#session.sid,
-	      {_U, _Resource, Status, StatusText} = get_presence(Pid),
+	      {_, _Resource, Status, StatusText} = get_presence(Pid),
 	      Info = Session#session.info,
 	      Priority = Session#session.priority,
 	      Conn = proplists:get_value(conn, Info),

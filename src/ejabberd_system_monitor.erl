@@ -37,9 +37,7 @@
 -export([init/1, handle_event/2, handle_call/2,
 	 handle_info/2, terminate/2, code_change/3]).
 
-%% We don't use ejabberd logger because lager can be overloaded
-%% too and alarm_handler may get stuck.
-%%-include("logger.hrl").
+-include("logger.hrl").
 
 -define(CHECK_INTERVAL, timer:seconds(30)).
 
@@ -87,7 +85,7 @@ handle_event({clear_alarm, system_memory_high_watermark}, State) ->
 handle_event({set_alarm, {process_memory_high_watermark, Pid}}, State) ->
     case proc_stat(Pid, get_app_pids()) of
 	#proc_stat{name = Name} = ProcStat ->
-	    error_logger:warning_msg(
+	    ?WARNING_MSG(
 	      "Process ~p consumes more than 5% of OS memory (~s)",
 	      [Name, format_proc(ProcStat)]),
 	    handle_overload(State),
@@ -98,7 +96,7 @@ handle_event({set_alarm, {process_memory_high_watermark, Pid}}, State) ->
 handle_event({clear_alarm, process_memory_high_watermark}, State) ->
     {ok, State};
 handle_event(Event, State) ->
-    error_logger:warning_msg("unexpected event: ~p", [Event]),
+    ?WARNING_MSG("unexpected event: ~p", [Event]),
     {ok, State}.
 
 handle_call(_Request, State) ->
@@ -108,7 +106,7 @@ handle_info({timeout, _TRef, handle_overload}, State) ->
     handle_overload(State),
     {ok, restart_timer(State)};
 handle_info(Info, State) ->
-    error_logger:warning_msg("unexpected info: ~p", [Info]),
+    ?WARNING_MSG("unexpected info: ~p", [Info]),
     {ok, State}.
 
 terminate(_Reason, _State) ->
@@ -130,7 +128,7 @@ handle_overload(_State, Procs) ->
     {TotalMsgs, ProcsNum, Apps, Stats} = overloaded_procs(AppPids, Procs),
     if TotalMsgs >= 10000 ->
 	    SortedStats = lists:reverse(lists:keysort(#proc_stat.qlen, Stats)),
-	    error_logger:warning_msg(
+	    ?WARNING_MSG(
 	      "The system is overloaded with ~b messages "
 	      "queued by ~b process(es) (~b%) "
 	      "from the following applications: ~s; "
@@ -278,7 +276,7 @@ do_kill(Stats, Threshold) ->
 		     when Len >= Threshold ->
 		       case lists:member(App, excluded_apps()) of
 			   true ->
-			       error_logger:warning_msg(
+			       ?WARNING_MSG(
 				 "Unable to kill process ~p from whitelisted "
 				 "application ~p", [Name, App]),
 			       false;
@@ -287,7 +285,6 @@ do_kill(Stats, Threshold) ->
 				   false ->
 				       false;
 				   Pid ->
-				       maybe_restart_app(App),
 				       {true, Pid}
 			       end
 		       end;
@@ -312,11 +309,6 @@ kill_proc(Pid) ->
     exit(Pid, kill),
     Pid.
 
--spec maybe_restart_app(atom()) -> any().
-maybe_restart_app(lager) ->
-    ejabberd_logger:restart();
-maybe_restart_app(_) ->
-    ok.
 
 -spec opt_type(oom_killer) -> fun((boolean()) -> boolean());
 	      (atom()) -> [atom()].

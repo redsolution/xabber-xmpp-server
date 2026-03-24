@@ -2787,7 +2787,7 @@ process_item_change(Item, SD, UJID) ->
 		maybe_send_affiliation(JID, A, SD1),
 		SD1
 	end
-    catch E:R ->
+    catch E:R:ST ->
 		FromSuffix = case UJID of
 			#jid{} ->
 				JidString = jid:encode(UJID),
@@ -2797,7 +2797,7 @@ process_item_change(Item, SD, UJID) ->
 		end,
 		?ERROR_MSG("failed to set item ~p~s: ~p",
 		       [Item, FromSuffix,
-			{E, {R, erlang:get_stacktrace()}}]),
+			{E, {R, ST}}]),
 	    {error, xmpp:err_internal_server_error()}
     end.
 

@@ -436,14 +436,14 @@ get_stanza_id(#message{meta = #{stanza_id := ID}}) ->
 
 -spec init_stanza_id(stanza(), binary()) -> stanza().
 init_stanza_id(Pkt, LServer) ->
-	ID = misc:now_to_usec(erlang:now()),
+	ID = os:system_time(microsecond),
 	Pkt1 = strip_my_stanza_id(Pkt, LServer),
 	Pkt2 = xmpp:put_meta(Pkt1, delivery_time, ID),
 	xmpp:put_meta(Pkt2, stanza_id, ID).
 
 -spec init_stanza_id_incoming(stanza(), binary()) -> stanza().
 init_stanza_id_incoming(#message{from = From, to = To} = Pkt, _LServer) ->
-	TimeStamp = misc:now_to_usec(erlang:now()),
+	TimeStamp = os:system_time(microsecond),
 	ID = TimeStamp,
   IsMyself = (jid:remove_resource(To) == jid:remove_resource(From)
     andalso From#jid.resource /= <<>>),

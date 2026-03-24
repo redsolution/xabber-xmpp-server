@@ -341,9 +341,9 @@ process_command(#iq{type = set, lang = Lang, to = To, from = From,
 		    xmpp:make_error(IQ, Error);
 		Command ->
 		    xmpp:make_iq_result(IQ, Command)
-	    catch E:R ->
+	    catch E:R:ST ->
 		    ?ERROR_MSG("ad-hoc handler failed: ~p",
-			       [{E, {R, erlang:get_stacktrace()}}]),
+			       [{E, {R, ST}}]),
 		    xmpp:make_error(IQ, xmpp:err_internal_server_error())
 	    end;
 	_ ->

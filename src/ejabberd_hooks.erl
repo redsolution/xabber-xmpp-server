@@ -379,14 +379,11 @@ safe_apply(Hook, Module, Function, Args) ->
        true ->
 		apply(Module, Function, Args)
 	end
-    catch E:R when E /= exit; R /= normal ->
+    catch E:R:ST when E /= exit; R /= normal ->
 	    ?ERROR_MSG("Hook ~p crashed when running ~p:~p/~p:~n"
 		       "** Reason = ~p~n"
 		       "** Arguments = ~p",
 		       [Hook, Module, Function, length(Args),
-			{E, R, get_stacktrace()}, Args]),
+			{E, R, ST}, Args]),
 	    'EXIT'
     end.
-
-get_stacktrace() ->
-    [{Mod, Fun, Loc, Args} || {Mod, Fun, Args, Loc} <- erlang:get_stacktrace()].

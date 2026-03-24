@@ -145,10 +145,10 @@ route(Packet) ->
 	    ?DEBUG("hook dropped stanza:~n~s", [xmpp:pp(Packet)]);
 	Packet1 ->
 	    try do_route(Packet1), ok
-	    catch E:R ->
+	    catch E:R:ST ->
 		    ?ERROR_MSG("failed to route packet:~n~s~nReason = ~p",
 			       [xmpp:pp(Packet1),
-				{E, {R, erlang:get_stacktrace()}}])
+				{E, {R, ST}}])
 	    end
     end.
 

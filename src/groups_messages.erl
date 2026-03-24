@@ -625,7 +625,7 @@ set_session(Group, UserJID) ->
     username = Username,
     server = Server,
     resource =  Resource,
-    ts = misc:now_to_usec(erlang:now())
+    ts = os:system_time(microsecond)
   },
   mnesia:dirty_write(Session),
   Result.
@@ -674,8 +674,8 @@ delete_all_sessions(Group) ->
 %% delete sessions older than 1 hour
 kill_zombies() ->
   FN = fun()->
-    TS = misc:now_to_usec(erlang:now()) - 3600000000,
-    MatchHead = #participant_session{_='_', _='_' , _='_', _='_', ts = '$1'},
+    TS = os:system_time(microsecond) - 3600000000,
+    MatchHead = #participant_session{ts = '$1', _ = '_'},
     Guards = [{'<', '$1', TS}],
     SS = mnesia:select(participant_session,[{MatchHead, Guards, ['$_']}]),
     lists:foreach(fun(O) ->

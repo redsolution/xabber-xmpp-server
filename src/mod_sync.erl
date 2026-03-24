@@ -819,7 +819,7 @@ get_pending_subscriptions(LUser, LServer) ->
 %% Get the last informative chat message
 get_last_message(LServer,LUser,Conversation) ->
   get_last_informative_message(LServer, LUser,
-    Conversation, misc:now_to_usec(erlang:now())).
+    Conversation, os:system_time(microsecond)).
 
 get_last_informative_message(LServer, LUser, Conversation, TS) ->
   ConvType = ?NS_XABBER_CHAT,
@@ -1094,7 +1094,7 @@ eg_get_unread_msgs_count(Group, ReadTS, Subscription) when is_integer(ReadTS) ->
   eg_get_unread_msgs_count(Group, integer_to_binary(ReadTS), Subscription);
 eg_get_unread_msgs_count(Group, ReadTS, both) ->
   FN = fun()->
-    MatchHead = #external_group_msgs{group_sid='$1', _='_' , ts = '$2', deleted = false},
+    MatchHead = #external_group_msgs{group_sid='$1', ts = '$2', deleted = false, _ = '_'},
     Guards = [{'=:=', {const, Group}, {element, 1, '$1'}},{'>', '$2', ReadTS}],
     Result = {size,'$1'}, %% just to minimize memory usage
     length(mnesia:select(external_group_msgs,[{MatchHead, Guards, [Result]}]))
@@ -1122,7 +1122,7 @@ eg_remove_message(Acc, Group, StanzaID, UserID, RVer) ->
 eg_do_remove_msg(Group, all, all) ->
   mnesia:dirty_delete(external_group_last_msg, Group),
   FN = fun()->
-    MatchHead = #external_group_msgs{group_sid='$1', _='_' , _ = '_', _ = '_'},
+    MatchHead = #external_group_msgs{group_sid='$1', _ = '_'},
     Guards = [{'=:=', {const, Group}, {element, 1, '$1'}}],
     Msgs = mnesia:select(external_group_msgs,[{MatchHead, Guards, ['$_']}]),
     lists:foreach(fun(O) -> mnesia:delete_object(O) end, Msgs)
@@ -1149,7 +1149,7 @@ eg_do_remove_msg(Group, <<>>, UserID) when UserID /= <<>> ->
     _ -> ok
   end,
   FN = fun()->
-    MatchHead = #external_group_msgs{group_sid='$1', uid='$2' , _ = '_', _ = '_'},
+    MatchHead = #external_group_msgs{group_sid='$1', uid='$2', _ = '_'},
     Guards = [{'=:=', {const, Group}, {element, 1, '$1'}},{'=:=', UserID,'$2'}],
     Msgs = mnesia:select(external_group_msgs,[{MatchHead, Guards, ['$_']}]),
     lists:foreach(fun(O) -> mnesia:delete_object(O) end, Msgs)
@@ -1228,7 +1228,7 @@ eg_delete_read_messages(LServer) ->
         _ -> false
       end end, IDsList),
     lists:foreach(fun({Group, TS}) ->
-      MatchHead = #external_group_msgs{group_sid='$1', _='_' , ts = '$2', _='_'},
+      MatchHead = #external_group_msgs{group_sid='$1', ts = '$2', _ = '_'},
       Guards = [{'=:=', {const, Group}, {element, 1, '$1'}},{'<', '$2', TS}],
       Result = '$_',
       Msgs = mnesia:select(external_group_msgs,[{MatchHead, Guards, [Result]}]),
@@ -2122,7 +2122,7 @@ delete_sync_data(LUser, LServer, PUser, PServer) ->
 
 delete_sync_data(LUser, LServer) ->
   FN = fun()->
-    MatchHead = #sync_data{us_peer = '$1', _='_', _='_', _='_'},
+    MatchHead = #sync_data{us_peer = '$1', _ = '_'},
     Guards = [{'=:=', {const, {LUser, LServer}}, {element, 1, '$1'}}],
     List = mnesia:select(sync_data,[{MatchHead, Guards, ['$_']}]),
     lists:foreach(fun(O) -> mnesia:delete_object(O) end, List)

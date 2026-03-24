@@ -90,7 +90,7 @@ hotp(Secret, IntervalsNo, Opts) ->
   TokenLength = proplists:get_value(token_length, Opts, 8),
   Key = base64:decode(Secret),
   Msg = <<IntervalsNo:8/big-unsigned-integer-unit:8>>,
-  Digest = crypto:hmac(DigestMethod, Key, Msg),
+  Digest = crypto:mac(hmac, DigestMethod, Key, Msg),
   <<Ob:8>> = binary:part(Digest, {byte_size(Digest), -1}),
   O = Ob band 15,
   <<TokenBase0:4/integer-unit:8>> = binary:part(Digest, O, 4),
@@ -246,7 +246,7 @@ ocra(Secret, Suite, C, Q, SuiteOpts, Opts) ->
   end.
 
 ocra_make_token(Key, Message, DigestMethod, TokenLength) ->
-  Digest = crypto:hmac(DigestMethod, Key, Message),
+  Digest = crypto:mac(hmac, DigestMethod, Key, Message),
   case TokenLength of
     0 ->
       Digest;

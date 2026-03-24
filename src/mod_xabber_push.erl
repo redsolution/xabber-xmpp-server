@@ -830,7 +830,11 @@ encrypt(Mode, Key, Value) ->
   Padding = size(Value) rem 16,
   Bits = (16-Padding)*8,
   IV = crypto:strong_rand_bytes(Length),
-  CipherText = crypto:block_encrypt(Mode,Key,IV,<<Value/binary,0:Bits>>),
+  Cipher = case Mode of
+               blowfish_cbc -> bf_cbc;
+               aes_cbc256 -> aes_256_cbc
+             end,
+  CipherText = crypto:crypto_one_time(Cipher,Key,IV,<<Value/binary,0:Bits>>,true),
   Secret = <<IV/binary, CipherText/binary>>,
   {Length, Secret}.
 

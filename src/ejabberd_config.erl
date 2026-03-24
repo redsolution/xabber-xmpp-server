@@ -784,7 +784,7 @@ set_opts(State) ->
     set_log_level().
 
 set_log_level() ->
-    Level = get_option(loglevel, 4),
+    Level = get_option(loglevel, info),
     ejabberd_logger:set(Level).
 
 add_global_option(Opt, Val) ->
@@ -1399,7 +1399,17 @@ opt_type(default_db) ->
 opt_type(default_ram_db) ->
     fun(T) when is_atom(T) -> T end;
 opt_type(loglevel) ->
-    fun (P) when P >= 0, P =< 5 -> P end;
+    fun (N) when is_integer(N), N >= 0, N =< 5 ->
+      ejabberd_logger:convert_loglevel(N);
+      (Level) when is_atom(Level) -> Level
+    end;
+opt_type(log_rotate_count) ->
+    fun(T) when T > 0 -> T end;
+opt_type(log_rotate_size) ->
+    fun(I) when is_integer(I), I>0 -> I;
+      (infinity) -> infinity;
+      (unlimited) -> infinity
+    end;
 opt_type(queue_dir) ->
     fun iolist_to_binary/1;
 opt_type(queue_type) ->
@@ -1430,7 +1440,8 @@ opt_type(_) ->
     [hide_sensitive_log_data, hosts, language, max_fsm_queue,
      default_db, default_ram_db, queue_type, queue_dir, loglevel,
      use_cache, cache_size, cache_missed, cache_life_time,
-     shared_key, node_start, validate_stream, negotiation_timeout].
+     shared_key, node_start, validate_stream, negotiation_timeout,
+      log_rotate_count, log_rotate_size].
 
 -spec may_hide_data(any()) -> any().
 may_hide_data(Data) ->

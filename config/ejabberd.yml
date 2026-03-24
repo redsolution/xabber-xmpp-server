@@ -54,15 +54,7 @@ loglevel: 4
 ##  $M5D6   rotate on every 5th day of the month at 6:00 hr
 ##
 log_rotate_size: 10485760
-log_rotate_date: ""
 log_rotate_count: 1
-
-##
-## overload protection: If you want to limit the number of messages per second
-## allowed from error_logger, which is a good idea if you want to avoid a flood
-## of messages when system is overloaded, you can set a limit.
-## 100 is ejabberd's default.
-log_rate_limit: 100
 
 ##
 ## watchdog_admins: Only useful for developers: if an ejabberd process

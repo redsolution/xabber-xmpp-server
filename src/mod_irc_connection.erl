@@ -1150,9 +1150,9 @@ iq_admin(StateData, Channel, From, _To,
 	    ejabberd_router:route(xmpp:make_iq_result(IQ, Result));
 	{error, Error} ->
 	    ejabberd_router:route_error(IQ, Error)
-    catch E:R ->
+    catch E:R:ST ->
 	    ?ERROR_MSG("failed to process admin query from ~s: ~p",
-		       [jid:encode(From), {E, {R, erlang:get_stacktrace()}}]),
+		       [jid:encode(From), {E, {R, ST}}]),
 	    ejabberd_router:route_error(
 	      IQ, xmpp:err_internal_server_error())
     end.

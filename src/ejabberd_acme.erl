@@ -150,8 +150,8 @@ get_certificates(Domains) ->
 	    catch
 		throw:Throw ->
 		    Throw;
-		E:R ->
-		    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, erlang:get_stacktrace()]), 
+		E:R:ST ->
+		    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, ST]),
 		    {error, get_certificates}
 	    end;
 	false ->
@@ -242,8 +242,8 @@ get_certificate(CAUrl, DomainName, PrivateKey) ->
     catch
 	throw:Throw ->
 	    Throw;
-	E:R ->
-	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, erlang:get_stacktrace()]), 
+	E:R:ST ->
+	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, ST]),
 	    {error, DomainName, get_certificate}
     end.
 
@@ -381,8 +381,8 @@ renew_certificates() ->
     catch
 	throw:Throw ->
 	    Throw;
-	E:R ->
-	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, erlang:get_stacktrace()]), 
+	E:R:ST ->
+	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, ST]),
 	    {error, get_certificates}
     end.
 
@@ -446,8 +446,8 @@ list_certificates(Verbose) ->
 	    catch
 		throw:Throw ->
 		    Throw;
-		E:R ->
-		    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, erlang:get_stacktrace()]), 
+		E:R:ST ->
+		    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, ST]),
 		    {error, list_certificates}
 	    end;
 	false ->
@@ -488,8 +488,8 @@ format_certificate(DataCert, Verbose) ->
 		format_certificate_verbose(DomainName, SANs, NotAfter, PemCert)
 	end
     catch
-	E:R ->
-	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, erlang:get_stacktrace()]), 
+	E:R:ST ->
+	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, ST]),
 	    fail_format_certificate(DomainName)
     end.
 
@@ -613,8 +613,8 @@ revoke_certificates(DomainOrFile) ->
     catch
 	throw:Throw ->
 	    Throw;
-	E:R ->
-	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, erlang:get_stacktrace()]), 
+	E:R:ST ->
+	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, ST]),
 	    {error, revoke_certificate}
     end.	
 
@@ -1117,8 +1117,8 @@ save_certificate({ok, DomainName, Cert}) ->
     catch
 	throw:Throw ->
 	    Throw;
-	E:R ->
-	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, erlang:get_stacktrace()]), 
+	E:R:ST ->
+	    ?ERROR_MSG("Unknown ~p:~p, ~p", [E, R, ST]),
 	    {error, DomainName, saving}
     end.
 
@@ -1222,7 +1222,7 @@ opt_type(acme) ->
 	    lists:map(
 	      fun({ca_url, URL}) ->
 		      URL1 = binary_to_list(URL),
-		      {ok, _} = http_uri:parse(URL1),
+		      #{scheme := _, host := _} = uri_string:parse(URL1),
 		      {ca_url, URL1};
 		 ({contact, Contact}) ->
 		      [<<_, _/binary>>, <<_, _/binary>>] =

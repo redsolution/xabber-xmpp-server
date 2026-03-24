@@ -84,7 +84,7 @@ start_module(Host, Module) ->
         {ok, Pid} when is_pid(Pid) -> {ok, Pid};
         Err -> erlang:error(Err)
       end
-  catch Class:Reason ->
+  catch Class:Reason:ST ->
     ErrorText =
       case Reason == undef andalso
         code:ensure_loaded(Module) /= {module, Module} of
@@ -101,10 +101,10 @@ start_module(Host, Module) ->
           io_lib:format("Problem starting the module ~s for host "
           "~s ~n ~p: ~p~n~p",
             [Module, Host, Class, Reason,
-              erlang:get_stacktrace()])
+              ST])
       end,
     ?CRITICAL_MSG(ErrorText, []),
-    erlang:raise(Class, Reason, erlang:get_stacktrace())
+    erlang:raise(Class, Reason, ST)
   end.
 
 %% API

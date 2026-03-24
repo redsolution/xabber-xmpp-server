@@ -213,7 +213,7 @@ store_packet({U,S}, Peer, ID, TTL) ->
         mnesia:write(R);
       true ->
         MatchHead = #priority_messages{us={U,S},
-          peer='$1', _='_' , _='_', _='_'},
+          peer='$1', _ = '_'},
         Guards = [{'==', '$1', Peer}],
         Count = length(mnesia:select(priority_messages,
           [{MatchHead, Guards, [1]}])),
@@ -273,11 +273,11 @@ remove_all_messages(US) ->
 
 
 remove_message(US, SID) ->
-  MatchHead = #priority_messages{us=US, peer='_', id='$1' , _='_', _='_'},
+  MatchHead = #priority_messages{us=US, peer='_', id='$1', _ = '_'},
   select_and_remove(MatchHead, SID).
 
 remove_all_messages(US, Peer) ->
-  MatchHead = #priority_messages{us=US, peer='$1', _='_' , _='_', _='_'},
+  MatchHead = #priority_messages{us=US, peer='$1', _ = '_'},
   select_and_remove(MatchHead, Peer).
 
 select_and_remove(MatchHead, Pattern) ->
@@ -295,7 +295,7 @@ mark_messages(undefined, _US, _IDs) ->
   ok;
 mark_messages(DevId, US, IDs) ->
   FN = fun()->
-    MatchHead = #priority_messages{us=US, peer='_', id='$1' , _='_', _='_'},
+    MatchHead = #priority_messages{us=US, peer='_', id='$1', _ = '_'},
     Guards = lists:map(fun(V) -> {'==', '$1', V} end, IDs),
     CombinedGuard = case Guards of
                       [] -> []; % No guards if list is empty

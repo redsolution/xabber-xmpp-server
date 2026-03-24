@@ -104,9 +104,9 @@ multi(F) ->
 			{error, _} = Err -> Err;
 			Result -> get_result(Result)
 		    end
-	    catch E:R ->
+	    catch E:R:ST ->
 		    erlang:erase(?TR_STACK),
-		    erlang:raise(E, R, erlang:get_stacktrace())
+		    erlang:raise(E, R, ST)
 	    end;
 	_ ->
 	    erlang:error(nested_transaction)

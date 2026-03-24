@@ -70,6 +70,7 @@
 %%-----------------------------
 
 start() ->
+    logger:set_primary_config(level, none),
     [SNode, Timeout, Args] = case init:get_plain_arguments() of
                                  [SNode2, "--no-timeout" | Args2] ->
                                      [SNode2, infinity, Args2];
@@ -328,8 +329,7 @@ try_call_command(Args, Auth, AccessCommands, Version) ->
     catch
 	throw:Error ->
 	    {io_lib:format("~p", [Error]), ?STATUS_ERROR};
-	A:Why ->
-	    Stack = erlang:get_stacktrace(),
+	A:Why:Stack ->
 	    {io_lib:format("Problem '~p ~p' occurred executing the command.~nStacktrace: ~p", [A, Why, Stack]), ?STATUS_ERROR}
     end.
 

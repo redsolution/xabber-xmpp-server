@@ -60,7 +60,7 @@ client_signature(StoredKey, AuthMessage) ->
 -spec client_key(binary(), binary()) -> binary().
 
 client_key(ClientProof, ClientSignature) ->
-    crypto:exor(ClientProof, ClientSignature).
+    exor(ClientProof, ClientSignature).
 
 -spec server_signature(binary(), binary()) -> binary().
 
@@ -69,13 +69,19 @@ server_signature(ServerKey, AuthMessage) ->
 
 hi(Password, Salt, IterationCount) ->
     U1 = sha_mac(Password, <<Salt/binary, 0, 0, 0, 1>>),
-    crypto:exor(U1, hi_round(Password, U1, IterationCount - 1)).
+    exor(U1, hi_round(Password, U1, IterationCount - 1)).
 
 hi_round(Password, UPrev, 1) ->
     sha_mac(Password, UPrev);
 hi_round(Password, UPrev, IterationCount) ->
     U = sha_mac(Password, UPrev),
-    crypto:exor(U, hi_round(Password, U, IterationCount - 1)).
+    exor(U, hi_round(Password, U, IterationCount - 1)).
 
 sha_mac(Key, Data) ->
-    crypto:hmac(sha, Key, Data).
+    crypto:mac(hmac, sha, Key, Data).
+
+exor(A, B) ->
+    Size = byte_size(A),
+    <<IA:Size/unit:8>> = A,
+    <<IB:Size/unit:8>> = B,
+    <<(IA bxor IB):Size/unit:8>>.

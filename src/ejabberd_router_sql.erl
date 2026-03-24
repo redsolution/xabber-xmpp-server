@@ -122,11 +122,11 @@ row_to_route(Domain, {ServerHost, NodeS, PidS, LocalHintS} = Row) ->
 		local_hint = dec_local_hint(LocalHintS)}]
     catch _:{bad_node, _} ->
 	    [];
-	  E:R ->
+	  E:R:ST ->
 	    ?ERROR_MSG("failed to decode row from 'route' table:~n"
 		       "Row = ~p~n"
 		       "Domain = ~s~n"
 		       "Reason = ~p",
-		       [Row, Domain, {E, {R, erlang:get_stacktrace()}}]),
+		       [Row, Domain, {E, {R, ST}}]),
 	    []
     end.

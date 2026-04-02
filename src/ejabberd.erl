@@ -43,14 +43,13 @@
 -include("logger.hrl").
 
 start() ->
-    %%ejabberd_cover:start(),
     application:start(ejabberd).
 
 stop() ->
     application:stop(ejabberd).
-    %%ejabberd_cover:stop().
 
 halt() ->
+    ejabberd_logger:flush(),
     erlang:halt(1, [{flush, true}]).
 
 %% @spec () -> false | string()

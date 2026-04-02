@@ -555,7 +555,7 @@ check_session(User, Server, Resource) ->
   case ejabberd_sm:get_user_info(User, Server, Resource) of
     [_|Info] ->
       case lists:member(proplists:get_value(auth_module, Info),
-        [ejabberd_oauth, mod_devices, mod_x_auth_token]) of
+        [ejabberd_oauth, mod_devices]) of
         true -> deny;
         _ -> allow
       end;

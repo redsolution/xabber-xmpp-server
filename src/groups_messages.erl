@@ -155,8 +155,13 @@ modify(#message{to = To, from = From, body = Body} = Pkt) ->
     || #text{data = Text} = T <- Body],
   Els1 = clean_sub_els(xmpp:get_els(Pkt)),
   Els2 = shift_references(Els1, Length),
-  Pkt#message{body = NewBody, sub_els = GroupEls ++ Els2,
-    to = UserBareJID}.
+  Pkt1 = Pkt#message{body = NewBody, sub_els = GroupEls ++ Els2,
+    to = UserBareJID},
+  case extract_mentions(Pkt) of
+    false -> Pkt1;
+    Val ->
+      xmpp:put_meta(Pkt1, groups_mentions, Val)
+  end.
 
 set_displayed(GroupJID, UserJID, StanzaID, OriginID) ->
   GroupS = jid:to_string(jid:remove_resource(GroupJID)),
@@ -398,22 +403,20 @@ send_message_to_index(GroupJID, Message) ->
 send_notifications(Message, GroupJID, AuthorJID, Users) ->
   Server = GroupJID#jid.lserver,
   Group = jid:to_string(jid:remove_resource(GroupJID)),
-  case xmpp:get_subtag(Message, #groups_mentions{}) of
-    #groups_mentions{members = []} ->
+  case xmpp:get_meta(Message, groups_mentions, false) of
+    false -> ok;
+    all ->
       Author = jid:to_string(jid:remove_resource(AuthorJID)),
       case groups_members:user_role(Server, Author, Group) of
         <<"member">> -> {error, not_allowed};
         _ ->
           send_notifications(Message, GroupJID, Users)
       end;
-    #groups_mentions{members = Members} ->
-      MemberIDs = [ ID || #groups_user{id = ID} <- Members, ID /= <<>>],
+    MemberIDs ->
       MemberJIDSs = [groups_members:get_user_by_id(Server, Group, ID)
         || ID <- MemberIDs],
       MemberJIDs = [jid:from_string(S) || S <- MemberJIDSs],
-      send_notifications(Message, GroupJID, MemberJIDs);
-    _ ->
-      ok
+      send_notifications(Message, GroupJID, MemberJIDs)
   end.
 
 send_notifications(_Message, _GroupJID, []) ->
@@ -432,6 +435,15 @@ send_notifications(Message, GroupJID, [User | Users]) ->
     sub_els = [Notify]},
   ejabberd_router:route(IQ),
   send_notifications(Message, GroupJID, Users).
+
+extract_mentions(Pkt) ->
+  case xmpp:get_subtag(Pkt, #groups_mentions{}) of
+    #groups_mentions{members = []} -> all;
+    #groups_mentions{members = Members} ->
+      [ ID || #groups_user{id = ID} <- Members, ID /= <<>>];
+    _ ->
+      false
+  end.
 
 clean_sub_els(Els) ->
   lists:filter(

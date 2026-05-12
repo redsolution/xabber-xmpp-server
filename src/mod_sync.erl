@@ -624,22 +624,24 @@ process_message(_Direction,_Pkt) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 get_conversation_info(LServer, LUser, Conversation, Type) ->
-  SServer = ejabberd_sql:escape(LServer),
-  SUser = ejabberd_sql:escape(LUser),
-  SConversation = ejabberd_sql:escape(Conversation),
-  SType = ejabberd_sql:escape(Type),
+  ODBCType = ejabberd_config:get_option({sql_type, LServer}),
+  ToString = fun(S) -> ejabberd_sql:to_string_literal(ODBCType, S) end,
+  SServer = ToString(LServer),
+  SUser = ToString(LUser),
+  SConversation = ToString(Conversation),
+  SType = ToString(Type),
   HostClause = case ejabberd_sql:use_new_schema() of
                  true ->
-                   <<" and server_host='",SServer/binary,"' ">>;
+                   <<" and server_host=",SServer/binary," ">>;
                  _->
                    <<>>
                end,
   Query = [<<"select conversation, retract,type, conversation_thread,
   read_until,read_until_ts, delivered_until, displayed_until, updated_at, status,
   encrypted, pinned, mute
-  from conversation_metadata where username = '">>,SUser,<<"' and
-  conversation = '">>,SConversation,<<"' and type = '">>,
-    SType,<<"'">>,HostClause,<<";">>],
+  from conversation_metadata where username = ">>,SUser,<<" and
+  conversation = ">>,SConversation,<<" and type = ">>,
+    SType, HostClause,<<";">>],
   case ejabberd_sql:sql_query(LServer, Query) of
     {selected, _, []} ->
       {error, notfound};
@@ -1759,9 +1761,11 @@ make_sql_query(LServer, User, 0, RSM, Form)->
   make_sql_query(LServer, User, <<"0">>, RSM, Form);
 make_sql_query(LServer, User, TS, RSM, _Form) ->
   {Max, Direction, Chat} = get_max_direction_chat(RSM),
-  SServer = ejabberd_sql:escape(LServer),
-  SUser = ejabberd_sql:escape(User),
-  Timestamp = ejabberd_sql:escape(TS),
+  ODBCType = ejabberd_config:get_option({sql_type, LServer}),
+  ToString = fun(S) -> ejabberd_sql:to_string_literal(ODBCType, S) end,
+  SServer = ToString(LServer),
+  SUser = ToString(User),
+  Timestamp = ToString(TS),
 %%  Pinned =  proplists:get_value(filter_pinned, Form),
 %%  PinnedFirst = proplists:get_value(pinned_first, Form),
 %%  Archived = proplists:get_value(filter_archived, Form),
@@ -1814,8 +1818,8 @@ make_sql_query(LServer, User, TS, RSM, _Form) ->
   encrypted,
   pinned,
   mute
-  from conversation_metadata where username = '">>,SUser,<<"' and
-  metadata_updated_at > '">>,Timestamp,<<"'">>] ++ DeleteClause,
+  from conversation_metadata where username = ">>,SUser,<<" and
+  metadata_updated_at > ">>,Timestamp] ++ DeleteClause,
   PageClause = case Chat of
                  B when is_binary(B) ->
                    case Direction of
@@ -1831,8 +1835,8 @@ make_sql_query(LServer, User, TS, RSM, _Form) ->
                end,
   Query = case ejabberd_sql:use_new_schema() of
             true ->
-              [Conversations,<<" and server_host='">>,
-                SServer, <<"' ">>,PageClause, PinnedClause, ArchivedClause];
+              [Conversations,<<" and server_host=">>,
+                SServer, <<" ">>,PageClause, PinnedClause, ArchivedClause];
             false ->
               [Conversations,PageClause, PinnedClause, ArchivedClause]
           end,
@@ -1848,8 +1852,8 @@ make_sql_query(LServer, User, TS, RSM, _Form) ->
     end,
   case ejabberd_sql:use_new_schema() of
     true ->
-      {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,<<" and server_host='">>,
-        SServer, <<"' ">>,
+      {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,<<" and server_host=">>,
+        SServer, <<" ">>,
         <<" ) as subquery;">>]};
     false ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,Conversations,

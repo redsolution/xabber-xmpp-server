@@ -140,7 +140,7 @@ get_group_member(Server, Group, User, ID) ->
 
 get_group_members(Server, Group, RequesterUser, RSM, Version, XData) ->
   Filters = get_filters(XData),
-  {QueryChats, QueryCount} = make_sql_query(Group, RSM, Version, Filters),
+  {QueryChats, QueryCount} = make_sql_query(Server, Group, RSM, Version, Filters),
   {selected, _, Res} = ejabberd_sql:sql_query(Server, QueryChats),
   {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(Server, QueryCount),
   Users = make_query(Server,Res,RequesterUser, Group),
@@ -939,9 +939,11 @@ sql_change_p2p_invitation_state(LServer, User, Chat, State) ->
     )),
     ok.
 
-make_sql_query(SChat, RSM, Version, Filters) ->
+make_sql_query(LServer, Group, RSM, Version, Filters) ->
   {Max, Direction, Item} = get_max_direction_item(RSM),
-  Chat = ejabberd_sql:escape(SChat),
+  ODBCType = ejabberd_config:get_option({sql_type, LServer}),
+  ToString = fun(S) -> ejabberd_sql:to_string_literal(ODBCType, S) end,
+  SGroup = ToString(Group),
   SubsClause =
     case Version of
       undefined ->
@@ -963,13 +965,13 @@ make_sql_query(SChat, RSM, Version, Filters) ->
     end,
   FiltersClause = lists:map(
     fun({<<"nickname">>, Value})->
-      V = ejabberd_sql:escape(Value),
-      <<" and (nickname='",V/binary,"' or "
+      SV = ToString(Value),
+      <<" and (nickname=",SV/binary," or "
       "((nickname='' or nickname is null) "
-      "and auto_nickname='",V/binary,"')) ">>;
+      "and auto_nickname=",SV/binary,")) ">>;
       ({Field, Value}) ->
-        V = ejabberd_sql:escape(Value),
-        <<" and ",Field/binary," = '",V/binary,"' ">>
+        SV = ToString(Value),
+        <<" and ",Field/binary,"=",SV/binary," ">>
     end, Filters),
 
   Users = [<<"WITH group_members AS (SELECT username, id, badge,
@@ -979,7 +981,7 @@ make_sql_query(SChat, RSM, Version, Filters) ->
    THEN groupchat_users.nickname
   ELSE groupchat_users.auto_nickname
   END AS r_nickname
-  FROM groupchat_users  WHERE chatgroup = '">>,Chat, <<"'">>,
+  FROM groupchat_users  WHERE chatgroup = ">>, SGroup,
     VersionClause, SubsClause, FiltersClause,
     <<") SELECT username, id, badge, last, r_nickname, role
   from group_members where 0=0 ">>],

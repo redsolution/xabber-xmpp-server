@@ -170,8 +170,7 @@ process_iq(#iq{from = #jid{luser = LUser, lserver = LServer} = From,
            Less0 > 50 -> 50;
            true -> Less0
          end,
-  ChatList = get_count_events(LServer, LUser, Ver),
-  CurrentVer = send_retract_query_messages(From, Ver, Less, ChatList),
+  CurrentVer = send_retract_query_messages(From, Ver, Less),
   spawn(auto_clean(From, CurrentVer)),
   xmpp:make_iq_result(IQ, #retract_query{version = CurrentVer});
 process_iq(#iq{type = set, sub_els = [#retract_message{id = undefined}]} = IQ) ->
@@ -599,8 +598,9 @@ get_conv(<<>>,<<>>) ->
 get_conv(Type, JID) ->
   {Type, jid:to_string(jid:remove_resource(JID))}.
 
-send_retract_query_messages(User, Version, Less, ChatList) ->
+send_retract_query_messages(User, Version, Less) ->
   {LUser, LServer, _LResource} = jid:tolower(User),
+  ChatList = get_count_events(LServer, LUser, Version),
   Msg = #message{from = jid:remove_resource(User), to = User, type = headline},
   CurrentVer = get_version(LServer, LUser),
   DropArchiveChats = lists:filter(
@@ -653,16 +653,15 @@ get_count_events(Server, Username, Version) ->
 get_query(_Server, _Username, _Version, []) ->
   [];
 get_query(Server, Username, Version, ChatList) ->
-  ConvList = [<<C/binary,T/binary>> || {C, T, _} <- ChatList],
+  Convs = [{C, T} || {C, T, _} <- ChatList],
   case ejabberd_sql:sql_query(
     Server,
-    ?SQL("WITH retract_archive AS "
-    " (SELECT conversation||type as cid,"
-    " created,xml,version FROM message_retract"
+    ?SQL(
+    " SELECT @(created)d,@(xml)s FROM message_retract "
     " where username=%(Username)s and version > %(Version)d "
-    " and %(Server)H)"
-    " SELECT @(created)d,@(xml)s FROM retract_archive "
-    " where cid = ANY(%(ConvList)as) order by version")) of
+    " and %(Server)H "
+    " and (conversation, type) IN (%(Convs)lss)"
+    " order by version")) of
     {selected,Query} ->
       Query;
     _ -> []

@@ -30,7 +30,7 @@
 
 %% API
 -export([init/2, remove_user/2, remove_room/3, delete_old_messages/3,
-	 get_columns_and_from/0, get_user_and_bare_peer/3, get_odbctype_and_escape/1, is_encrypted/2,
+	 get_columns_and_from/0, get_user_and_bare_peer/3, is_encrypted/2,
 	 extended_fields/0, store/11, write_prefs/4, get_prefs/2, select/6, export/1,
    remove_from_archive/3, make_archive_el/8]).
 
@@ -360,15 +360,6 @@ export(_Server) ->
 get_columns_and_from() ->
     {<<" timestamp, xml, peer, kind, nick">>, <<" FROM archive">>}.
 
-get_odbctype_and_escape(LServer) ->
-    ODBCType = ejabberd_config:get_option({sql_type, LServer}),
-    Escape =
-        case ODBCType of
-            mssql -> fun ejabberd_sql:standard_escape/1;
-            sqlite -> fun ejabberd_sql:standard_escape/1;
-            _ -> fun ejabberd_sql:escape/1
-        end,
-    {ODBCType, Escape}.
 
 %%%===================================================================
 %%% Internal functions
@@ -389,7 +380,8 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
     FilterAfterID = proplists:get_value('after-id', MAMQuery, <<>>),
     FilterBeforeID = proplists:get_value('before-id', MAMQuery, <<>>),
     {Max, Direction, ID} = get_max_direction_id(RSM),
-    {ODBCType, Escape} = get_odbctype_and_escape(LServer),
+    ODBCType = ejabberd_config:get_option({sql_type, LServer}),
+    ToString = fun(S) -> ejabberd_sql:to_string_literal(ODBCType, S) end,
     LimitClause = if is_integer(Max), Max >= 0, ODBCType /= mssql ->
 			  [<<" limit ">>, integer_to_binary(Max+1)];
 		     true ->
@@ -401,20 +393,18 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
 			  []
 		  end,
     WithTextClause = if is_binary(WithText), WithText /= <<>> ->
-			     [<<" and  to_tsvector (txt) @@ plainto_tsquery ('">>,
-			      Escape(WithText), <<"')">>];
+			     [<<" and  to_tsvector (txt) @@ plainto_tsquery (">>,
+			      ToString(WithText), <<")">>];
 			true ->
 			     []
 		     end,
     WithClause = case catch jid:tolower(With) of
 		     {_, _, <<>>} ->
-			 [<<" and bare_peer='">>,
-			  Escape(jid:encode(With)),
-			  <<"'">>];
+			 [<<" and bare_peer=">>,
+			  ToString(jid:encode(With))];
 		     {_, _, _} ->
-			 [<<" and peer='">>,
-			  Escape(jid:encode(With)),
-			  <<"'">>];
+			 [<<" and peer=">>,
+			  ToString(jid:encode(With))];
 		     _ ->
 			 []
 		 end,
@@ -463,34 +453,34 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
     TagsClause = case WithTags of
                    [] -> [];
                    _ ->
-                     TL = [<<$',(Escape(T))/binary,$'>> || T <- WithTags],
+                     TL = [ToString(T) || T <- WithTags],
                      TLB = str:join(TL, <<$,>>),
                      [<<" and ARRAY[",TLB/binary,"] && tags ">>]
                  end,
     ConvClause = case ConvType of
                    <<>> -> [];
                    _ ->
-                     [<<" and conversation_type='">>,
-                       Escape(ConvType), <<"' ">>]
+                     [<<" and conversation_type=">>,
+                       ToString(ConvType)]
                  end,
-    SUser = Escape(User),
-    SServer = Escape(LServer),
+    SUser = ToString(User),
+    SServer = ToString(LServer),
     Query =
         case ejabberd_sql:use_new_schema() of
             true ->
                 [<<"SELECT ">>, TopClause,
                  <<" timestamp, xml, peer, kind, nick"
-                 " FROM archive WHERE username='">>,
-                 SUser, <<"' and server_host='">>,
-                 SServer, <<"'">>, WithClause, WithTextClause,
+                 " FROM archive WHERE username=">>, SUser,
+                  <<" and server_host=">>, SServer,
+                  WithClause, WithTextClause,
                   StartClause, EndClause, PageClause, IDsClause,
                   AfterIDClause, BeforeIDClause, TagsClause,
                   ConvClause];
             false ->
                 [<<"SELECT ">>, TopClause,
                   <<" timestamp, xml, peer, kind, nick"
-                  " FROM archive WHERE username='">>,
-                 SUser, <<"'">>, WithClause, WithTextClause,
+                  " FROM archive WHERE username=">>, SUser,
+                  WithClause, WithTextClause,
                   StartClause, EndClause, PageClause, IDsClause,
                   AfterIDClause, BeforeIDClause, TagsClause,
                   ConvClause]

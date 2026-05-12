@@ -592,11 +592,11 @@ update_device_secret(User, Server, Device) ->
   end.
 
 
-prepare_value(V) when is_binary(V) ->
-  "'" ++ binary_to_list(ejabberd_sql:escape(V)) ++ "'";
-prepare_value(V) when is_integer(V) ->
+prepare_value(ODBCType, V) when is_binary(V) ->
+  binary_to_list(ejabberd_sql:to_string_literal(ODBCType, V));
+prepare_value(_ODBCType, V) when is_integer(V) ->
   integer_to_list(V);
-prepare_value(_V) ->
+prepare_value(_, _) ->
   "''".
 
 process_packet_payload(User, El) ->
@@ -968,11 +968,12 @@ sql_update_device(LServer, JID, ID, Props) when is_record(JID, jid) ->
   SJID = jid:to_string(jid:remove_resource(JID)),
   sql_update_device(LServer, SJID, ID, Props);
 sql_update_device(LServer, SJID, ID, Props) ->
-  PreProps = [ atom_to_list(K) ++ "=" ++ prepare_value(V) || {K,V} <- Props,
+  ODBCType = ejabberd_config:get_option({sql_type, LServer}),
+  PreProps = [atom_to_list(K) ++ "=" ++ prepare_value(ODBCType, V) || {K,V} <- Props,
     V =/= undefined],
   SetString = string:join(PreProps, ","),
-  EJID = "'" ++ binary_to_list(ejabberd_sql:escape(SJID)) ++ "'",
-  EID = "'" ++ binary_to_list(ejabberd_sql:escape(ID)) ++ "'",
+  EJID = prepare_value(ODBCType, SJID),
+  EID = prepare_value(ODBCType, ID),
   Query = "update devices set " ++ SetString ++
     " where jid=" ++ EJID ++ " and device_id=" ++  EID  ++ ";",
   case ejabberd_sql:sql_query(LServer, Query) of

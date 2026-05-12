@@ -159,17 +159,20 @@ process_disco_items(#iq{lang = Lang} = IQ) ->
 
 make_sql_query(LServer, User, UserHost, RSM) ->
   {Max, Direction, Group} = get_max_direction_chat(RSM),
-  SServer = ejabberd_sql:escape(LServer),
-  SUser = ejabberd_sql:escape(User),
+  ODBCType = ejabberd_config:get_option({sql_type, LServer}),
+  ToString = fun(S) -> ejabberd_sql:to_string_literal(ODBCType, S) end,
+  SServer = ToString(ODBCType, LServer),
+  SUser = ToString(ODBCType, User),
+  SUserHost = ToString(ODBCType, UserHost),
   LimitClause = if is_integer(Max), Max >= 0 ->
     [<<" limit ">>, integer_to_binary(Max)];
                   true ->
                     []
                 end,
   ChatDiscovery = [<<"select jid,name from groupchats where searchable!='none' and
-    jid not in (select chatgroup from groupchat_block where blocked = '">>,SUser,<<"'
-    or blocked = '">>,UserHost,<<"')  and (model='open' or (model='private' and
-    (select true from groupchat_users where username='">>,SUser,<<"'
+    jid not in (select chatgroup from groupchat_block where blocked = ">>,SUser,<<"
+    or blocked = ">>,SUserHost,<<")  and (model='open' or (model='private' and
+    (select true from groupchat_users where username=">>,SUser,<<"
      and chatgroup=jid and subscription='wait')))">>],
   PageClause = case Group of
                  B when is_binary(B) ->
@@ -186,8 +189,8 @@ make_sql_query(LServer, User, UserHost, RSM) ->
                end,
   Query = case ejabberd_sql:use_new_schema() of
             true ->
-              [ChatDiscovery,<<" and server_host='">>,
-                SServer, <<"'">>,PageClause];
+              [ChatDiscovery,<<" and server_host=">>,
+                SServer, PageClause];
             false ->
               [ChatDiscovery,PageClause]
           end,
@@ -206,9 +209,8 @@ make_sql_query(LServer, User, UserHost, RSM) ->
   end,
   case ejabberd_sql:use_new_schema() of
     true ->
-      {QueryPage,[<<"SELECT COUNT(*) FROM (">>,ChatDiscovery,<<" and server_host='">>,
-        SServer, <<"'">>,
-        <<" GROUP BY jid,name) as subquery;">>]};
+      {QueryPage,[<<"SELECT COUNT(*) FROM (">>,ChatDiscovery,<<" and server_host=">>,
+        SServer, <<" GROUP BY jid,name) as subquery;">>]};
     false ->
       {QueryPage,[<<"SELECT COUNT(*) FROM (">>,ChatDiscovery,
         <<" GROUP BY jid,name) as subquery;">>]}

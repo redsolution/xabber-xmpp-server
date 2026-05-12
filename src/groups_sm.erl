@@ -94,7 +94,7 @@ handle_call(_Request, _From, State) ->
 handle_cast({group_created, Server, GroupLocalPart, Info}, #xabber_sm_state{pid = PID} = State) ->
   SID = {p1_time_compat:unique_timestamp(), PID},
   Info1 = maps:to_list(Info) ++ [{group, true}],
-  ejabberd_sm:open_session(SID, GroupLocalPart, Server,
+  ejabberd_sm:set_session(SID, GroupLocalPart, Server,
     <<"Group">>, 50, Info1),
   {noreply, State};
 handle_cast({group_deleted,Server, GroupLocalPart},State) ->
@@ -177,7 +177,7 @@ start_entities(GroupsInfo, Pid) ->
   lists:foreach(fun({{LUser, LServer, Resource}, Info}) ->
     Info1 = maps:to_list(Info),
     SID = {p1_time_compat:unique_timestamp(), Pid},
-    ejabberd_sm:open_session(SID, LUser, LServer, Resource,
+    ejabberd_sm:set_session(SID, LUser, LServer, Resource,
       50, Info1) end, GroupsInfo).
 
 %%%===================================================================

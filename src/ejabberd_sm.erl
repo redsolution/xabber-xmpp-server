@@ -82,7 +82,8 @@
 	 make_sid/0,
 	 clean_cache/1,
 	 config_reloaded/0,
-	 is_online/1
+	 is_online/1,
+	 set_session/6
 	]).
 
 -export([init/1, handle_call/3, handle_cast/2,

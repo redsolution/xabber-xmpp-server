@@ -30,7 +30,7 @@
 -define(SQL_INSERT_MARK, sql_insert__mark_).
 -define(SQL_INSERT(Table, Fields), ?SQL_INSERT_MARK(Table, Fields)).
 
--record(sql_query, {hash, format_query, format_res, args, loc}).
+-record(sql_query, {hash, format_query, format_res, args, loc, no_prepare = false}).
 
 -record(sql_escape, {string, integer, boolean, in_array_string}).
 

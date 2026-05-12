@@ -42,7 +42,8 @@
                 res_pos = 0,
                 server_host_used = false,
                 used_vars = [],
-                use_new_schema}).
+                use_new_schema,
+                has_list_params = false}).
 
 -define(QUERY_RECORD, "sql_query").
 
@@ -324,6 +325,59 @@ parse1([$%, $( | S], Acc, State) ->
                             params = [Var | State2#state.params],
                             param_pos = State2#state.param_pos + 1,
                             used_vars = [Name | State2#state.used_vars]};
+            {list, ElemType} ->
+                EscapeField = case ElemType of
+                                  string -> string;
+                                  integer -> integer
+                              end,
+                Convert = erl_syntax:application(
+                    erl_syntax:atom(ejabberd_sql),
+                    erl_syntax:atom(to_list),
+                    [erl_syntax:record_access(
+                        erl_syntax:variable(?ESCAPE_VAR),
+                        erl_syntax:atom(?ESCAPE_RECORD),
+                        erl_syntax:atom(EscapeField)),
+                     erl_syntax:variable(Name)]),
+                State2#state{'query' = [{var, Var} | State2#state.'query'],
+                             args = [Convert | State2#state.args],
+                             params = [Var | State2#state.params],
+                             param_pos = State2#state.param_pos + 1,
+                             has_list_params = true,
+                             used_vars = [Name | State2#state.used_vars]};
+            {list, string, string} ->
+                Convert = erl_syntax:application(
+                    erl_syntax:atom(ejabberd_sql),
+                    erl_syntax:atom(to_list_ss),
+                    [erl_syntax:record_access(
+                        erl_syntax:variable(?ESCAPE_VAR),
+                        erl_syntax:atom(?ESCAPE_RECORD),
+                        erl_syntax:atom(string)),
+                     erl_syntax:variable(Name)]),
+                State2#state{'query' = [{var, Var} | State2#state.'query'],
+                             args = [Convert | State2#state.args],
+                             params = [Var | State2#state.params],
+                             param_pos = State2#state.param_pos + 1,
+                             has_list_params = true,
+                             used_vars = [Name | State2#state.used_vars]};
+            {list, integer, string} ->
+                Convert = erl_syntax:application(
+                    erl_syntax:atom(ejabberd_sql),
+                    erl_syntax:atom(to_list_ds),
+                    [erl_syntax:record_access(
+                        erl_syntax:variable(?ESCAPE_VAR),
+                        erl_syntax:atom(?ESCAPE_RECORD),
+                        erl_syntax:atom(integer)),
+                     erl_syntax:record_access(
+                        erl_syntax:variable(?ESCAPE_VAR),
+                        erl_syntax:atom(?ESCAPE_RECORD),
+                        erl_syntax:atom(string)),
+                     erl_syntax:variable(Name)]),
+                State2#state{'query' = [{var, Var} | State2#state.'query'],
+                             args = [Convert | State2#state.args],
+                             params = [Var | State2#state.params],
+                             param_pos = State2#state.param_pos + 1,
+                             has_list_params = true,
+                             used_vars = [Name | State2#state.used_vars]};
             _ ->
                 Convert =
                     erl_syntax:application(
@@ -366,6 +420,17 @@ parse_name([$), $a, T | S], Acc, 0, true, State) ->
 parse_name([$), $a, T | _], _Acc, 0, false, State) ->
   throw({error, State#state.loc,
     ["array type 'a", T, "' is not allowed for outputs"]});
+parse_name([$), $l, $s, $s | S], Acc, 0, true, State) ->
+    {lists:reverse(Acc), {list, string, string}, S, State};
+parse_name([$), $l, $d, $s | S], Acc, 0, true, State) ->
+    {lists:reverse(Acc), {list, integer, string}, S, State};
+parse_name([$), $l, $s | S], Acc, 0, true, State) ->
+    {lists:reverse(Acc), {list, string}, S, State};
+parse_name([$), $l, $d | S], Acc, 0, true, State) ->
+    {lists:reverse(Acc), {list, integer}, S, State};
+parse_name([$), $l | _], _Acc, 0, _, State) ->
+    throw({error, State#state.loc,
+           "unknown or unsupported list type specifier"});
 parse_name([$), T | S], Acc, 0, IsArg, State) ->
     Type =
         case T of
@@ -440,7 +505,10 @@ make_sql_query(State) ->
             )])),
       erl_syntax:record_field(
        erl_syntax:atom(loc),
-        erl_syntax:abstract({get(?MOD), State#state.loc}))
+        erl_syntax:abstract({get(?MOD), State#state.loc})),
+      erl_syntax:record_field(
+       erl_syntax:atom(no_prepare),
+        erl_syntax:abstract(State#state.has_list_params))
      ]).
 
 pack_query([]) ->
@@ -713,6 +781,8 @@ concat_states(States) ->
                 args = ST1#state.args ++ ST2#state.args,
                 res = ST1#state.res ++ ST2#state.res,
                 res_vars = ST1#state.res_vars ++ ST2#state.res_vars,
+                has_list_params = ST1#state.has_list_params orelse
+                                  ST2#state.has_list_params,
                 loc = case ST1#state.loc of
                           undefined -> ST2#state.loc;
                           _ -> ST1#state.loc

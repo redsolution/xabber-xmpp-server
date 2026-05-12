@@ -46,6 +46,7 @@
 	 escape_like/1,
 	 escape_like_arg/1,
 	 escape_like_arg_circumflex/1,
+	 to_string_literal/2,
 	 to_bool/1,
 	 sqlite_db/1,
 	 sqlite_file/1,
@@ -56,7 +57,10 @@
 	 odbcinst_config/0,
 	 init_mssql/1,
 	 keep_alive/2,
-   to_array/2]).
+   to_array/2,
+   to_list/2,
+   to_list_ss/2,
+   to_list_ds/3]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3, handle_sync_event/4,
@@ -263,6 +267,40 @@ to_bool(_) -> false.
 to_array(EscapeFun, Val) ->
   Escaped = lists:join(<<",">>, lists:map(EscapeFun, Val)),
   [<<"{">>, Escaped, <<"}">>].
+
+to_string_literal(odbc, S) ->
+  <<"'", (escape(S))/binary, "'">>;
+to_string_literal(mysql, S) ->
+  <<"'", (escape(S))/binary, "'">>;
+to_string_literal(mssql, S) ->
+  <<"'", (standard_escape(S))/binary, "'">>;
+to_string_literal(sqlite, S) ->
+  <<"'", (standard_escape(S))/binary, "'">>;
+to_string_literal(pgsql, S) ->
+  <<"E'", (escape(S))/binary, "'">>.
+
+%% Generates comma-separated list for single-column IN clause:
+%%   'v1','v2','v3'
+to_list(EscapeFun, Val) ->
+    lists:join(<<",">>, lists:map(EscapeFun, Val)).
+
+%% Generates row-value list for two-column IN clause:
+%%   ('a1','b1'),('a2','b2')
+to_list_ss(EscapeFun, Pairs) ->
+    Parts = lists:map(
+        fun({S1, S2}) ->
+            [<<"(">>, EscapeFun(S1), <<",">>, EscapeFun(S2), <<")">>]
+        end, Pairs),
+    lists:join(<<",">>, Parts).
+
+%% Generates row-value list for integer+string two-column IN clause:
+%%   (1,'b1'),(2,'b2')
+to_list_ds(EscapeInt, EscapeStr, Pairs) ->
+    Parts = lists:map(
+        fun({D, S}) ->
+            [<<"(">>, EscapeInt(D), <<",">>, EscapeStr(S), <<")">>]
+        end, Pairs),
+    lists:join(<<",">>, Parts).
 
 encode_term(Term) ->
     escape(list_to_binary(
@@ -572,13 +610,18 @@ sql_query_internal(#sql_query{} = Query) ->
         Key = {?PREPARE_KEY, Query#sql_query.hash},
         case get(Key) of
           undefined ->
-            case pgsql_prepare(Query, State) of
-              {ok, _, _, _} ->
-                put(Key, prepared);
-              {error, Error} ->
-                ?ERROR_MSG("PREPARE failed for SQL query "
-                "at ~p: ~p", [Query#sql_query.loc, Error]),
-                put(Key, ignore)
+            case Query#sql_query.no_prepare of
+              true ->
+                put(Key, ignore);
+              false ->
+                case pgsql_prepare(Query, State) of
+                  {ok, _, _, _} ->
+                    put(Key, prepared);
+                  {error, Error} ->
+                    ?ERROR_MSG("PREPARE failed for SQL query "
+                    "at ~p: ~p", [Query#sql_query.loc, Error]),
+                    put(Key, ignore)
+                end
             end;
           _ ->
             ok
@@ -860,22 +903,14 @@ sqlite_to_odbc(_Host, _) ->
 %% Open a database connection to PostgreSQL
 pgsql_connect(Server, Port, DB, Username, Password, ConnectTimeout,
 	      Transport, SSLOpts) ->
-    case pgsql:connect([{host, Server},
-                        {database, DB},
-                        {user, Username},
-                        {password, Password},
-                        {port, Port},
-			{transport, Transport},
-			{connect_timeout, ConnectTimeout},
-                        {as_binary, true}|SSLOpts]) of
-        {ok, Ref} ->
-            pgsql:squery(Ref, [<<"alter database \"">>, DB, <<"\" set ">>,
-                               <<"standard_conforming_strings='off';">>]),
-            pgsql:squery(Ref, [<<"set standard_conforming_strings to 'off';">>]),
-            {ok, Ref};
-        Err ->
-            Err
-    end.
+  pgsql:connect([{host, Server},
+    {database, DB},
+    {user, Username},
+    {password, Password},
+    {port, Port},
+    {transport, Transport},
+    {connect_timeout, ConnectTimeout},
+    {as_binary, true}|SSLOpts]).
 
 %% Convert PostgreSQL query result to Erlang ODBC result formalism
 pgsql_to_odbc({ok, PGSQLResult}) ->

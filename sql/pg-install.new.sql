@@ -102,6 +102,7 @@ CREATE INDEX i_archive_sh_username_timestamp ON archive USING btree (server_host
 CREATE INDEX i_archive_sh_username_peer ON archive USING btree (server_host, username, peer);
 CREATE INDEX i_archive_sh_username_bare_peer ON archive USING btree (server_host, username, bare_peer);
 CREATE INDEX i_archive_sh_timestamp ON archive USING btree (server_host, timestamp);
+CREATE INDEX i_archive_sh_username_origin_id ON archive USING btree (server_host, username, origin_id);
 
 CREATE TABLE archive_prefs (
     username text NOT NULL,

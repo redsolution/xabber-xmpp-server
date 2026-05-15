@@ -79,12 +79,12 @@ depends(_Host, _Opts) ->
 
 mod_opt_type(device_expiration_time) ->
   fun(I) when is_integer(I), I > 0 -> I end;
-mod_opt_type(device_ocra_only) ->
+mod_opt_type(devices_only) ->
   fun (B) when is_boolean(B) -> B end.
 
 mod_options(_Host) -> [
   {device_expiration_time, 31536000},
-  {device_ocra_only, false}
+  {devices_only, false}
 ].
 
 %%%%
@@ -125,7 +125,7 @@ c2s_handle_recv(#{stream_state := wait_for_bind} = State, _, #iq{type = set} = I
   IsBind = xmpp:has_subtag(IQ, #bind{}),
   RevokeAll = xmpp:try_subtag(IQ, #devices_revoke_all{}),
   #{auth_module := Auth, lang := Lang, lserver := Server, user := User} = State,
-  DeviceOnly = gen_mod:get_module_opt(Server, ?MODULE, device_ocra_only),
+  DeviceOnly = gen_mod:get_module_opt(Server, ?MODULE, devices_only),
   if
     Register =/= false andalso Auth =/= mod_devices andalso Auth =/= ejabberd_oauth ->
       Device = Register#device_register.device,
@@ -135,10 +135,10 @@ c2s_handle_recv(#{stream_state := wait_for_bind} = State, _, #iq{type = set} = I
         DeviceID -> State#{auth_module => mod_devices, device_id => DeviceID}
       end;
     IsBind andalso DeviceOnly andalso Auth =/= mod_devices ->
-      ?INFO_MSG("You have enabled option device_ocra_only."
+      ?INFO_MSG("You have enabled option devices_only."
       " Disable it in settings, if you want to allow other authorization",[]),
       Txt = <<"Access denied by service policy. Use DEVICE-OCRA for auth">>,
-      Err = xmpp:make_error(IQ,xmpp:err_not_allowed(Txt,Lang)),
+      Err = xmpp:make_error(IQ,xmpp:err_policy_violation(Txt,Lang)),
       xmpp_stream_in:send_error(State, IQ, Err),
       State#{stream_state => disconnected};
     RevokeAll =/= false ->

@@ -473,7 +473,7 @@ do_create_p2p_group(Server, Creator, Invited, ParentGroup) ->
     #groups_contacts{}, #groups_domains{}, ?DEFAULT_STATUS,
     active, Creator, ParentGroup, LocalPart),
   Info = #{name => GroupName, description => Desc, privacy => Privacy,
-    membership => Membership, index => Index, message => 0,
+    membership => Membership, index => Index, messages => #groups_pinned{},
     contacts => #groups_contacts{}, domains => #groups_domains{},
     parent => ParentGroup, user_count => 0, gstate => active,
     gstatus => ?DEFAULT_STATUS, p2pusers => P2PUsers},

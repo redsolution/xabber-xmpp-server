@@ -107,7 +107,7 @@ user_avatar_changed(Server, Group, User) ->
 user_left(Server, Group, User) ->
   Users = groups_members:users_to_send(Server, Group),
   send_notice(Users, Group, [members, present]),
-  system_message(left, Server, Group, User).
+  system_message(leave, Server, Group, User).
 
 user_join(Acc, {Server, UserJID, Group}) ->
   Users = groups_members:users_to_send(Server, Group),
@@ -192,9 +192,9 @@ system_message(pinned, Server, Group, User, UserCard, Nick) ->
 system_message(join, Server, Group, User, UserCard, Nick) ->
   Txt =  <<Nick/binary," joined the group.">>,
   send_sys_msg(Server, Group, User, UserCard, <<"join">>, Txt, []);
-system_message(left, Server, Group, User, UserCard, Nick) ->
+system_message(leave, Server, Group, User, UserCard, Nick) ->
   Txt =  <<Nick/binary," left the group.">>,
-  send_sys_msg(Server, Group, User, UserCard, <<"left">>, Txt, []);
+  send_sys_msg(Server, Group, User, UserCard, <<"leave">>, Txt, []);
 system_message(update, Server, Group, User, NewCard, OldCard) ->
   NewName = get_name(NewCard),
   OldName = get_name(OldCard),

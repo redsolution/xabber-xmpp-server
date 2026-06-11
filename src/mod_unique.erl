@@ -101,6 +101,8 @@ mod_options(_) -> [].
 sent_message_stored({ok, Pkt}, _LServer, _JID, _StanzaID,
     #delivery_retry{to = To} = _Request) when To /= undefined ->
   {ok, Pkt};
+sent_message_stored({ok, Pkt}, _LServer, #jid{resource = <<>>}, _StanzaID, _) ->
+  {ok, Pkt};
 sent_message_stored({ok, Pkt}, LServer, JID, StanzaID, _) ->
   send_received(Pkt, LServer, JID, StanzaID),
   {ok, Pkt};

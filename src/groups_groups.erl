@@ -573,10 +573,7 @@ group_details(Data, Server, User, Group, Opts) ->
     end,
   MembersCount = case proplists:get_value(members, Opts) of
                    true ->
-                     case count_users(Server, Group) of
-                       [Count] -> Count;
-                       _ -> undefined
-                     end;
+                     count_users(Server, Group);
                    _ ->
                      undefined
                  end,

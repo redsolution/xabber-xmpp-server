@@ -201,6 +201,7 @@ get_message_tags(Pkt) ->
   Audio = {<<"audio">>, search_in_references(References, <<"audio">>)},
   Video = {<<"video">>, search_in_references(References, <<"video">>)},
   Document = {<<"document">>, search_in_references(References, othe)},
+  URL = {<<"url">>, search_element_in_references(References, #markup_link{})},
   Voice = {<<"voice">>, search_element_in_references(References, #voice_message{})},
   Geo = {<<"geo">>, search_element_in_references(References, #geoloc{})},
   Sticker = {<<"sticker">>, search_element_in_references(References, #sticker{})},
@@ -211,7 +212,7 @@ get_message_tags(Pkt) ->
       _ -> false
     end end,
     [#jingle_reject{}, #jingle_accept{}, #jingle_propose{}]),
-  Tags = [Image, Audio, Video, Document, Voice, Geo, Sticker, Invite] ++ VoIP,
+  Tags = [Image, Audio, Video, Document, URL, Voice, Geo, Sticker, Invite] ++ VoIP,
   lists:filtermap(
     fun({Tag, true}) -> {true, Tag};
       (_) -> false

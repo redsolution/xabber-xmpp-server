@@ -241,28 +241,20 @@ extract_auth(#request{auth = HTTPAuth}) ->
   case HTTPAuth of
     {SJID, Pass} ->
       try jid:decode(SJID) of
-        #jid{luser = User, lserver = Server, lresource = Res} ->
+        #jid{luser = User, lserver = Server} ->
           case ejabberd_auth:check_password(User, <<"">>, Server, Pass) of
             true->
               #{usr => {User, Server, <<"">>}, caller_server => Server};
             _ ->
-              %%{error, invalid_auth}
-              %%To support legacy clients.
-              %%todo: Remove it.
-              check_token(User, Server, Res, Pass)
+              {error, invalid_auth}
           end
       catch _:{bad_jid, _} ->
         {error, invalid_auth}
       end;
     {oauth, Token, _} ->
       case check_jwt(Token) of
-        {error, not_jwt} ->
-          case ejabberd_oauth:check_token(Token) of
-            {ok, {U, S}, Scope} ->
-              #{usr => {U, S, <<"">>}, oauth_scope => Scope, caller_server => S};
-            {false, Reason} ->
-              {error, Reason}
-          end;
+        {error, _} ->
+          {error, invalid_auth};
         Result ->
           Result
       end;
@@ -271,18 +263,6 @@ extract_auth(#request{auth = HTTPAuth}) ->
   end;
 extract_auth(_) ->
   {error, invalid_auth}.
-
-check_token(User, Server, Res, Token) ->
-  case ejabberd_auth:user_exists(User, Server) of
-    true ->
-      case check_totp(User, Server, Res, Token) of
-        {error, invalid_auth} ->
-          check_hotp(User, Server, Res, Token);
-        R -> R
-      end;
-    _ ->
-      {error, invalid_auth}
-  end.
 
 check_jwt(Token) ->
   case binary:split(Token, <<".">>, [global]) of
@@ -301,7 +281,7 @@ check_jwt(Token) ->
         {error, invalid_auth}
       end;
     _ ->
-      {error, not_jwt}
+      {error, invalid_auth}
   end.
 
 check_jwt(_LUser, _LServer, _DevID, _Token, Exp, Now) when Exp < Now ->
@@ -319,27 +299,6 @@ check_jwt(LUser, LServer, DevID, Token) ->
         _ ->
           {error, invalid_auth}
       end
-  end.
-
-check_totp(User, Server, Res, Token) ->
-  Secrets = get_secrets(Server, jid:make(User,Server), Res),
-  Now = seconds_since_epoch(0),
-  lists:foldl(
-    fun({Secret, _, _, Expire}, Acc) when Expire > Now->
-    case hotp:valid_totp(Token, Secret) of
-      true ->
-        #{usr => {User, Server, <<"">>}, caller_server => Server};
-      _ -> Acc
-    end;
-      (_, Acc) -> Acc
-    end, {error, invalid_auth}, Secrets).
-
-check_hotp(User, Server, _Res, Token) ->
-  case mod_devices:check_token(true, User, Server, Token) of
-    {ok, {DeviceID, NewCount}} ->
-      mod_devices:set_count(User, Server, DeviceID, NewCount),
-      #{usr => {User, Server, <<"">>}, caller_server => Server};
-    _-> {error, invalid_auth}
   end.
 
 make_session(User, Server, ReqID, Caller, Tab)->
@@ -382,14 +341,6 @@ process_messages(LServer, Packet) ->
   ejabberd_hooks:run_fold(offline_message_hook,
     LServer, {bounce, Packet}, []).
 
-get_secrets(Server, JID, <<>>) ->
-  mod_devices:select_secrets(Server, JID);
-get_secrets(Server, JID, DevId) ->
-  case mod_devices:select_secret(Server, JID, DevId) of
-    {error, _} -> [];
-    {S, C, E, _} -> [{S, C, DevId, E}]
-  end.
-
 check_host(Host) ->
   ejabberd_router:is_my_host(Host) andalso
     gen_mod:is_loaded(Host, ?MODULE).
@@ -400,11 +351,6 @@ make_string(Values) ->
 do_cast(LServer, Request) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
   gen_server:cast(Proc, Request).
-
--spec seconds_since_epoch(integer()) -> non_neg_integer().
-seconds_since_epoch(Diff) ->
-  {Mega, Secs, _} = os:timestamp(),
-  Mega * 1000000 + Secs + Diff.
 
 %%%===================================================================
 %%% API

@@ -33,8 +33,7 @@
 -export([start/2, stop/1, reload/3, mod_opt_type/1, mod_options/1, depends/2]).
 
 %% ejabberd_hooks callbacks.
--export([disco_sm_features/5, c2s_session_pending/1, c2s_copy_session/2,
-	 c2s_handle_cast/2, c2s_stanza/3, mam_message/6, offline_message/1,
+-export([disco_sm_features/5, c2s_copy_session/2, c2s_handle_cast/2,
   xabber_push_notification/4, remove_user/2, revoke_devices/3]).
 
 %% gen_iq_handler callback.
@@ -49,7 +48,6 @@
 %% For IQ callbacks
 -export([delete_session/3]).
 
--include("ejabberd.hrl").
 -include("ejabberd_commands.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
@@ -178,7 +176,7 @@ delete_old_sessions(Days) ->
 			      sql -> {sql, Host};
 			      Other -> {Other, global}
 			  end
-		  end, ?MYHOSTS)),
+		  end, ejabberd_config:get_myhosts())),
     Results = lists:map(
 		fun({DBType, Host}) ->
 			Mod = gen_mod:db_mod(DBType, ?MODULE),
@@ -204,18 +202,14 @@ register_hooks(Host) ->
 			xabber_push_notification, 60),
     ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
 		       disco_sm_features, 50),
-    ejabberd_hooks:add(c2s_session_pending, Host, ?MODULE,
-		       c2s_session_pending, 50),
+%%    ejabberd_hooks:add(c2s_session_pending, Host, ?MODULE,
+%%		       c2s_session_pending, 50),
     ejabberd_hooks:add(c2s_copy_session, Host, ?MODULE,
 		       c2s_copy_session, 50),
     ejabberd_hooks:add(c2s_handle_cast, Host, ?MODULE,
 		       c2s_handle_cast, 50),
-    ejabberd_hooks:add(c2s_handle_send, Host, ?MODULE,
-		       c2s_stanza, 50),
-    ejabberd_hooks:add(store_mam_message, Host, ?MODULE,
-		       mam_message, 50),
-    ejabberd_hooks:add(store_offline_message, Host, ?MODULE,
-		       offline_message, 50),
+%%    ejabberd_hooks:add(c2s_handle_send, Host, ?MODULE,
+%%		       c2s_stanza, 50),
     ejabberd_hooks:add(remove_user, Host, ?MODULE,
 		       remove_user, 50).
 
@@ -226,18 +220,14 @@ unregister_hooks(Host) ->
 		xabber_push_notification, 60),
     ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
 			  disco_sm_features, 50),
-    ejabberd_hooks:delete(c2s_session_pending, Host, ?MODULE,
-			  c2s_session_pending, 50),
+%%    ejabberd_hooks:delete(c2s_session_pending, Host, ?MODULE,
+%%			  c2s_session_pending, 50),
     ejabberd_hooks:delete(c2s_copy_session, Host, ?MODULE,
 			  c2s_copy_session, 50),
     ejabberd_hooks:delete(c2s_handle_cast, Host, ?MODULE,
 			  c2s_handle_cast, 50),
-    ejabberd_hooks:delete(c2s_handle_send, Host, ?MODULE,
-			  c2s_stanza, 50),
-    ejabberd_hooks:delete(store_mam_message, Host, ?MODULE,
-			  mam_message, 50),
-    ejabberd_hooks:delete(store_offline_message, Host, ?MODULE,
-			  offline_message, 50),
+%%    ejabberd_hooks:delete(c2s_handle_send, Host, ?MODULE,
+%%			  c2s_stanza, 50),
     ejabberd_hooks:delete(remove_user, Host, ?MODULE,
 			  remove_user, 50).
 
@@ -428,50 +418,32 @@ revoke_devices(LUser, LServer, DevIDList) ->
 	LookupFun = fun() -> LookupResult end,
 	delete_sessions(LUser, LServer, LookupFun, Mod).
 
--spec c2s_stanza(c2s_state(), xmpp_element() | xmlel(), term()) -> c2s_state().
-c2s_stanza(State, #stream_error{}, _SendResult) ->
-  State;
-c2s_stanza(#{push_enabled := true, mgmt_state := pending} = State, Pkt, _SendResult) ->
-  ?DEBUG("Notifying client of stanza", []),
-  case xmpp:is_stanza(Pkt) of
-    true -> notify(State, Pkt);
-    _ -> ok
-  end,
-  State;
-c2s_stanza(State, _Pkt, _SendResult) ->
-  State.
+%%-spec c2s_stanza(c2s_state(), xmpp_element() | xmlel(), term()) -> c2s_state().
+%%c2s_stanza(State, #stream_error{}, _SendResult) ->
+%%  State;
+%%c2s_stanza(#{push_enabled := true, mgmt_state := pending} = State, Pkt, _SendResult) ->
+%%  ?DEBUG("Notifying client of stanza", []),
+%%  case xmpp:is_stanza(Pkt) of
+%%    true -> notify(State, Pkt);
+%%    _ -> ok
+%%  end,
+%%  State;
+%%c2s_stanza(State, _Pkt, _SendResult) ->
+%%  State.
 
--spec mam_message(message() | drop, binary(), binary(), jid(),
-		  chat | groupchat, recv | send) -> message().
-mam_message(Pkt, _LUser, _LServer, _Peer, _Type, _Dir) ->
-    Pkt.
-
--spec offline_message(message()) -> message().
-offline_message(#message{meta = #{mam_archived := true}} = Pkt) ->
-    Pkt; % Push notification was triggered via MAM.
-offline_message(#message{to = #jid{luser = LUser, lserver = LServer}} = Pkt) ->
-    case lookup_sessions(LUser, LServer) of
-	{ok, [_|_] = Clients} ->
-	    ?DEBUG("Notifying ~s@~s of offline message", [LUser, LServer]),
-	    notify(LUser, LServer, Clients, Pkt);
-	_ ->
-	    ok
-    end,
-    Pkt.
-
--spec c2s_session_pending(c2s_state()) -> c2s_state().
-c2s_session_pending(#{push_enabled := true, mgmt_queue := Queue} = State) ->
-    case p1_queue:len(Queue) of
-	Len when Len > 0 ->
-	    ?DEBUG("Notifying client of unacknowledged stanza(s)", []),
-	    Pkt = mod_stream_mgmt:queue_find(fun is_message_with_body/1, Queue),
-	    notify(State, Pkt),
-	    State;
-	0 ->
-	    State
-    end;
-c2s_session_pending(State) ->
-    State.
+%%-spec c2s_session_pending(c2s_state()) -> c2s_state().
+%%c2s_session_pending(#{push_enabled := true, mgmt_queue := Queue} = State) ->
+%%    case p1_queue:len(Queue) of
+%%	Len when Len > 0 ->
+%%	    ?DEBUG("Notifying client of unacknowledged stanza(s)", []),
+%%	    Pkt = mod_stream_mgmt:queue_find(fun is_message_with_body/1, Queue),
+%%	    notify(State, Pkt),
+%%	    State;
+%%	0 ->
+%%	    State
+%%    end;
+%%c2s_session_pending(State) ->
+%%    State.
 
 -spec c2s_copy_session(c2s_state(), c2s_state()) -> c2s_state().
 c2s_copy_session(State, #{push_enabled := true}) ->
@@ -509,77 +481,79 @@ get_jwk(LUser, LServer, DeviceID) ->
 %%--------------------------------------------------------------------
 %% Generate push notifications.
 %%--------------------------------------------------------------------
--spec notify(c2s_state(), xmpp_element() | xmlel() | none) -> ok.
-notify(_, none) -> ok;
-notify(#{jid := #jid{luser = LUser, lserver = LServer}, sid := {TS, _}}, Pkt) ->
-  case is_muted(LUser, LServer, Pkt) of
-    false ->
-      case lookup_session(LUser, LServer, TS) of
-        {ok, Client} ->
-          notify(LUser, LServer, [Client], Pkt);
-        {error, notfound} ->
-          ok;
-        Err ->
-          ?ERROR_MSG("Error to notify user ~s@~s: ~p~n",[LUser, LServer, Err])
-      end;
-    _ ->
-      ok
-  end.
+%%-spec notify(c2s_state(), xmpp_element() | xmlel() | none) -> ok.
+%%notify(_, none) -> ok;
+%%notify(#{jid := #jid{luser = LUser, lserver = LServer}, sid := {TS, _}}, Pkt) ->
+%%  ?INFO_MSG("!!!!! ~p",[LUser]),
+%%  case is_muted(LUser, LServer, Pkt) of
+%%    false ->
+%%      case lookup_session(LUser, LServer, TS) of
+%%        {ok, Client} ->
+%%          ?INFO_MSG("DUBL ~p ~p",[LUser, Client]),
+%%          notify(LUser, LServer, [Client], Pkt);
+%%        {error, notfound} ->
+%%          ok;
+%%        Err ->
+%%          ?ERROR_MSG("Error to notify user ~s@~s: ~p~n",[LUser, LServer, Err])
+%%      end;
+%%    _ ->
+%%      ok
+%%  end.
 
--spec notify(binary(), binary(), [xabber_push_session()],
-    xmpp_element() | xmlel() | none) -> ok.
-notify(LUser, LServer, Clients, Pkt) ->
-    lists:foreach(
-      fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
-        Callback = iq_callback(LUser, LServer, TS),
-        notify(LServer, PushLJID, Node, XData, Pkt, Callback, Cipher, Key)
-      end, Clients).
-
--spec notify(binary(), ljid(), binary(), xdata(),
-    xmpp_element(), binary(), binary() | xmlel() | none,
-    fun((iq() | timeout) -> any())) -> ok.
-notify(_S, _PushSrv, _Node, _XData, #message{body = []}, _HR, <<>>, <<>>) ->
-  ok;
-notify(_S, _PushSrv, _Node, _XData, #message{type = Type}, _Cbk, _C, _K) when Type /= chat->
-  ok;
-notify(LServer, PushSrv, Node, XData, #message{sub_els = [#carbons_received{} = Received]},
-    Callback, Cipher, Key) ->
-  Fwd = Received#carbons_received.forwarded,
-  SubEls = Fwd#forwarded.sub_els,
-  notify(LServer, PushSrv, Node, XData, hd(SubEls), Callback, Cipher, Key);
-notify(LServer, PushSrv, Node, XData, #message{body = []} = Pkt,
-    Callback, Cipher, Key) ->
-  case xmpp:get_subtag(Pkt, #mark_displayed{}) of
-    false ->
-      case xmpp:get_subtag(Pkt, #jingle_propose{}) of
-        false -> ok;
-        _ ->
-          do_notify(<<"call">>, LServer, PushSrv, Node, XData, [Pkt],
-            Callback, Cipher, Key)
-      end;
-    D ->
-      do_notify(<<"displayed">>, LServer, PushSrv, Node, XData, [D],
-        Callback, Cipher, Key)
-  end;
-notify(LServer, PushSrv, Node, XData, #message{}, Callback, <<>>, <<>>) ->
-  do_notify(<<"message">>, LServer, PushSrv, Node, XData,
-    [], Callback, <<>>, <<>>) ;
-notify(LServer, PushLJID, Node, XData, #message{} = Pkt,
-    Callback, Cipher, Key) ->
-  {PType, Payload} = case xmpp:get_subtag(Pkt, #jingle_propose{}) of
-                       false ->
-                         {<<"message">>, [get_stanza_id(Pkt)]};
-                       _ ->
-                         {<<"call">>, [Pkt]}
-                     end,
-  do_notify(PType, LServer, PushLJID, Node, XData,
-    Payload, Callback, Cipher, Key);
-notify(LServer, PushSrv, Node, XData, #presence{type = subscribe} = Pkt,
-    Callback, Cipher, Key) ->
-  do_notify(<<"subscribe">>, LServer, PushSrv, Node, XData, [Pkt],
-    Callback, Cipher, Key);
-notify(_, _, _, _, _, _, _, _) ->
-  ok.
+%%-spec notify(binary(), binary(), [xabber_push_session()],
+%%    xmpp_element() | xmlel() | none) -> ok.
+%%notify(LUser, LServer, Clients, Pkt) ->
+%%    lists:foreach(
+%%      fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
+%%        Callback = iq_callback(LUser, LServer, TS),
+%%        notify(LServer, PushLJID, Node, XData, Pkt, Callback, Cipher, Key)
+%%      end, Clients).
+%%
+%%-spec notify(binary(), ljid(), binary(), xdata(),
+%%    xmpp_element(), binary(), binary() | xmlel() | none,
+%%    fun((iq() | timeout) -> any())) -> ok.
+%%notify(_S, _PushSrv, _Node, _XData, #message{body = []}, _HR, <<>>, <<>>) ->
+%%  ok;
+%%notify(_S, _PushSrv, _Node, _XData, #message{type = Type}, _Cbk, _C, _K) when Type /= chat->
+%%  ok;
+%%notify(LServer, PushSrv, Node, XData, #message{sub_els = [#carbons_received{} = Received]},
+%%    Callback, Cipher, Key) ->
+%%  Fwd = Received#carbons_received.forwarded,
+%%  SubEls = Fwd#forwarded.sub_els,
+%%  notify(LServer, PushSrv, Node, XData, hd(SubEls), Callback, Cipher, Key);
+%%notify(LServer, PushSrv, Node, XData, #message{body = []} = Pkt,
+%%    Callback, Cipher, Key) ->
+%%  case xmpp:get_subtag(Pkt, #mark_displayed{}) of
+%%    false ->
+%%      case xmpp:get_subtag(Pkt, #jingle_propose{}) of
+%%        false -> ok;
+%%        _ ->
+%%          do_notify(<<"call">>, LServer, PushSrv, Node, XData, [Pkt],
+%%            Callback, Cipher, Key)
+%%      end;
+%%    D ->
+%%      do_notify(<<"displayed">>, LServer, PushSrv, Node, XData, [D],
+%%        Callback, Cipher, Key)
+%%  end;
+%%notify(LServer, PushSrv, Node, XData, #message{}, Callback, <<>>, <<>>) ->
+%%  do_notify(<<"message">>, LServer, PushSrv, Node, XData,
+%%    [], Callback, <<>>, <<>>) ;
+%%notify(LServer, PushLJID, Node, XData, #message{} = Pkt,
+%%    Callback, Cipher, Key) ->
+%%  {PType, Payload} = case xmpp:get_subtag(Pkt, #jingle_propose{}) of
+%%                       false ->
+%%                         {<<"message">>, [get_stanza_id(Pkt)]};
+%%                       _ ->
+%%                         {<<"call">>, [Pkt]}
+%%                     end,
+%%  do_notify(PType, LServer, PushLJID, Node, XData,
+%%    Payload, Callback, Cipher, Key);
+%%notify(LServer, PushSrv, Node, XData, #presence{type = subscribe} = Pkt,
+%%    Callback, Cipher, Key) ->
+%%  do_notify(<<"subscribe">>, LServer, PushSrv, Node, XData, [Pkt],
+%%    Callback, Cipher, Key);
+%%notify(_, _, _, _, _, _, _, _) ->
+%%  ok.
 
 do_notify(PushType, LServer, PushLJID, Node, XData, PayloadList,
     Callback, Cipher, Key) ->
@@ -605,11 +579,11 @@ do_notify(PushType, LServer, PushLJID, Node, XData, PayloadList,
 %%--------------------------------------------------------------------
 %% Miscellaneous.
 %%--------------------------------------------------------------------
--spec is_message_with_body(stanza()) -> boolean().
-is_message_with_body(#message{} = Msg) ->
-    get_body_text(Msg) /= none;
-is_message_with_body(_Stanza) ->
-    false.
+%%-spec is_message_with_body(stanza()) -> boolean().
+%%is_message_with_body(#message{} = Msg) ->
+%%    get_body_text(Msg) /= <<>>;
+%%is_message_with_body(_Stanza) ->
+%%    false.
 
 %%--------------------------------------------------------------------
 %% Internal functions.
@@ -655,18 +629,18 @@ store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, D
 			Mod:store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, DeviceID)
 	end.
 
--spec lookup_session(binary(), binary(), timestamp())
-      -> {ok, xabber_push_session()} | error | {error, err_reason()}.
-lookup_session(LUser, LServer, TS) ->
-    Mod = gen_mod:db_mod(LServer, ?MODULE),
-    case use_cache(Mod, LServer) of
-	true ->
-	    ets_cache:lookup(
-	      ?PUSH_CACHE, {LUser, LServer, TS},
-	      fun() -> Mod:lookup_session(LUser, LServer, TS) end);
-	false ->
-	    Mod:lookup_session(LUser, LServer, TS)
-    end.
+%%-spec lookup_session(binary(), binary(), timestamp())
+%%      -> {ok, xabber_push_session()} | error | {error, err_reason()}.
+%%lookup_session(LUser, LServer, TS) ->
+%%    Mod = gen_mod:db_mod(LServer, ?MODULE),
+%%    case use_cache(Mod, LServer) of
+%%	true ->
+%%	    ets_cache:lookup(
+%%	      ?PUSH_CACHE, {LUser, LServer, TS},
+%%	      fun() -> Mod:lookup_session(LUser, LServer, TS) end);
+%%	false ->
+%%	    Mod:lookup_session(LUser, LServer, TS)
+%%    end.
 
 -spec lookup_sessions(binary(), binary()) -> {ok, [xabber_push_session()]} | {error, err_reason()}.
 lookup_sessions(LUser, LServer) ->
@@ -753,27 +727,27 @@ drop_online_sessions(LUser, LServer, Clients) ->
     [Client || {TS, _, _, _, _, _} = Client <- Clients,
 	       lists:keyfind(TS, 1, SessIDs) == false].
 
-get_stanza_id(#message{to = To, meta = #{stanza_id := TS}}) ->
-  #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)};
-get_stanza_id(_Pkt) -> undefined.
+%%get_stanza_id(#message{to = To, meta = #{stanza_id := TS}}) ->
+%%  #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)};
+%%get_stanza_id(_Pkt) -> undefined.
 
--spec get_body_text(message()) -> binary() | none.
-get_body_text(#message{body = Body} = Msg) ->
-    case xmpp:get_text(Body) of
-	Text when byte_size(Text) > 0 ->
-	    Text;
-	<<>> ->
-	    case body_is_encrypted(Msg) of
-		true ->
-		    <<"(encrypted)">>;
-		false ->
-		    none
-	    end
-    end.
+%%-spec get_body_text(message()) -> binary() | none.
+%%get_body_text(#message{body = Body} = Msg) ->
+%%    case xmpp:get_text(Body) of
+%%	Text when byte_size(Text) > 0 ->
+%%	    Text;
+%%	<<>> ->
+%%	    case body_is_encrypted(Msg) of
+%%		true ->
+%%		    <<"(encrypted)">>;
+%%		false ->
+%%		    <<>>
+%%	    end
+%%    end.
 
--spec body_is_encrypted(message()) -> boolean().
-body_is_encrypted(#message{sub_els = SubEls}) ->
-    lists:keyfind(<<"encrypted">>, #xmlel.name, SubEls) /= false.
+%%-spec body_is_encrypted(message()) -> boolean().
+%%body_is_encrypted(#message{sub_els = SubEls}) ->
+%%    lists:keyfind(<<"encrypted">>, #xmlel.name, SubEls) /= false.
 
 %%--------------------------------------------------------------------
 %% Caching.
@@ -813,14 +787,15 @@ cache_nodes(Mod, Host) ->
     end.
 
 make_encryption(Values, Cipher, KeyBase) ->
-	Key = base64:decode(KeyBase),
-	{Length, Encrypted} = case Cipher of
-													<<"urn:xmpp:ciphers:blowfish-cbc">> ->
-														encrypt(blowfish_cbc, Key, make_string(Values));
-													_ ->
-														encrypt(aes_cbc256, Key, make_string(Values))
-												end,
-	#encrypted{'iv-length' = Length, data = Encrypted}.
+  Key = base64:decode(KeyBase),
+  {Length, Encrypted} =
+    case Cipher of
+      <<"urn:xmpp:ciphers:blowfish-cbc">> ->
+        encrypt(blowfish_cbc, Key, make_string(Values));
+      _ ->
+        encrypt(aes_cbc256, Key, make_string(Values))
+    end,
+  #encrypted{'iv-length' = Length, data = Encrypted}.
 
 encrypt(Mode, Key, Value) ->
   Length = case Mode of
@@ -891,10 +866,10 @@ make_enable_result(URL, JWT) ->
     ],
   #xdata{type = result, fields = Fields}.
 
-is_muted(LUser, LServer, Pkt) ->
-  From = xmpp:get_from(Pkt),
-  Conversation = jid:to_string(jid:remove_resource(From)),
-  mod_sync:is_muted(LUser, LServer, Conversation).
+%%is_muted(LUser, LServer, Pkt) ->
+%%  From = xmpp:get_from(Pkt),
+%%  Conversation = jid:to_string(jid:remove_resource(From)),
+%%  mod_sync:is_muted(LUser, LServer, Conversation).
 
 -spec get_error(stanza()) -> binary().
 get_error(Pkt) ->

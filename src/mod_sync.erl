@@ -548,7 +548,7 @@ process_message(out, #message{from = #jid{luser =  LUser, lserver = LServer},
           end,
   update_metainfo(LServer, LUser, PDomain, CType, [{read, StanzaID}]),
   maybe_push_notification(LUser,LServer,<<"outgoing">>,
-    #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LServer)}),
+    #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LUser, LServer)}),
   ok;
 process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
   to = To, meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
@@ -565,7 +565,7 @@ process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
               end,
       update_metainfo(LServer, LUser, Conversation, Type, [{read, StanzaID}]),
       maybe_push_notification(LUser,LServer,<<"outgoing">>,
-        #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LServer)})
+        #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LUser, LServer)})
   end;
 process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
   to = #jid{luser =  PUser,lserver = PServer}} = Pkt) ->

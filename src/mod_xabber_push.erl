@@ -453,11 +453,20 @@ c2s_copy_session(State, _) ->
 
 -spec c2s_handle_cast(c2s_state(), any()) -> c2s_state() | {stop, c2s_state()}.
 c2s_handle_cast(State, push_enable) ->
-    {stop, State#{push_enabled => true}};
+  {stop, State#{push_enabled => true}};
 c2s_handle_cast(State, push_disable) ->
-    {stop, maps:remove(push_enabled, State)};
+  {stop, maps:remove(push_enabled, State)};
+c2s_handle_cast(#{push_enabled := true, mgmt_state := pending, jid := JID} = State,
+    {send_push, [PType, Payload, Device]}) ->
+  {LUser, LServer, _} =jid:tolower(JID),
+  {TS, PushLJID, Node, XData, Cipher, Key} = Device,
+  Callback = iq_callback(LUser, LServer, TS),
+  do_notify(PType, LServer, PushLJID, Node, XData, [Payload], Callback, Cipher, Key),
+  {stop, State};
+c2s_handle_cast(State, {send_push, _}) ->
+  {stop, State};
 c2s_handle_cast(State, _Msg) ->
-    State.
+  State.
 
 -spec remove_user(binary(), binary()) -> ok | {error, err_reason()}.
 remove_user(LUser, LServer) ->
@@ -720,12 +729,12 @@ delete_sessions(LUser, LServer, LookupFun, Mod) ->
 	    Err
     end.
 
--spec drop_online_sessions(binary(), binary(), [xabber_push_session()])
-      -> [xabber_push_session()].
-drop_online_sessions(LUser, LServer, Clients) ->
-    SessIDs = ejabberd_sm:get_session_sids(LUser, LServer),
-    [Client || {TS, _, _, _, _, _} = Client <- Clients,
-	       lists:keyfind(TS, 1, SessIDs) == false].
+%%-spec drop_online_sessions(binary(), binary(), [xabber_push_session()])
+%%      -> [xabber_push_session()].
+%%drop_online_sessions(LUser, LServer, Clients) ->
+%%    SessIDs = ejabberd_sm:get_session_sids(LUser, LServer),
+%%    [Client || {TS, _, _, _, _, _} = Client <- Clients,
+%%	       lists:keyfind(TS, 1, SessIDs) == false].
 
 %%get_stanza_id(#message{to = To, meta = #{stanza_id := TS}}) ->
 %%  #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)};
@@ -816,22 +825,31 @@ encrypt(Mode, Key, Value) ->
 make_string(Values) ->
 	list_to_binary(lists:map(fun(X) -> fxml:element_to_binary(xmpp:encode(X)) end, Values)).
 
+xabber_push_notification(<<"call">> , LUser, LServer, Payload) ->
+  {ok,  Devices} = lookup_sessions(LUser, LServer),
+  lists:foreach(
+    fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
+      Callback = iq_callback(LUser, LServer, TS),
+      do_notify(<<"call">>, LServer, PushLJID, Node, XData, [Payload], Callback, Cipher, Key)
+    end, Devices);
 xabber_push_notification(PType, LUser, LServer, Payload) ->
-  Clients = case lookup_sessions(LUser, LServer) of
-              {ok, [_|_] = Clients1} ->
-                if
-                  PType == <<"call">> orelse PType == <<"data">> ->
-                    Clients1;
-                  true ->
-                    drop_online_sessions(LUser, LServer, Clients1)
-                end;
-              _ -> []
-            end,
+  {ok,  Devices} = lookup_sessions(LUser, LServer),
+  SesSIDs = ejabberd_sm:get_session_sids(LUser, LServer),
+  OnlineDevises = lists:filtermap(fun({TS, PID}) ->
+    case lists:keyfind(TS, 1, Devices) of
+      false -> false;
+      Device -> {true, {PID, Device}}
+    end end, SesSIDs),
+  OfflineDevices = Devices -- [D || {_, D} <- OnlineDevises],
+  lists:foreach(
+    fun({PID, Device}) ->
+      ejabberd_c2s:cast(PID, {send_push, [PType, Payload, Device]})
+    end, OnlineDevises),
   lists:foreach(
     fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
       Callback = iq_callback(LUser, LServer, TS),
       do_notify(PType, LServer, PushLJID, Node, XData, [Payload], Callback, Cipher, Key)
-    end, Clients).
+    end, OfflineDevices).
 
 iq_callback(LUser, LServer, TS) ->
   fun

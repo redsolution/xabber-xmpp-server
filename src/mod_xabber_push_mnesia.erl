@@ -29,8 +29,8 @@
 -behaviour(mod_xabber_push).
 
 %% API
--export([init/2, lookup_session/4, store_session/9,
-	 lookup_sessions/3, lookup_sessions/2, lookup_device_sessions/3,
+-export([init/2, store_session/10,
+	 lookup_sessions/2, lookup_device_sessions/3,
 	 delete_session/3, delete_old_sessions/2, transform/1]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
@@ -48,65 +48,33 @@ init(_Host, _Opts) ->
 			    {type, bag},
 			    {attributes, record_info(fields, xabber_push_session)}]).
 
-store_session(_LUser, _LServer, _TS, _PushJID, _Node, _XData, _EncryptionType, _EncriptionKey, undefined) ->
-	{error, db_failure};
-store_session(LUser, LServer, TS, PushJID, Node, XData, EncryptionType, EncriptionKey, DeviceID) ->
-	US = {LUser, LServer},
-	PushLJID = jid:tolower(PushJID),
-	EncryptionKey = base64:encode(EncriptionKey),
+store_session(_LUser, _LServer, _TS, _PushJID, _Node, _XData, _EncryptionType, _EncriptionKey, undefined, _Mode) ->
+		{error, db_failure};
+store_session(LUser, LServer, TS, PushJID, Node, XData, EncryptionType, EncriptionKey, DeviceID, Mode) ->
+		US = {LUser, LServer},
+		PushLJID = jid:tolower(PushJID),
+		EncryptionKey = base64:encode(EncriptionKey),
 	F = fun() ->
 			delete_conflicting_sessions(US, TS, PushLJID, Node, DeviceID),
 			mnesia:write(#xabber_push_session{us = US,
 				timestamp = TS,
 				service = PushLJID,
 				node = Node,
-				xml = encode_xdata(XData),
-				encryption_key = EncryptionKey,
-				encryption_type = EncryptionType,
-				device_id = DeviceID
-				})
-				end,
-		case mnesia:transaction(F) of
-			{atomic, ok} ->
-				{ok, {TS, PushLJID, Node, XData, EncryptionType, EncryptionKey}};
+					xml = encode_xdata(XData),
+					encryption_key = EncryptionKey,
+					encryption_type = EncryptionType,
+					device_id = DeviceID,
+					mode = Mode
+					})
+					end,
+			case mnesia:transaction(F) of
+				{atomic, ok} ->
+					{ok, {TS, PushLJID, Node, XData, EncryptionType, EncryptionKey, Mode}};
 		{aborted, E} ->
 			?ERROR_MSG("Cannot store push session for ~s@~s: ~p",
 				[LUser, LServer, E]),
 			{error, db_failure}
 	end.
-
-lookup_session(LUser, LServer, PushJID, Node) ->
-    PushLJID = jid:tolower(PushJID),
-    MatchSpec = ets:fun2ms(
-		  fun(#xabber_push_session{us = {U, S}, service = P, node = N} = Rec)
-			when U == LUser,
-			     S == LServer,
-			     P == PushLJID,
-			     N == Node ->
-			  Rec
-		  end),
-    case mnesia:dirty_select(xabber_push_session, MatchSpec) of
-			[#xabber_push_session{timestamp = TS, xml = El, encryption_key = Key, encryption_type = EncriptionType}] ->
-			    {ok, {TS, PushLJID, Node, decode_xdata(El), EncriptionType, Key}};
-			[] ->
-			    ?DEBUG("No push session found for ~s@~s (~p, ~s)",
-				   [LUser, LServer, PushJID, Node]),
-			    {error, notfound}
-    end.
-
-lookup_sessions(LUser, LServer, PushJID) ->
-    PushLJID = jid:tolower(PushJID),
-    MatchSpec = ets:fun2ms(
-		  fun(#xabber_push_session{us = {U, S}, service = P,
-				    node = Node, timestamp = TS,
-				    xml = El} = Rec)
-			when U == LUser,
-			     S == LServer,
-			     P == PushLJID ->
-			  Rec
-		  end),
-    Records = mnesia:dirty_select(xabber_push_session, MatchSpec),
-    {ok, records_to_sessions(Records)}.
 
 lookup_sessions(LUser, LServer) ->
     Records = mnesia:dirty_read(xabber_push_session, {LUser, LServer}),
@@ -193,30 +161,41 @@ encode_xdata(undefined) ->
 encode_xdata(XData) ->
     xmpp:encode(XData).
 
-records_to_sessions(Records) ->
-	    [{TS, PushLJID, Node, decode_xdata(El), EncriptionType, Key}
-	     || #xabber_push_session{timestamp = TS,
-				      service = PushLJID,
-				      node = Node,
-				      xml = El,
-					    encryption_type = EncriptionType,
-					    encryption_key = Key} <- Records].
+	records_to_sessions(Records) ->
+		    [{TS, PushLJID, Node, decode_xdata(El), EncriptionType, Key, Mode}
+		     || #xabber_push_session{timestamp = TS,
+					      service = PushLJID,
+					      node = Node,
+					      xml = El,
+						    encryption_type = EncriptionType,
+						    encryption_key = Key,
+						    mode = Mode} <- Records].
 
-update_table() ->
-	Transformer =
-		fun(X)->
-			#xabber_push_session{
-				us = element(2,X),
-				timestamp = element(3,X),
-				service = element(4,X),
-				node = element(5,X),
-				encryption_type = element(6,X),
-				encryption_key = element(7,X),
-				xml = element(8,X),
-				device_id = undefined}
-		end,
-	try
-		mnesia:transform_table(xabber_push_session, Transformer, record_info(fields, xabber_push_session))
-	catch exit:{aborted, {no_exists, _}} ->
-		ok
-	end.
+	update_table() ->
+		Fields = record_info(fields, xabber_push_session),
+		try
+			case mnesia:table_info(xabber_push_session, attributes) of
+				Fields ->
+					ok;
+				[us, timestamp, service, node, encryption_type, encryption_key, xml, device_id] ->
+					Transformer =
+						fun(X)->
+							#xabber_push_session{
+								us = element(2, X),
+								timestamp = element(3, X),
+								service = element(4, X),
+								node = element(5, X),
+								encryption_type = element(6, X),
+								encryption_key = element(7, X),
+								xml = element(8, X),
+								device_id = element(9, X),
+								mode = full}
+						end,
+					mnesia:transform_table(xabber_push_session, Transformer,
+							       Fields);
+				_ ->
+					ok
+			end
+		catch exit:{aborted, {no_exists, _}} ->
+			ok
+		end.

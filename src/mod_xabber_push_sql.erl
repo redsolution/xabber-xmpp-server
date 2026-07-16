@@ -28,8 +28,8 @@
 -compile([{parse_transform, ejabberd_sql_pt}]).
 
 %% API
--export([init/2, store_session/9, lookup_session/4,
-	 lookup_sessions/3, lookup_sessions/2, lookup_device_sessions/3,
+-export([init/2, store_session/10,
+	 lookup_sessions/2, lookup_device_sessions/3,
 	 delete_session/3, delete_old_sessions/2, export/1]).
 
 -include("xmpp.hrl").
@@ -43,15 +43,16 @@
 init(_Host, _Opts) ->
     ok.
 
-store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, DeviceID) ->
-	XML = encode_xdata(XData),
-	TS = misc:now_to_usec(NowTS),
-	PushLJID = jid:tolower(PushJID),
-	Service = jid:encode(PushLJID),
-	KeyString = base64:encode(Key),
-	F = fun() ->
-		delete_conflicting_sessions_t(LUser, LServer, TS, Service, Node, DeviceID),
-		ejabberd_sql:sql_query_t(
+store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, DeviceID, Mode) ->
+		XML = encode_xdata(XData),
+		TS = misc:now_to_usec(NowTS),
+		PushLJID = jid:tolower(PushJID),
+		Service = jid:encode(PushLJID),
+		KeyString = base64:encode(Key),
+		ModeString = encode_mode(Mode),
+		F = fun() ->
+			delete_conflicting_sessions_t(LUser, LServer, TS, Service, Node, DeviceID),
+			ejabberd_sql:sql_query_t(
 		  ?SQL_INSERT(
 		    "xabber_push_session",
 		    ["username=%(LUser)s",
@@ -59,71 +60,34 @@ store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, DeviceID
 		     "timestamp=%(TS)d",
 		     "service=%(Service)s",
 		     "node=%(Node)s",
-		     "cipher=%(Cipher)s",
-		     "key=%(KeyString)s",
-		     "xml=%(XML)s",
-		     "device_id=%(DeviceID)s"]))
-	end,
-	case ejabberd_sql:sql_transaction(LServer, F) of
-		{atomic, _} ->
-			{ok, {NowTS, PushLJID, Node, XData, Cipher, Key}};
+			     "cipher=%(Cipher)s",
+			     "key=%(KeyString)s",
+			     "xml=%(XML)s",
+			     "device_id=%(DeviceID)s",
+			     "mode=%(ModeString)s"]))
+		end,
+		case ejabberd_sql:sql_transaction(LServer, F) of
+			{atomic, _} ->
+				{ok, {NowTS, PushLJID, Node, XData, Cipher, KeyString, Mode}};
 		{aborted, Err} ->
 			?INFO_MSG("Error to save push session ~p",[Err]),
 			{error, db_failure}
 	end.
 
-lookup_session(LUser, LServer, PushJID, Node) ->
-    PushLJID = jid:tolower(PushJID),
-    Service = jid:encode(PushLJID),
-    case ejabberd_sql:sql_query(
-	   LServer,
-	   ?SQL("select @(timestamp)d, @(xml)s, @(cipher)s, @(key)s "
-     " from xabber_push_session where username=%(LUser)s "
-     " and service=%(Service)s and node=%(Node)s and %(LServer)H")) of
-	{selected, [{TS, XML, Cipher, Key}]} ->
-	    NowTS = misc:usec_to_now(TS),
-	    XData = decode_xdata(XML, LUser, LServer),
-	    {ok, {NowTS, PushLJID, Node, XData,
-        replace_null(Cipher), replace_null(Key)}};
-	{selected, []} ->
-	    {error, notfound};
-	_Err ->
-	    {error, db_failure}
-    end.
-
-lookup_sessions(LUser, LServer, PushJID) ->
-    PushLJID = jid:tolower(PushJID),
-    Service = jid:encode(PushLJID),
-    case ejabberd_sql:sql_query(
-	   LServer,
-	   ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(cipher)s, @(key)s "
-     " from xabber_push_session where username=%(LUser)s "
-     " and service=%(Service)s and %(LServer)H")) of
-	{selected, Rows} ->
-	    {ok, lists:map(
-		   fun({TS, XML, Node, Cipher, Key}) ->
-			   NowTS = misc:usec_to_now(TS),
-			   XData = decode_xdata(XML, LUser, LServer),
-			   {NowTS, PushLJID, Node, XData,
-           replace_null(Cipher), replace_null(Key)}
-		   end, Rows)};
-	_Err ->
-	    {error, db_failure}
-    end.
-
 lookup_sessions(LUser, LServer) ->
     case ejabberd_sql:sql_query(
 	   LServer,
-	   ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(service)s, "
-     " @(cipher)s, @(key)s from xabber_push_session "
-     " where username=%(LUser)s and %(LServer)H")) of
+		   ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(service)s, "
+	     " @(cipher)s, @(key)s, @(mode)s from xabber_push_session "
+	     " where username=%(LUser)s and %(LServer)H")) of
 	{selected, Rows} ->
 	    {ok, lists:map(
-		   fun({TS, XML, Node, Service, Cipher, Key}) ->
+		   fun({TS, XML, Node, Service, Cipher, Key, Mode}) ->
 			   NowTS = misc:usec_to_now(TS),
 			   XData = decode_xdata(XML, LUser, LServer),
 			   PushLJID = jid:tolower(jid:decode(Service)),
-			   {NowTS, PushLJID,Node, XData, replace_null(Cipher), replace_null(Key)}
+			   {NowTS, PushLJID, Node, XData, replace_null(Cipher), replace_null(Key),
+			    decode_mode(Mode)}
 		   end, Rows)};
 	_Err ->
 	    {error, db_failure}
@@ -132,19 +96,19 @@ lookup_sessions(LUser, LServer) ->
 lookup_device_sessions(LUser, LServer, Devices) ->
   case ejabberd_sql:sql_query(
     LServer,
-    ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(service)s, "
-    " @(cipher)s, @(key)s, @(device_id)s from xabber_push_session "
-    " where username=%(LUser)s and %(LServer)H")) of
-    {selected, Rows} ->
-      {ok, lists:filtermap(
-        fun({TS, XML, Node, Service, Cipher, Key, DevID}) ->
-          case lists:member(DevID, Devices) of
-            true ->
-              NowTS = misc:usec_to_now(TS),
-              XData = decode_xdata(XML, LUser, LServer),
-              PushLJID = jid:tolower(jid:decode(Service)),
-              {true, {NowTS, PushLJID,Node, XData,
-                replace_null(Cipher), replace_null(Key)}};
+	    ?SQL("select @(timestamp)d, @(xml)s, @(node)s, @(service)s, "
+	    " @(cipher)s, @(key)s, @(device_id)s, @(mode)s from xabber_push_session "
+	    " where username=%(LUser)s and %(LServer)H")) of
+	    {selected, Rows} ->
+	      {ok, lists:filtermap(
+	        fun({TS, XML, Node, Service, Cipher, Key, DevID, Mode}) ->
+	          case lists:member(DevID, Devices) of
+	            true ->
+	              NowTS = misc:usec_to_now(TS),
+	              XData = decode_xdata(XML, LUser, LServer),
+	              PushLJID = jid:tolower(jid:decode(Service)),
+	              {true, {NowTS, PushLJID,Node, XData,
+	                replace_null(Cipher), replace_null(Key), decode_mode(Mode)}};
             _ ->
               false
           end
@@ -197,27 +161,36 @@ delete_device_session_t(LUser, LServer, DeviceID) ->
 export(_Server) ->
     [{xabber_push_session,
       fun(Host, #xabber_push_session{us = {LUser, LServer},
-			      timestamp = NowTS,
-			      service = PushLJID,
-			      node = Node,
-			      xml = XData})
-	    when LServer == Host ->
-	      TS = misc:now_to_usec(NowTS),
-	      Service = jid:encode(PushLJID),
-	      XML = encode_xdata(XData),
-	      [?SQL("delete from xabber_push_session where "
-		    "username=%(LUser)s and %(LServer)H and "
-                    "timestamp=%(TS)d and "
+				      timestamp = NowTS,
+				      service = PushLJID,
+				      node = Node,
+				      encryption_type = Cipher,
+				      encryption_key = Key,
+				      device_id = DeviceID,
+				      mode = Mode,
+				      xml = XData})
+		    when LServer == Host ->
+		      TS = misc:now_to_usec(NowTS),
+		      Service = jid:encode(PushLJID),
+		      XML = encode_xdata(XData),
+		      ModeString = encode_mode(Mode),
+		      [?SQL("delete from xabber_push_session where "
+			    "username=%(LUser)s and %(LServer)H and "
+	                    "timestamp=%(TS)d and "
 		    "service=%(Service)s and node=%(Node)s and "
 		    "xml=%(XML)s;"),
 	       ?SQL_INSERT(
                   "xabber_push_session",
                   ["username=%(LUser)s",
                    "server_host=%(LServer)s",
-                   "timestamp=%(TS)d",
-                   "service=%(Service)s",
-                   "node=%(Node)s",
-                   "xml=%(XML)s"])];
+	                   "timestamp=%(TS)d",
+	                   "service=%(Service)s",
+	                   "node=%(Node)s",
+	                   "xml=%(XML)s",
+	                   "cipher=%(Cipher)s",
+	                   "key=%(Key)s",
+	                   "device_id=%(DeviceID)s",
+	                   "mode=%(ModeString)s"])];
 	 (_Host, _R) ->
 	      []
       end}].
@@ -251,3 +224,9 @@ encode_xdata(XData) ->
 
 replace_null(null) -> <<>>;
 replace_null(Value) -> Value.
+
+encode_mode(Mode) ->
+    misc:atom_to_binary(Mode).
+
+decode_mode(<<"summary">>) -> summary;
+decode_mode(_) -> full.

@@ -24,4 +24,5 @@
          encryption_type = <<"">>               :: binary(),
          encryption_key = <<"">>                :: binary(),
          xml                                    :: undefined | xmlel(),
-         device_id                              :: undefined | binary()}).
+         device_id                              :: undefined | binary(),
+         mode = full                            :: full | summary}).

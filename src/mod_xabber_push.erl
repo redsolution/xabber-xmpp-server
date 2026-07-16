@@ -278,16 +278,20 @@ process_iq(#iq{from = #jid{lserver = LServer}, to = #jid{lserver = LServer},
   #iq{from = JID, lang = Lang, sub_els = [
     #xabber_push_enable{jid = PushJID, node = Node, xdata = XData,
       push_security = Security}]} = IQ,
+  {LUser, LServer,  LResource} = jid:tolower(JID),
+  DeviceID = case ejabberd_sm:get_user_info(LUser, LServer, LResource) of
+               [_H|Info] ->
+                 proplists:get_value(device_id, Info, undefined);
+               _ -> undefined
+             end,
   Result = case Security of
              #xabber_push_security{cipher = Cipher,
                encryption_key = #xabber_encryption_key{data = Key}}
                when Cipher /= <<>> orelse Key /=<<>> ->
                ?INFO_MSG("Push with encryption enabled for ~p",[jid:to_string(JID)]),
-               enable(JID, PushJID, Node, XData, Cipher, Key);
-             #xabber_push_security{} ->
-               {error, bad_request};
+               enable(JID, DeviceID, PushJID, Node, XData, Cipher, Key);
              _ ->
-               enable(JID, PushJID, Node, XData)
+               {error, bad_request}
            end,
   case Result of
     {ok, TS, DeviceID, EKey} ->
@@ -298,6 +302,8 @@ process_iq(#iq{from = #jid{lserver = LServer}, to = #jid{lserver = LServer},
                make_enable_result(URL,JWT)
            end,
       xmpp:make_iq_result(IQ,El);
+    {error, not_allowed} ->
+      xmpp:make_error(IQ, xmpp:err_not_allowed());
     {error, bad_request} ->
       xmpp:make_error(IQ, xmpp:err_bad_request());
     {error, db_failure} ->
@@ -330,52 +336,49 @@ process_iq(#iq{sub_els = [#push_disable{jid = J, node = N}]} = IQ) ->
 process_iq(IQ) ->
   xmpp:make_error(IQ, xmpp:err_not_allowed()).
 
--spec enable(jid(), jid(), binary(), xdata()) -> ok | {error, err_reason()}.
-enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
-       PushJID, Node, XData) ->
-    case ejabberd_sm:get_session_sid(LUser, LServer, LResource) of
-	{TS, PID} ->
-	    case store_session(LUser, LServer, TS, PushJID, Node, XData) of
-		{ok, _} ->
-		    ?INFO_MSG("Enabling push notifications for ~s",
-			      [jid:encode(JID)]),
-		    ejabberd_c2s:cast(PID, push_enable);
-		{error, _} = Err ->
-		    ?ERROR_MSG("Cannot enable push for ~s: database error",
-			       [jid:encode(JID)]),
-		    Err
-	    end;
-	none ->
-	    ?WARNING_MSG("Cannot enable push for ~s: session not found",
-			 [jid:encode(JID)]),
-	    {error, notfound}
-    end.
+%%-spec enable(jid(), jid(), binary(), xdata()) -> ok | {error, err_reason()}.
+%%enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
+%%       PushJID, Node, XData) ->
+%%    case ejabberd_sm:get_session_sid(LUser, LServer, LResource) of
+%%	{TS, PID} ->
+%%	    case store_session(LUser, LServer, TS, PushJID, Node, XData) of
+%%		{ok, _} ->
+%%		    ?INFO_MSG("Enabling push notifications for ~s",
+%%			      [jid:encode(JID)]),
+%%		    ejabberd_c2s:cast(PID, push_enable);
+%%		{error, _} = Err ->
+%%		    ?ERROR_MSG("Cannot enable push for ~s: database error",
+%%			       [jid:encode(JID)]),
+%%		    Err
+%%	    end;
+%%	none ->
+%%	    ?WARNING_MSG("Cannot enable push for ~s: session not found",
+%%			 [jid:encode(JID)]),
+%%	    {error, notfound}
+%%    end.
 
+enable(_JID, undefined, _PushSrv, _Node, _XData, _Alg, _EKey) ->
+  {error, not_allowed};
 enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
-		PushJID, Node, XData,Cipher,EncryptionKey) ->
-	case ejabberd_sm:get_session_sid(LUser, LServer, LResource) of
-		{TS, PID} ->
-			DeviceID = case ejabberd_sm:get_user_info(LUser, LServer, LResource) of
-									 [_H|Info] ->
-										 proplists:get_value(device_id, Info, undefined);
-									 _ -> undefined
-								 end,
-			case store_session(LUser, LServer, TS, PushJID, Node, XData,Cipher,EncryptionKey, DeviceID) of
-				{ok, _} ->
-					?INFO_MSG("Enabling push notifications for ~s",
-						[jid:encode(JID)]),
-					ejabberd_c2s:cast(PID, push_enable),
-					{ok, TS, DeviceID, EncryptionKey};
-				{error, _} = Err ->
-					?ERROR_MSG("Cannot enable push for ~s: database error",
-						[jid:encode(JID)]),
-					Err
-			end;
-		none ->
-			?WARNING_MSG("Cannot enable push for ~s: session not found",
-				[jid:encode(JID)]),
-			{error, notfound}
-	end.
+    DeviceID, PushJID, Node, XData,Cipher,EncryptionKey) ->
+  case ejabberd_sm:get_session_sid(LUser, LServer, LResource) of
+    {TS, PID} ->
+      case store_session(LUser, LServer, TS, PushJID, Node, XData,Cipher,EncryptionKey, DeviceID) of
+        {ok, _} ->
+          ?INFO_MSG("Enabling push notifications for ~s",
+            [jid:encode(JID)]),
+          ejabberd_c2s:cast(PID, push_enable),
+          {ok, TS, DeviceID, EncryptionKey};
+        {error, _} = Err ->
+          ?ERROR_MSG("Cannot enable push for ~s: database error",
+            [jid:encode(JID)]),
+          Err
+      end;
+    none ->
+      ?WARNING_MSG("Cannot enable push for ~s: session not found",
+        [jid:encode(JID)]),
+      {error, notfound}
+  end.
 
 -spec disable(jid(), jid(), binary() | undefined) -> ok | {error, err_reason()}.
 disable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
@@ -597,32 +600,32 @@ do_notify(PushType, LServer, PushLJID, Node, XData, PayloadList,
 %%--------------------------------------------------------------------
 %% Internal functions.
 %%--------------------------------------------------------------------
--spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata())
-      -> {ok, xabber_push_session()} | {error, err_reason()}.
-store_session(LUser, LServer, TS, PushJID, Node, XData) ->
-    Mod = gen_mod:db_mod(LServer, ?MODULE),
-    delete_session(LUser, LServer, PushJID, Node),
-    case use_cache(Mod, LServer) of
-	true ->
-	    ets_cache:delete(?PUSH_CACHE, {LUser, LServer},
-			     cache_nodes(Mod, LServer)),
-	    ets_cache:update(
-		?PUSH_CACHE,
-		{LUser, LServer, TS}, {ok, {TS, PushJID, Node, XData}},
-		fun() ->
-			Mod:store_session(LUser, LServer, TS, PushJID, Node,
-					  XData)
-		end, cache_nodes(Mod, LServer));
-	false ->
-	    Mod:store_session(LUser, LServer, TS, PushJID, Node, XData)
-    end.
+%%-spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata())
+%%      -> {ok, xabber_push_session()} | {error, err_reason()}.
+%%store_session(LUser, LServer, TS, PushJID, Node, XData) ->
+%%    Mod = gen_mod:db_mod(LServer, ?MODULE),
+%%    delete_conflicting_sessions(LUser, LServer, TS, PushJID, Node, undefined, Mod),
+%%    case use_cache(Mod, LServer) of
+%%	true ->
+%%	    ets_cache:delete(?PUSH_CACHE, {LUser, LServer},
+%%			     cache_nodes(Mod, LServer)),
+%%	    ets_cache:update(
+%%		?PUSH_CACHE,
+%%		{LUser, LServer, TS}, {ok, {TS, PushJID, Node, XData}},
+%%		fun() ->
+%%			Mod:store_session(LUser, LServer, TS, PushJID, Node,
+%%					  XData)
+%%		end, cache_nodes(Mod, LServer));
+%%	false ->
+%%	    Mod:store_session(LUser, LServer, TS, PushJID, Node, XData)
+%%    end.
 
 -spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata(),binary(),binary(),any())
 			-> {ok, xabber_push_session()} | {error, err_reason()}.
 store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, DeviceID) ->
 	Mod = gen_mod:db_mod(LServer, ?MODULE),
 	Cache = use_cache(Mod, LServer),
-	delete_session(LUser, LServer, PushJID, Node),
+	delete_conflicting_sessions(LUser, LServer, TS, PushJID, Node, DeviceID, Mod),
 	case Cache of
 		true ->
 			ets_cache:delete(?PUSH_CACHE, {LUser, LServer},
@@ -637,6 +640,52 @@ store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, D
 		false ->
 			Mod:store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, DeviceID)
 	end.
+
+delete_conflicting_sessions(LUser, LServer, TS, PushJID, Node, DeviceID, Mod) ->
+    delete_session_by_timestamp(LUser, LServer, TS, Mod),
+    delete_sessions_by_node(LUser, LServer, PushJID, Node, Mod),
+    delete_sessions_by_device(LUser, LServer, DeviceID, Mod).
+
+delete_session_by_timestamp(LUser, LServer, TS, Mod) ->
+    case Mod:delete_session(LUser, LServer, TS) of
+	ok -> ok;
+	{error, _} -> ok
+    end.
+
+delete_sessions_by_node(_LUser, _LServer, _PushJID, undefined, _Mod) ->
+    ok;
+delete_sessions_by_node(LUser, LServer, PushJID, Node, Mod) ->
+    PushLJID = jid:tolower(PushJID),
+    delete_matching_sessions(
+      LUser, LServer, Mod,
+      fun({_TS, SessionPushJID, SessionNode, _XData, _Cipher, _Key}) ->
+	      SessionPushJID == PushLJID andalso SessionNode == Node
+      end).
+
+delete_sessions_by_device(_LUser, _LServer, undefined, _Mod) ->
+    ok;
+delete_sessions_by_device(LUser, LServer, DeviceID, Mod) ->
+    case Mod:lookup_device_sessions(LUser, LServer, [DeviceID]) of
+	{ok, Sessions} ->
+	    delete_sessions_by_timestamp(LUser, LServer, Sessions, Mod);
+	{error, _} ->
+	    ok
+    end.
+
+delete_matching_sessions(LUser, LServer, Mod, MatchFun) ->
+    case Mod:lookup_sessions(LUser, LServer) of
+	{ok, Sessions} ->
+	    delete_sessions_by_timestamp(
+	      LUser, LServer, lists:filter(MatchFun, Sessions), Mod);
+	{error, _} ->
+	    ok
+    end.
+
+delete_sessions_by_timestamp(LUser, LServer, Sessions, Mod) ->
+    lists:foreach(
+      fun({SessionTS, _PushJID, _Node, _XData, _Cipher, _Key}) ->
+	      delete_session_by_timestamp(LUser, LServer, SessionTS, Mod)
+      end, Sessions).
 
 %%-spec lookup_session(binary(), binary(), timestamp())
 %%      -> {ok, xabber_push_session()} | error | {error, err_reason()}.

@@ -594,12 +594,13 @@ CREATE TABLE xabber_push_session (
     service text NOT NULL,
     node text NOT NULL,
     xml text NOT NULL,
-    cipher text,
-    key text,
-    device_id text,
+    cipher text NOT NULL,
+    key text NOT NULL,
+    device_id text NOT NULL,
     PRIMARY KEY (server_host, username, timestamp)
 );
 CREATE UNIQUE INDEX i_xabber_push_session_susn ON xabber_push_session USING btree (server_host, username, service, node);
+CREATE UNIQUE INDEX i_xabber_push_session_sud ON xabber_push_session USING btree (server_host, username, device_id);
 
 CREATE TABLE panel_permissions (
     username text NOT NULL,

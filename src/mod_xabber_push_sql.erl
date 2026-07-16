@@ -48,42 +48,50 @@ store_session(LUser, LServer, NowTS, PushJID, Node, XData) ->
     TS = misc:now_to_usec(NowTS),
     PushLJID = jid:tolower(PushJID),
     Service = jid:encode(PushLJID),
-    case ?SQL_UPSERT(LServer, "xabber_push_session",
-		     ["!username=%(LUser)s",
-		      "!server_host=%(LServer)s",
-		      "!timestamp=%(TS)d",
-		      "!service=%(Service)s",
-		      "!node=%(Node)s",
-		      "xml=%(XML)s"]) of
-	ok ->
+    F = fun() ->
+		delete_conflicting_sessions_t(LUser, LServer, TS, Service, Node, undefined),
+		ejabberd_sql:sql_query_t(
+		  ?SQL_INSERT(
+		     "xabber_push_session",
+		     ["username=%(LUser)s",
+		      "server_host=%(LServer)s",
+		      "timestamp=%(TS)d",
+		      "service=%(Service)s",
+		      "node=%(Node)s",
+		      "xml=%(XML)s"]))
+	end,
+    case ejabberd_sql:sql_transaction(LServer, F) of
+	{atomic, _} ->
 	    {ok, {NowTS, PushLJID, Node, XData}};
-	_Err ->
+	{aborted, _} ->
 	    {error, db_failure}
     end.
-store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, undefined) ->
-	store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, <<>>);
 store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, DeviceID) ->
-	?INFO_MSG("Storing session ~p",[LUser]),
 	XML = encode_xdata(XData),
 	TS = misc:now_to_usec(NowTS),
 	PushLJID = jid:tolower(PushJID),
 	Service = jid:encode(PushLJID),
 	KeyString = base64:encode(Key),
-	case ?SQL_UPSERT(LServer, "xabber_push_session",
-		["!username=%(LUser)s",
-			"!server_host=%(LServer)s",
-			"!timestamp=%(TS)d",
-			"!service=%(Service)s",
-			"!node=%(Node)s",
-			"cipher=%(Cipher)s",
-			"key=%(KeyString)s",
-			"xml=%(XML)s",
-			"device_id=%(DeviceID)s"]) of
-		ok ->
-			?INFO_MSG("Save session for ~p",[LUser]),
+	F = fun() ->
+		delete_conflicting_sessions_t(LUser, LServer, TS, Service, Node, DeviceID),
+		ejabberd_sql:sql_query_t(
+		  ?SQL_INSERT(
+		    "xabber_push_session",
+		    ["username=%(LUser)s",
+		     "server_host=%(LServer)s",
+		     "timestamp=%(TS)d",
+		     "service=%(Service)s",
+		     "node=%(Node)s",
+		     "cipher=%(Cipher)s",
+		     "key=%(KeyString)s",
+		     "xml=%(XML)s",
+		     "device_id=%(DeviceID)s"]))
+	end,
+	case ejabberd_sql:sql_transaction(LServer, F) of
+		{atomic, _} ->
 			{ok, {NowTS, PushLJID, Node, XData, Cipher, Key}};
-		Err ->
-			?INFO_MSG("Error to save push sesssui ~p",[Err]),
+		{aborted, Err} ->
+			?INFO_MSG("Error to save push session ~p",[Err]),
 			{error, db_failure}
 	end.
 
@@ -227,6 +235,23 @@ delete_old_sessions(LServer, Time) ->
 	_Err ->
 	    {error, db_failure}
     end.
+
+delete_conflicting_sessions_t(LUser, LServer, TS, Service, Node, DeviceID) ->
+    ejabberd_sql:sql_query_t(
+      ?SQL("delete from xabber_push_session where "
+	   "username=%(LUser)s and %(LServer)H and timestamp=%(TS)d")),
+    ejabberd_sql:sql_query_t(
+      ?SQL("delete from xabber_push_session where "
+	   "username=%(LUser)s and %(LServer)H and "
+	   "service=%(Service)s and node=%(Node)s")),
+    delete_device_session_t(LUser, LServer, DeviceID).
+
+delete_device_session_t(_LUser, _LServer, undefined) ->
+    ok;
+delete_device_session_t(LUser, LServer, DeviceID) ->
+    ejabberd_sql:sql_query_t(
+      ?SQL("delete from xabber_push_session where "
+	   "username=%(LUser)s and %(LServer)H and device_id=%(DeviceID)s")).
 
 export(_Server) ->
     [{xabber_push_session,

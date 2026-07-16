@@ -28,8 +28,8 @@
 -compile([{parse_transform, ejabberd_sql_pt}]).
 
 %% API
--export([init/2, store_session/6, store_session/9, lookup_session/4, lookup_session/3,
-	 lookup_sessions/3, lookup_sessions/2, lookup_sessions/1, lookup_device_sessions/3,
+-export([init/2, store_session/9, lookup_session/4,
+	 lookup_sessions/3, lookup_sessions/2, lookup_device_sessions/3,
 	 delete_session/3, delete_old_sessions/2, export/1]).
 
 -include("xmpp.hrl").
@@ -43,29 +43,6 @@
 init(_Host, _Opts) ->
     ok.
 
-store_session(LUser, LServer, NowTS, PushJID, Node, XData) ->
-    XML = encode_xdata(XData),
-    TS = misc:now_to_usec(NowTS),
-    PushLJID = jid:tolower(PushJID),
-    Service = jid:encode(PushLJID),
-    F = fun() ->
-		delete_conflicting_sessions_t(LUser, LServer, TS, Service, Node, undefined),
-		ejabberd_sql:sql_query_t(
-		  ?SQL_INSERT(
-		     "xabber_push_session",
-		     ["username=%(LUser)s",
-		      "server_host=%(LServer)s",
-		      "timestamp=%(TS)d",
-		      "service=%(Service)s",
-		      "node=%(Node)s",
-		      "xml=%(XML)s"]))
-	end,
-    case ejabberd_sql:sql_transaction(LServer, F) of
-	{atomic, _} ->
-	    {ok, {NowTS, PushLJID, Node, XData}};
-	{aborted, _} ->
-	    {error, db_failure}
-    end.
 store_session(LUser, LServer, NowTS, PushJID, Node, XData, Cipher, Key, DeviceID) ->
 	XML = encode_xdata(XData),
 	TS = misc:now_to_usec(NowTS),
@@ -114,24 +91,6 @@ lookup_session(LUser, LServer, PushJID, Node) ->
 	    {error, db_failure}
     end.
 
-lookup_session(LUser, LServer, NowTS) ->
-    TS = misc:now_to_usec(NowTS),
-    case ejabberd_sql:sql_query(
-	   LServer,
-	   ?SQL("select @(service)s, @(node)s, @(xml)s, @(cipher)s, @(key)s "
-		"from xabber_push_session where username=%(LUser)s and %(LServer)H "
-		"and timestamp=%(TS)d")) of
-	{selected, [{Service, Node, XML, Cipher, Key}]} ->
-	    PushLJID = jid:tolower(jid:decode(Service)),
-	    XData = decode_xdata(XML, LUser, LServer),
-	    {ok, {NowTS, PushLJID, Node, XData,
-        replace_null(Cipher), replace_null(Key)}};
-	{selected, []} ->
-	    {error, notfound};
-	_Err ->
-	    {error, db_failure}
-    end.
-
 lookup_sessions(LUser, LServer, PushJID) ->
     PushLJID = jid:tolower(PushJID),
     Service = jid:encode(PushLJID),
@@ -165,24 +124,6 @@ lookup_sessions(LUser, LServer) ->
 			   XData = decode_xdata(XML, LUser, LServer),
 			   PushLJID = jid:tolower(jid:decode(Service)),
 			   {NowTS, PushLJID,Node, XData, replace_null(Cipher), replace_null(Key)}
-		   end, Rows)};
-	_Err ->
-	    {error, db_failure}
-    end.
-
-lookup_sessions(LServer) ->
-    case ejabberd_sql:sql_query(
-	   LServer,
-	   ?SQL("select @(username)s, @(timestamp)d, @(xml)s, "
-		"@(node)s, @(service)s, @(cipher)s, @(key)s from xabber_push_session "
-                "where %(LServer)H")) of
-	{selected, Rows} ->
-	    {ok, lists:map(
-		   fun({LUser, TS, XML, Node, Service, Cipher, Key}) ->
-			   NowTS = misc:usec_to_now(TS),
-			   XData = decode_xdata(XML, LUser, LServer),
-			   PushLJID = jid:tolower(jid:decode(Service)),
-			   {NowTS, PushLJID, Node, XData, Cipher, Key}
 		   end, Rows)};
 	_Err ->
 	    {error, db_failure}

@@ -62,23 +62,16 @@
 -callback init(binary(), gen_mod:opts())
 	  -> any().
 -callback store_session(binary(), binary(), timestamp(), jid(), binary(),
-			xdata())
-	  -> {ok, xabber_push_session()} | {error, err_reason()}.
--callback store_session(binary(), binary(), timestamp(), jid(), binary(),
 		xdata(), binary(), binary(), any())
 			-> {ok, xabber_push_session()} | {error, err_reason()}.
 -callback lookup_session(binary(), binary(), jid(), binary())
-	  -> {ok, xabber_push_session()} | {error, err_reason()}.
--callback lookup_session(binary(), binary(), timestamp())
 	  -> {ok, xabber_push_session()} | {error, err_reason()}.
 -callback lookup_sessions(binary(), binary(), jid())
 	  -> {ok, [xabber_push_session()]} | {error, err_reason()}.
 -callback lookup_sessions(binary(), binary())
 	  -> {ok, [xabber_push_session()]} | {error, err_reason()}.
--callback lookup_sessions(binary())
-	  -> {ok, [xabber_push_session()]} | {error, err_reason()}.
 -callback lookup_device_sessions(binary(), binary(), list())
-			-> {ok, [xabber_push_session()]} | {error, err_reason()}.
+		-> {ok, [xabber_push_session()]} | {error, err_reason()}.
 -callback delete_session(binary(), binary(), timestamp())
 	  -> ok | {error, err_reason()}.
 -callback delete_old_sessions(binary() | global, erlang:timestamp())
@@ -336,27 +329,6 @@ process_iq(#iq{sub_els = [#push_disable{jid = J, node = N}]} = IQ) ->
 process_iq(IQ) ->
   xmpp:make_error(IQ, xmpp:err_not_allowed()).
 
-%%-spec enable(jid(), jid(), binary(), xdata()) -> ok | {error, err_reason()}.
-%%enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
-%%       PushJID, Node, XData) ->
-%%    case ejabberd_sm:get_session_sid(LUser, LServer, LResource) of
-%%	{TS, PID} ->
-%%	    case store_session(LUser, LServer, TS, PushJID, Node, XData) of
-%%		{ok, _} ->
-%%		    ?INFO_MSG("Enabling push notifications for ~s",
-%%			      [jid:encode(JID)]),
-%%		    ejabberd_c2s:cast(PID, push_enable);
-%%		{error, _} = Err ->
-%%		    ?ERROR_MSG("Cannot enable push for ~s: database error",
-%%			       [jid:encode(JID)]),
-%%		    Err
-%%	    end;
-%%	none ->
-%%	    ?WARNING_MSG("Cannot enable push for ~s: session not found",
-%%			 [jid:encode(JID)]),
-%%	    {error, notfound}
-%%    end.
-
 enable(_JID, undefined, _PushSrv, _Node, _XData, _Alg, _EKey) ->
   {error, not_allowed};
 enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
@@ -491,81 +463,8 @@ get_jwk(LUser, LServer, DeviceID) ->
   end.
 
 %%--------------------------------------------------------------------
-%% Generate push notifications.
+%% Internal functions.
 %%--------------------------------------------------------------------
-%%-spec notify(c2s_state(), xmpp_element() | xmlel() | none) -> ok.
-%%notify(_, none) -> ok;
-%%notify(#{jid := #jid{luser = LUser, lserver = LServer}, sid := {TS, _}}, Pkt) ->
-%%  ?INFO_MSG("!!!!! ~p",[LUser]),
-%%  case is_muted(LUser, LServer, Pkt) of
-%%    false ->
-%%      case lookup_session(LUser, LServer, TS) of
-%%        {ok, Client} ->
-%%          ?INFO_MSG("DUBL ~p ~p",[LUser, Client]),
-%%          notify(LUser, LServer, [Client], Pkt);
-%%        {error, notfound} ->
-%%          ok;
-%%        Err ->
-%%          ?ERROR_MSG("Error to notify user ~s@~s: ~p~n",[LUser, LServer, Err])
-%%      end;
-%%    _ ->
-%%      ok
-%%  end.
-
-%%-spec notify(binary(), binary(), [xabber_push_session()],
-%%    xmpp_element() | xmlel() | none) -> ok.
-%%notify(LUser, LServer, Clients, Pkt) ->
-%%    lists:foreach(
-%%      fun({TS, PushLJID, Node, XData, Cipher, Key}) ->
-%%        Callback = iq_callback(LUser, LServer, TS),
-%%        notify(LServer, PushLJID, Node, XData, Pkt, Callback, Cipher, Key)
-%%      end, Clients).
-%%
-%%-spec notify(binary(), ljid(), binary(), xdata(),
-%%    xmpp_element(), binary(), binary() | xmlel() | none,
-%%    fun((iq() | timeout) -> any())) -> ok.
-%%notify(_S, _PushSrv, _Node, _XData, #message{body = []}, _HR, <<>>, <<>>) ->
-%%  ok;
-%%notify(_S, _PushSrv, _Node, _XData, #message{type = Type}, _Cbk, _C, _K) when Type /= chat->
-%%  ok;
-%%notify(LServer, PushSrv, Node, XData, #message{sub_els = [#carbons_received{} = Received]},
-%%    Callback, Cipher, Key) ->
-%%  Fwd = Received#carbons_received.forwarded,
-%%  SubEls = Fwd#forwarded.sub_els,
-%%  notify(LServer, PushSrv, Node, XData, hd(SubEls), Callback, Cipher, Key);
-%%notify(LServer, PushSrv, Node, XData, #message{body = []} = Pkt,
-%%    Callback, Cipher, Key) ->
-%%  case xmpp:get_subtag(Pkt, #mark_displayed{}) of
-%%    false ->
-%%      case xmpp:get_subtag(Pkt, #jingle_propose{}) of
-%%        false -> ok;
-%%        _ ->
-%%          do_notify(<<"call">>, LServer, PushSrv, Node, XData, [Pkt],
-%%            Callback, Cipher, Key)
-%%      end;
-%%    D ->
-%%      do_notify(<<"displayed">>, LServer, PushSrv, Node, XData, [D],
-%%        Callback, Cipher, Key)
-%%  end;
-%%notify(LServer, PushSrv, Node, XData, #message{}, Callback, <<>>, <<>>) ->
-%%  do_notify(<<"message">>, LServer, PushSrv, Node, XData,
-%%    [], Callback, <<>>, <<>>) ;
-%%notify(LServer, PushLJID, Node, XData, #message{} = Pkt,
-%%    Callback, Cipher, Key) ->
-%%  {PType, Payload} = case xmpp:get_subtag(Pkt, #jingle_propose{}) of
-%%                       false ->
-%%                         {<<"message">>, [get_stanza_id(Pkt)]};
-%%                       _ ->
-%%                         {<<"call">>, [Pkt]}
-%%                     end,
-%%  do_notify(PType, LServer, PushLJID, Node, XData,
-%%    Payload, Callback, Cipher, Key);
-%%notify(LServer, PushSrv, Node, XData, #presence{type = subscribe} = Pkt,
-%%    Callback, Cipher, Key) ->
-%%  do_notify(<<"subscribe">>, LServer, PushSrv, Node, XData, [Pkt],
-%%    Callback, Cipher, Key);
-%%notify(_, _, _, _, _, _, _, _) ->
-%%  ok.
 
 do_notify(PushType, LServer, PushLJID, Node, XData, PayloadList,
     Callback, Cipher, Key) ->
@@ -587,39 +486,6 @@ do_notify(PushType, LServer, PushLJID, Node, XData, PayloadList,
     sub_els = [PubSub]},
   ejabberd_router:route_iq(IQ, Callback),true.
 
-
-%%--------------------------------------------------------------------
-%% Miscellaneous.
-%%--------------------------------------------------------------------
-%%-spec is_message_with_body(stanza()) -> boolean().
-%%is_message_with_body(#message{} = Msg) ->
-%%    get_body_text(Msg) /= <<>>;
-%%is_message_with_body(_Stanza) ->
-%%    false.
-
-%%--------------------------------------------------------------------
-%% Internal functions.
-%%--------------------------------------------------------------------
-%%-spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata())
-%%      -> {ok, xabber_push_session()} | {error, err_reason()}.
-%%store_session(LUser, LServer, TS, PushJID, Node, XData) ->
-%%    Mod = gen_mod:db_mod(LServer, ?MODULE),
-%%    delete_conflicting_sessions(LUser, LServer, TS, PushJID, Node, undefined, Mod),
-%%    case use_cache(Mod, LServer) of
-%%	true ->
-%%	    ets_cache:delete(?PUSH_CACHE, {LUser, LServer},
-%%			     cache_nodes(Mod, LServer)),
-%%	    ets_cache:update(
-%%		?PUSH_CACHE,
-%%		{LUser, LServer, TS}, {ok, {TS, PushJID, Node, XData}},
-%%		fun() ->
-%%			Mod:store_session(LUser, LServer, TS, PushJID, Node,
-%%					  XData)
-%%		end, cache_nodes(Mod, LServer));
-%%	false ->
-%%	    Mod:store_session(LUser, LServer, TS, PushJID, Node, XData)
-%%    end.
-
 -spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata(),binary(),binary(),any())
 			-> {ok, xabber_push_session()} | {error, err_reason()}.
 store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, DeviceID) ->
@@ -630,13 +496,8 @@ store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, D
 		true ->
 			ets_cache:delete(?PUSH_CACHE, {LUser, LServer},
 				cache_nodes(Mod, LServer)),
-			ets_cache:update(
-				?PUSH_CACHE,
-				{LUser, LServer, TS}, {ok, {TS, PushJID, Node, XData}},
-				fun() ->
-					Mod:store_session(LUser, LServer, TS, PushJID, Node,
-						XData, Cipher, EncryptionKey, DeviceID)
-				end, cache_nodes(Mod, LServer));
+			Mod:store_session(LUser, LServer, TS, PushJID, Node,
+				XData, Cipher, EncryptionKey, DeviceID);
 		false ->
 			Mod:store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, DeviceID)
 	end.
@@ -686,19 +547,6 @@ delete_sessions_by_timestamp(LUser, LServer, Sessions, Mod) ->
       fun({SessionTS, _PushJID, _Node, _XData, _Cipher, _Key}) ->
 	      delete_session_by_timestamp(LUser, LServer, SessionTS, Mod)
       end, Sessions).
-
-%%-spec lookup_session(binary(), binary(), timestamp())
-%%      -> {ok, xabber_push_session()} | error | {error, err_reason()}.
-%%lookup_session(LUser, LServer, TS) ->
-%%    Mod = gen_mod:db_mod(LServer, ?MODULE),
-%%    case use_cache(Mod, LServer) of
-%%	true ->
-%%	    ets_cache:lookup(
-%%	      ?PUSH_CACHE, {LUser, LServer, TS},
-%%	      fun() -> Mod:lookup_session(LUser, LServer, TS) end);
-%%	false ->
-%%	    Mod:lookup_session(LUser, LServer, TS)
-%%    end.
 
 -spec lookup_sessions(binary(), binary()) -> {ok, [xabber_push_session()]} | {error, err_reason()}.
 lookup_sessions(LUser, LServer) ->
@@ -777,35 +625,6 @@ delete_sessions(LUser, LServer, LookupFun, Mod) ->
 	{error, _} = Err ->
 	    Err
     end.
-
-%%-spec drop_online_sessions(binary(), binary(), [xabber_push_session()])
-%%      -> [xabber_push_session()].
-%%drop_online_sessions(LUser, LServer, Clients) ->
-%%    SessIDs = ejabberd_sm:get_session_sids(LUser, LServer),
-%%    [Client || {TS, _, _, _, _, _} = Client <- Clients,
-%%	       lists:keyfind(TS, 1, SessIDs) == false].
-
-%%get_stanza_id(#message{to = To, meta = #{stanza_id := TS}}) ->
-%%  #stanza_id{id = integer_to_binary(TS), by = jid:remove_resource(To)};
-%%get_stanza_id(_Pkt) -> undefined.
-
-%%-spec get_body_text(message()) -> binary() | none.
-%%get_body_text(#message{body = Body} = Msg) ->
-%%    case xmpp:get_text(Body) of
-%%	Text when byte_size(Text) > 0 ->
-%%	    Text;
-%%	<<>> ->
-%%	    case body_is_encrypted(Msg) of
-%%		true ->
-%%		    <<"(encrypted)">>;
-%%		false ->
-%%		    <<>>
-%%	    end
-%%    end.
-
-%%-spec body_is_encrypted(message()) -> boolean().
-%%body_is_encrypted(#message{sub_els = SubEls}) ->
-%%    lists:keyfind(<<"encrypted">>, #xmlel.name, SubEls) /= false.
 
 %%--------------------------------------------------------------------
 %% Caching.

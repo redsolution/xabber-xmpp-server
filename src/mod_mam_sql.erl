@@ -504,15 +504,15 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
     case ejabberd_sql:use_new_schema() of
         true when WithCount ->
             {QueryPage,
-             [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
+             [<<"SELECT COUNT(*) FROM archive WHERE username=">>,
               SUser, <<"' and server_host='">>,
-              SServer, <<"'">>, WithClause, WithTextClause,
+              SServer, WithClause, WithTextClause,
                StartClause, EndClause, IDsClause, AfterIDClause,
                BeforeIDClause, TagsClause, ConvClause, <<";">>]};
         false when WithCount ->
             {QueryPage,
-             [<<"SELECT COUNT(*) FROM archive WHERE username='">>,
-              SUser, <<"'">>, WithClause, WithTextClause,
+             [<<"SELECT COUNT(*) FROM archive WHERE username=">>,
+              SUser, WithClause, WithTextClause,
               StartClause, EndClause, IDsClause, AfterIDClause,
                BeforeIDClause, TagsClause, ConvClause, <<";">>]};
         _ ->

@@ -58,7 +58,19 @@
 -record(state, {tab = undefined, url = undefined, host = <<>>}).
 
 -define(TIMEOUT, 6000).
-
+-define(AC_ALLOW_METHODS,
+  {<<"Access-Control-Allow-Methods">>,
+    <<"GET, POST, OPTIONS">>}).
+-define(AC_ALLOW_ORIGIN,
+  {<<"Access-Control-Allow-Origin">>, <<"*">>}).
+-define(AC_ALLOW_HEADERS,
+  {<<"Access-Control-Allow-Headers">>,
+    <<"Content-Type, Authorization">>}).
+-define(AC_MAX_AGE,
+  {<<"Access-Control-Max-Age">>, <<"86400">>}).
+-define(OPTIONS_HEADER,
+  [?AC_ALLOW_ORIGIN, ?AC_ALLOW_METHODS,
+    ?AC_ALLOW_HEADERS, ?AC_MAX_AGE]).
 %%--------------------------------------------------------------------
 %% gen_mod/supervisor callbacks.
 %%--------------------------------------------------------------------
@@ -203,7 +215,12 @@ process(Path, #request{method = 'GET', data = Data, q = Q, headers = Headers} = 
       end;
     _ ->
       {500, [],[<<"internal error">>]}
-  end.
+  end;
+process(_, #request{method = 'OPTIONS', data = <<>>}) ->
+  {204, ?OPTIONS_HEADER, []};
+process(_Path, Request) ->
+  ?DEBUG("Bad Request: no handler ~p~n~p", [_Path,Request]),
+  {400, [], [<<"no handler">>]}.
 
 handle_reuest([<<"archive">>], #request{q = Q}, User, Server) ->
   To = proplists:get_value(<<"by">>, Q),

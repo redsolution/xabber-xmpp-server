@@ -372,7 +372,8 @@ process(LocalPath, #request{method = Method, host = Host, ip = IP})
     when length(LocalPath) < 3,
 	 Method == 'PUT' orelse
 	 Method == 'GET' orelse
-	 Method == 'HEAD' ->
+	 Method == 'HEAD' orelse
+	 Method == 'OPTIONS' ->
     ?DEBUG("Rejecting ~s request from ~s for ~s: Too few path components",
 	   [Method, ?ADDR_TO_STR(IP), Host]),
     http_response(404);

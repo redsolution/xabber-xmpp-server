@@ -2274,6 +2274,17 @@ conversation_sql_upsert(LServer, LUser, Conversation , Options) ->
   Status = proplists:get_value('status', Options, <<"active">>),
   Read = proplists:get_value(read, Options, 0),
   TS = time_now(),
+  case proplists:is_defined(read, Options) of
+    true ->
+      conversation_sql_upsert(LServer, LUser, Conversation,
+        Type, Thread, Encrypted, Status, Read, TS);
+    false ->
+      conversation_sql_upsert_keep_read(LServer, LUser, Conversation,
+        Type, Thread, Encrypted, Status, Read, TS)
+  end.
+
+conversation_sql_upsert(LServer, LUser, Conversation,
+    Type, Thread, Encrypted, Status, Read, TS) ->
   ?SQL_UPSERT_T(
     "conversation_metadata",
     ["!username=%(LUser)s",
@@ -2282,6 +2293,22 @@ conversation_sql_upsert(LServer, LUser, Conversation , Options) ->
       "updated_at=%(TS)d",
       "read_until = %(Read)s",
       "read_until_ts = %(Read)d",
+      "conversation_thread=%(Thread)s",
+      "metadata_updated_at=%(TS)d",
+      "status=%(Status)s",
+      "encrypted=%(Encrypted)b",
+      "server_host=%(LServer)s"]).
+
+conversation_sql_upsert_keep_read(LServer, LUser, Conversation,
+    Type, Thread, Encrypted, Status, Read, TS) ->
+  ?SQL_UPSERT_T(
+    "conversation_metadata",
+    ["!username=%(LUser)s",
+      "!conversation=%(Conversation)s",
+      "!type=%(Type)s",
+      "updated_at=%(TS)d",
+      "-read_until = %(Read)s",
+      "-read_until_ts = %(Read)d",
       "conversation_thread=%(Thread)s",
       "metadata_updated_at=%(TS)d",
       "status=%(Status)s",

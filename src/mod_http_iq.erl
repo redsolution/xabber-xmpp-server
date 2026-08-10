@@ -71,6 +71,9 @@
 -define(OPTIONS_HEADER,
   [?AC_ALLOW_ORIGIN, ?AC_ALLOW_METHODS,
     ?AC_ALLOW_HEADERS, ?AC_MAX_AGE]).
+-define(HEADER,
+  [?AC_ALLOW_ORIGIN, ?AC_ALLOW_HEADERS]).
+
 %%--------------------------------------------------------------------
 %% gen_mod/supervisor callbacks.
 %%--------------------------------------------------------------------
@@ -204,23 +207,23 @@ process(Path, #request{method = 'GET', data = Data, q = Q, headers = Headers} = 
   ?DEBUG("Request: ~p ~p ~p ~p~n",[Path,Data,Headers,Q]),
   case extract_auth(Req) of
     {error, Reason} ->
-      {401, [],[atom_to_binary(Reason, latin1)]};
+      {401, ?HEADER, [atom_to_binary(Reason, latin1)]};
     Auth when is_map(Auth) ->
       {User, Server, <<"">>} = maps:get(usr, Auth),
       case check_host(Server) of
         true ->
           handle_reuest(Path, Req, User, Server);
         _ ->
-          {400, [],[<<"unknown host">>]}
+          {400, ?HEADER,[<<"unknown host">>]}
       end;
     _ ->
-      {500, [],[<<"internal error">>]}
+      {500, ?HEADER, [<<"internal error">>]}
   end;
 process(_, #request{method = 'OPTIONS', data = <<>>}) ->
   {204, ?OPTIONS_HEADER, []};
 process(_Path, Request) ->
   ?DEBUG("Bad Request: no handler ~p~n~p", [_Path,Request]),
-  {400, [], [<<"no handler">>]}.
+  {400, ?HEADER, [<<"no handler">>]}.
 
 handle_reuest([<<"archive">>], #request{q = Q}, User, Server) ->
   To = proplists:get_value(<<"by">>, Q),
@@ -231,10 +234,10 @@ handle_reuest([<<"vcard">>], #request{q = Q}, User, Server) ->
   handle_vcard(Server, User, Target);
 handle_reuest(Path, _Req, _User, _Server) ->
   ?DEBUG("path no found: ~p~n", [Path]),
-  {404, [], [<<"path no found">>]}.
+  {404, ?HEADER, [<<"path no found">>]}.
 
 handle_vcard(_Server, _User, error) ->
-  {400, [], [<<"bad jid">>]};
+  {400, ?HEADER, [<<"bad jid">>]};
 handle_vcard(Server, User, Target) when is_binary(Target) ->
   JID = jid:from_string(Target),
   handle_vcard(Server, User, JID);
@@ -244,7 +247,7 @@ handle_vcard(Server, User, JID) ->
   loop(Server, ReqID).
 
 handle_archive(_LServer, _LUser, undefined, _To) ->
-  {400, [], [<<"no stanza id">>]};
+  {400, ?HEADER, [<<"no stanza id">>]};
 handle_archive(LServer, LUser, StanzaID, To) ->
   ReqID = randoms:get_string(),
   do_cast(LServer, {mam_request,LServer,LUser,ReqID,StanzaID,To, self()}),
@@ -348,10 +351,10 @@ loop(LServer, ReqID, Acc) ->
       loop(LServer, ReqID, Acc ++ [Pkt]);
     {request_result, ReqID, #iq{} = Pkt} ->
       do_cast(LServer, {delete_session, ReqID}),
-      {200, [],[make_string(Acc ++ [Pkt])]}
+      {200, ?HEADER, [make_string(Acc ++ [Pkt])]}
   after ?TIMEOUT ->
     do_cast(LServer, {delete_session, ReqID}),
-    {408, [],[<<"Request Timeout">>]}
+    {408, ?HEADER, [<<"Request Timeout">>]}
 end.
 
 process_messages(LServer, Packet) ->

@@ -505,7 +505,7 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
         true when WithCount ->
             {QueryPage,
              [<<"SELECT COUNT(*) FROM archive WHERE username=">>,
-              SUser, <<"' and server_host='">>,
+              SUser, <<" and server_host=">>,
               SServer, WithClause, WithTextClause,
                StartClause, EndClause, IDsClause, AfterIDClause,
                BeforeIDClause, TagsClause, ConvClause, <<";">>]};

@@ -312,6 +312,29 @@ ProcessErlOpt = fun(Vals) ->
 			  end, Vals)
 		end,
 
+ExtraSrcDirs = case os:getenv("EXTRA_SRC_DIRS") of
+		   false ->
+		       [];
+		   "" ->
+		       [];
+		   Val ->
+		       string:tokens(Val, ":")
+	       end,
+
+AppendExtraSrcDirs = fun(Opts) ->
+			     case ExtraSrcDirs of
+				 [] ->
+				     Opts;
+				 _ ->
+				     case lists:keytake(src_dirs, 1, Opts) of
+					 {value, {src_dirs, Dirs}, Rest} ->
+					     [{src_dirs, Dirs ++ ExtraSrcDirs} | Rest];
+					 false ->
+					     [{src_dirs, ExtraSrcDirs} | Opts]
+				     end
+			     end
+		     end,
+
 ProcssXrefExclusions = fun(Items) ->
 			       [{lists:flatten(["(XC - UC) || (XU - X - B ",
 					       [[" - ", V] || V <- Items], ")"]),
@@ -360,7 +383,7 @@ Rules = [
 	 {[ct_extra_params], [eunit_compile_opts], true,
 	  AppendStr2(CtParams), "", []},
 	 {[erl_opts], true,
-	  ProcessErlOpt, []},
+	  fun(Vals) -> AppendExtraSrcDirs(ProcessErlOpt(Vals)) end, []},
 	 {[xref_queries], [xref_exclusions], true,
 	  AppendList2(ProcssXrefExclusions), [], []},
 	 {[deps], [floating_deps], true,

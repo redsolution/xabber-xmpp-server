@@ -93,8 +93,13 @@ delete_old_messages(ServerHost, TimeStamp, Type) ->
     ok.
 
 extended_fields() ->
-    [{withtext, <<"">>},{'stanza-id',<<"">>},
-      {last, false}].
+    [{withtext, <<>>},
+     {'before-id', <<>>},
+     {'after-id', <<>>},
+     {ids, []},
+     {'with-tags', []},
+     {'conversation-type', <<>>},
+     {'rsm-counter', undefined}].
 
 -spec get_user_and_bare_peer({binary(), binary()},
     chat | groupchat, jid()) -> {binary(), binary()}.

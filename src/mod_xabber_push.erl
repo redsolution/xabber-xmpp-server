@@ -42,9 +42,6 @@
 %% ejabberd command.
 -export([get_commands_spec/0, delete_old_sessions/1]).
 
-%% API.
--export([get_jwk/3]).
-
 %% For IQ callbacks
 -export([delete_session/3]).
 
@@ -287,14 +284,9 @@ process_iq(#iq{from = #jid{lserver = LServer}, to = #jid{lserver = LServer},
                {error, bad_request}
            end,
   case Result of
-    {ok, TS, DeviceID, EKey} ->
-      El = case mod_http_iq:get_url(LServer) of
-             undefined -> undefined;
-             URL ->
-               JWT = make_jwt(LServer, JID, TS, EKey, DeviceID),
-               make_enable_result(URL,JWT)
-           end,
-      xmpp:make_iq_result(IQ,El);
+    {ok, _TS, DeviceID, _EKey} ->
+      El = make_http_iq_enable_result(LServer, JID, DeviceID),
+      xmpp:make_iq_result(IQ, El);
     {error, not_allowed} ->
       xmpp:make_error(IQ, xmpp:err_not_allowed());
     {error, bad_request} ->
@@ -449,18 +441,6 @@ remove_user(LUser, LServer) ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
     LookupFun = fun() -> Mod:lookup_sessions(LUser, LServer) end,
     delete_sessions(LUser, LServer, LookupFun, Mod).
-
-%%--------------------------------------------------------------------
-%% API.
-%%--------------------------------------------------------------------
-get_jwk(LUser, LServer, DeviceID) ->
-  Mod = gen_mod:db_mod(LServer, ?MODULE),
-  LookupResult = Mod:lookup_device_sessions(LUser, LServer, [DeviceID]),
-  case LookupResult of
-    {ok, [{TS, _, _, _, _, EKey}]} ->
-      make_jwk(TS, base64:decode(EKey), DeviceID);
-    _ -> undefined
-  end.
 
 %%--------------------------------------------------------------------
 %% Internal functions.
@@ -781,19 +761,15 @@ format_stanza_error(#stanza_error{reason = Reason, text = Txt}) ->
       <<Data/binary, " (", Slogan/binary, ")">>
   end.
 
-make_jwt(Server, JID, TS, EKey, DeviceID)->
-  Sub = jid:to_string(jid:replace_resource(JID, DeviceID)),
-  Exp = erlang:system_time(second) + (30*24*60*60) + randoms:uniform(24*60*60),
-  JWK = make_jwk(TS, EKey, DeviceID),
-  JWS = #{<<"alg">> => <<"HS256">>},
-  JWT = #{<<"iss">> => Server, <<"sub">> => Sub, <<"exp">> => Exp},
-  Signed = jose_jwt:sign(JWK, JWS, JWT),
-  {_ , Compact} = jose_jws:compact(Signed),
-  Compact.
-
-make_jwk(TS, EKey, DeviceID)->
-  BTS = integer_to_binary(misc:now_to_usec(TS)),
-  Data = <<BTS/binary,EKey/binary,DeviceID/binary>>,
-  Secret = crypto:hash(sha256, Data),
-  #{<<"kty">> => <<"oct">>,
-    <<"k">> => base64url:encode(Secret)}.
+make_http_iq_enable_result(LServer, JID, DeviceID) ->
+  case mod_http_iq:get_url(LServer) of
+    undefined ->
+      undefined;
+    URL ->
+      case mod_http_iq:make_jwt(LServer, JID, DeviceID) of
+        {ok, JWT} ->
+          make_enable_result(URL, JWT);
+        _ ->
+          undefined
+      end
+  end.

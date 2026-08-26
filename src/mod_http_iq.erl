@@ -24,6 +24,7 @@
 %%%----------------------------------------------------------------------
 -module(mod_http_iq).
 -author('ilya.kalashnikov@redsolution.com').
+-compile([{parse_transform, ejabberd_sql_pt}]).
 
 -behaviour(gen_server).
 -behaviour(gen_mod).
@@ -49,11 +50,12 @@
 -export([process/2]).
 
 %% api
--export([get_url/1]).
+-export([get_url/1, make_jwt/3]).
 
 -include("logger.hrl").
 -include("ejabberd_http.hrl").
 -include("xmpp.hrl").
+-include("ejabberd_sql_pt.hrl").
 
 -record(state, {tab = undefined, url = undefined, host = <<>>}).
 
@@ -73,14 +75,20 @@
     ?AC_ALLOW_HEADERS, ?AC_MAX_AGE]).
 -define(HEADER,
   [?AC_ALLOW_ORIGIN, ?AC_ALLOW_HEADERS]).
+-define(TOKEN_CACHE, http_iq_token_cache).
 
 %%--------------------------------------------------------------------
 %% gen_mod/supervisor callbacks.
 %%--------------------------------------------------------------------
 start(Host, Opts) ->
+  init_cache(Host, Opts),
   gen_mod:start_child(?MODULE, Host, Opts).
 
 stop(Host) ->
+  case gen_mod:is_loaded_elsewhere(Host, ?MODULE) of
+    true -> ok;
+    false -> ets_cache:delete(?TOKEN_CACHE)
+  end,
   gen_mod:stop_child(?MODULE, Host).
 
 reload(Host, NewOpts, OldOpts) ->
@@ -90,11 +98,24 @@ mod_opt_type(url) ->
   fun(<<"http://", _/binary>> = URL) -> URL;
     (<<"https://", _/binary>> = URL) -> URL;
     (undefined) -> undefined
-  end.
+  end;
+mod_opt_type(jwt_ttl) ->
+  fun(I) when is_integer(I), I > 0 -> I end;
+mod_opt_type(O) when O == cache_life_time; O == cache_size ->
+  fun(I) when is_integer(I), I > 0 -> I;
+    (infinity) -> infinity
+  end;
+mod_opt_type(O) when O == use_cache; O == cache_missed ->
+  fun(B) when is_boolean(B) -> B end.
 
-mod_options(_Host) ->
+mod_options(Host) ->
   [
-    {url, undefined}
+    {url, undefined},
+    {jwt_ttl, 30 * 24 * 60 * 60},
+    {use_cache, ejabberd_config:use_cache(Host)},
+    {cache_size, ejabberd_config:cache_size(Host)},
+    {cache_missed, ejabberd_config:cache_missed(Host)},
+    {cache_life_time, ejabberd_config:cache_life_time(Host)}
   ].
 
 depends(_Host, _Opts) ->
@@ -138,7 +159,7 @@ handle_cast({mam_request, Server, User, ReqID, StanzaID, Remote, Caller}, #state
       #xdata_field{var = <<"FORM_TYPE">>, type='hidden', values = [<<"urn:xmpp:mam:1">>]},
       #xdata_field{var = <<"ids">>, values = [StanzaID]}
     ]},
-  Query = #mam_query{id = ReqID, xmlns = <<"urn:xmpp:mam:2">>, xdata = XData},
+  Query = #mam_query{id = ReqID, xmlns = ?NS_MAM_2, xdata = XData},
   IQ=#iq{type=set,
     id = ReqID,
     from = jid:make(User,Server,ReqID),
@@ -297,28 +318,31 @@ check_jwt(Token) ->
       try jid:decode(UserDevID) of
         #jid{luser = LUser, lserver = LServer, lresource = DevID} ->
           check_jwt(LUser, LServer, DevID, Token, Exp, Now)
-      catch _:{bad_jid, _} ->
+      catch _:_ ->
         {error, invalid_auth}
       end;
     _ ->
       {error, invalid_auth}
   end.
 
+check_jwt(_LUser, _LServer, _DevID, _Token, Exp, _Now) when not is_integer(Exp) ->
+  {error, invalid_auth};
 check_jwt(_LUser, _LServer, _DevID, _Token, Exp, Now) when Exp < Now ->
   {error, invalid_auth};
 check_jwt(LUser, LServer, DevID, Token, _, _) ->
   check_jwt(LUser, LServer, DevID, Token).
 
 check_jwt(LUser, LServer, DevID, Token) ->
-  case mod_xabber_push:get_jwk(LUser, LServer, DevID) of
-    undefined -> {error, invalid_auth};
-    JWK ->
-      case  jose_jwt:verify(JWK, Token) of
-        {true, _, _} ->
-          #{usr => {LUser, LServer, <<"">>}, caller_server => LServer};
-        _ ->
-          {error, invalid_auth}
-      end
+  TokenHash = token_hash(Token),
+  Key = token_cache_key(LUser, LServer, DevID),
+  Now = erlang:system_time(second),
+  case lookup_cached_auth(Key, TokenHash, Now) of
+    {ok, Auth} ->
+      Auth;
+    miss ->
+      verify_jwt_from_storage(LUser, LServer, DevID, Token, TokenHash, Now);
+    stale ->
+      {error, invalid_auth}
   end.
 
 make_session(User, Server, ReqID, Caller, Tab)->
@@ -373,6 +397,57 @@ do_cast(LServer, Request) ->
   gen_server:cast(Proc, Request).
 
 %%%===================================================================
+%%% Caching
+%%%===================================================================
+
+init_cache(Host, Opts) ->
+  case gen_mod:get_opt(use_cache, Opts) of
+    true ->
+      ets_cache:new(?TOKEN_CACHE, cache_opts(Opts));
+    false ->
+      case gen_mod:is_loaded_elsewhere(Host, ?MODULE) of
+        true -> ok;
+        false -> ets_cache:delete(?TOKEN_CACHE)
+      end
+  end.
+
+cache_opts(Opts) ->
+  MaxSize = gen_mod:get_opt(cache_size, Opts),
+  CacheMissed = gen_mod:get_opt(cache_missed, Opts),
+  LifeTime = case gen_mod:get_opt(cache_life_time, Opts) of
+    infinity -> infinity;
+    I -> timer:seconds(I)
+  end,
+  [{max_size, MaxSize}, {cache_missed, CacheMissed}, {life_time, LifeTime}].
+
+use_cache(LServer) ->
+  gen_mod:get_module_opt(LServer, ?MODULE, use_cache).
+
+cache_nodes() ->
+  ejabberd_cluster:get_nodes().
+
+token_cache_key(LUser, LServer, DeviceID) ->
+  {LUser, LServer, DeviceID}.
+
+lookup_cached_auth(Key, TokenHash, Now) ->
+  case ets_cache:lookup(?TOKEN_CACHE, Key) of
+    {ok, {TokenHash, Exp, Auth}} when Exp > Now ->
+      {ok, Auth};
+    {ok, {_OtherTokenHash, Exp, _Auth}} when Exp > Now ->
+      stale;
+    _ ->
+      miss
+  end.
+
+cache_auth(LServer, Key, TokenHash, Exp, Auth) ->
+  case use_cache(LServer) of
+    true ->
+      ets_cache:insert(?TOKEN_CACHE, Key, {TokenHash, Exp, Auth}, cache_nodes());
+    false ->
+      ok
+  end.
+
+%%%===================================================================
 %%% API
 %%%===================================================================
 
@@ -383,3 +458,130 @@ get_url(Host)->
     _ ->
       undefined
   end.
+
+make_jwt(LServer, JID, DeviceID) ->
+  {LUser, LServer, _} = jid:tolower(JID),
+  Now = erlang:system_time(second),
+  TTL = gen_mod:get_module_opt(LServer, ?MODULE, jwt_ttl),
+  Exp = Now + TTL,
+  case get_or_create_jwk(LUser, LServer, DeviceID) of
+    {ok, JWK} ->
+      Sub = jid:to_string(jid:replace_resource(JID, DeviceID)),
+      JWS = #{<<"alg">> => <<"HS256">>},
+      JWT = #{<<"iss">> => LServer,
+        <<"sub">> => Sub,
+        <<"scope">> => [?NS_MAM_2],
+        <<"iat">> => Now,
+        <<"exp">> => Exp},
+      Signed = jose_jwt:sign(JWK, JWS, JWT),
+      {_, Compact} = jose_jws:compact(Signed),
+      case store_token_marker(LUser, LServer, DeviceID, JWK, Compact, Exp, Now) of
+        ok ->
+          Auth = auth_map(LUser, LServer),
+          Key = token_cache_key(LUser, LServer, DeviceID),
+          cache_auth(LServer, Key, token_hash(Compact), Exp, Auth),
+          {ok, Compact};
+        Err -> Err
+      end;
+    Err ->
+      Err
+  end.
+
+get_or_create_jwk(LUser, LServer, DeviceID) ->
+  case lookup_token_marker(LUser, LServer, DeviceID) of
+    {ok, #{jwk := JWK}} ->
+      {ok, JWK};
+    not_found ->
+      {ok, generate_jwk()};
+    Err ->
+      Err
+  end.
+
+generate_jwk() ->
+  #{<<"kty">> => <<"oct">>,
+    <<"k">> => base64url:encode(crypto:strong_rand_bytes(32))}.
+
+lookup_token_marker(LUser, LServer, DeviceID) ->
+  case sql_select_token_marker(LUser, LServer, DeviceID) of
+    {ok, JWKData, TokenHash, Exp} ->
+      case decode_jwk(JWKData) of
+        {ok, JWK} -> {ok, #{jwk => JWK, token_hash => TokenHash, exp => Exp}};
+        Err -> Err
+      end;
+    Other ->
+      Other
+  end.
+
+verify_jwt_from_storage(LUser, LServer, DeviceID, Token, TokenHash, Now) ->
+  case lookup_token_marker(LUser, LServer, DeviceID) of
+    {ok, #{jwk := JWK, token_hash := TokenHash, exp := StoredExp}} when StoredExp > Now ->
+      case jose_jwt:verify(JWK, Token) of
+        {true, _, _} ->
+          Auth = auth_map(LUser, LServer),
+          Key = token_cache_key(LUser, LServer, DeviceID),
+          cache_auth(LServer, Key, TokenHash, StoredExp, Auth),
+          Auth;
+        _ ->
+          {error, invalid_auth}
+      end;
+    _ ->
+      {error, invalid_auth}
+  end.
+
+auth_map(LUser, LServer) ->
+  #{usr => {LUser, LServer, <<"">>}, caller_server => LServer}.
+
+sql_select_token_marker(LUser, LServer, DeviceID) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(jwk)s, @(token_hash)s, @(expires_at)d "
+      "from http_iq_tokens where username=%(LUser)s "
+      "and %(LServer)H and device_id=%(DeviceID)s")) of
+    {selected, []} ->
+      not_found;
+    {selected, [{JWKData, TokenHash, Exp}]} ->
+      {ok, JWKData, TokenHash, Exp};
+    _ ->
+      {error, db_failure}
+  end.
+
+store_token_marker(LUser, LServer, DeviceID, JWK, Token, Exp, Now) ->
+  JWKData = encode_jwk(JWK),
+  TokenHash = token_hash(Token),
+  sql_upsert_token_marker(LUser, LServer, DeviceID, JWKData, TokenHash, Exp, Now).
+
+sql_upsert_token_marker(LUser, LServer, DeviceID, JWKData, TokenHash, Exp, Now) ->
+  case ?SQL_UPSERT(
+    LServer,
+    "http_iq_tokens",
+    ["!username=%(LUser)s",
+      "!server_host=%(LServer)s",
+      "!device_id=%(DeviceID)s",
+      "jwk=%(JWKData)s",
+      "token_hash=%(TokenHash)s",
+      "expires_at=%(Exp)d",
+      "updated_at=%(Now)d"]) of
+    ok ->
+      ok;
+    _ ->
+      {error, db_failure}
+  end.
+
+encode_jwk(#{<<"kty">> := Kty, <<"k">> := K}) ->
+  jiffy:encode({[{<<"kty">>, Kty}, {<<"k">>, K}]}).
+
+decode_jwk(JWKData) ->
+  try jiffy:decode(JWKData) of
+    {[{<<"kty">>, Kty}, {<<"k">>, K}]} ->
+      {ok, #{<<"kty">> => Kty, <<"k">> => K}};
+    {[{<<"k">>, K}, {<<"kty">>, Kty}]} ->
+      {ok, #{<<"kty">> => Kty, <<"k">> => K}};
+    _ ->
+      {error, invalid_jwk}
+  catch
+    _:_ ->
+      {error, invalid_jwk}
+  end.
+
+token_hash(Token) ->
+  base64url:encode(crypto:hash(sha256, Token)).

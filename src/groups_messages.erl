@@ -256,7 +256,7 @@ process_message({false, Why}, Pkt) ->
   Message = #message{from = GroupJID, to = UserJID,
     id = randoms:get_string(),
     type = chat, body = Body, sub_els = Els, meta = #{}},
-  ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
+  ejabberd_router:route_error(Pkt, xmpp:err_not_allowed(Why, Pkt#message.lang)),
   send_not_allowed(UserJID, GroupJID, Message);
 process_message(_, Pkt) ->
   OriginID = case xmpp:get_subtag(Pkt, #origin_id{}) of
@@ -274,17 +274,78 @@ process_message(_, Pkt) ->
 is_permitted(#message{to =To, from = From} = Pkt) ->
   User = jid:to_string(jid:remove_resource(From)),
   Group = jid:to_string(jid:remove_resource(To)),
-  UserStatus = check_permission_write(User, Group, Pkt),
-  ChatState = groups_groups:group_is_active(Group),
-  if
-    UserStatus == restricted ->
-      {false, <<"You are not allowed to send such messages to this group.">>};
-    ChatState == inactive ->
-      {false, <<"Group is inactive.">>};
-    UserStatus == allowed andalso ChatState =/= inactive ->
-      true;
+  case has_nested_forwarded(Pkt) of
     true ->
-      {false, <<>>}
+      {false, <<"Forwarded messages cannot contain forwarded messages.">>};
+    false ->
+      case groups_groups:group_is_active(Group) of
+        inactive ->
+          {false, <<"Group is inactive.">>};
+        _ ->
+          case check_permission_write(User, Group, Pkt) of
+            restricted ->
+              {false, <<"You are not allowed to send such messages to this group.">>};
+            allowed ->
+              true;
+            _ ->
+              {false, <<>>}
+          end
+      end
+  end.
+
+has_nested_forwarded(Msg) ->
+  lists:any(fun reference_has_nested_forwarded/1, get_message_references(Msg)).
+
+reference_has_nested_forwarded(Reference) ->
+  case xmpp:get_subtag(Reference, #forwarded{}) of
+    #forwarded{sub_els = [ForwardedMsg]} ->
+      forwarded_message_has_forwarded(ForwardedMsg);
+    _ ->
+      false
+  end.
+
+forwarded_message_has_forwarded(#message{} = Msg) ->
+  message_has_forwarded(Msg);
+forwarded_message_has_forwarded(El) ->
+  try xmpp:decode(El) of
+    #message{} = Msg ->
+      message_has_forwarded(Msg);
+    _ ->
+      false
+  catch _:{xmpp_codec, _} ->
+    false
+  end.
+
+message_has_forwarded(Msg) ->
+  lists:any(fun(Reference) ->
+    xmpp:get_subtag(Reference, #forwarded{}) /= false
+  end, get_message_references(Msg)).
+
+get_message_references(Msg) ->
+  lists:filtermap(fun(El) ->
+    case decode_reference(El) of
+      {ok, Reference} ->
+        {true, Reference};
+      _ ->
+        false
+    end
+  end, xmpp:get_els(Msg)).
+
+decode_reference(#xmppreference{} = Ref) ->
+  {ok, Ref};
+decode_reference(El) ->
+  case {xmpp:get_name(El), xmpp:get_ns(El)} of
+    {<<"reference">>, ?NS_REFERENCES} ->
+      try xmpp:decode(El) of
+        #xmppreference{} = Ref ->
+          {ok, Ref};
+        _ ->
+          error
+      catch _:{xmpp_codec, _} ->
+        error
+      end;
+    _ ->
+      false
   end.
 
 -spec check_permission_write(binary(), binary(), xmlel()) -> allowed | restricted | notexist .
@@ -526,24 +587,22 @@ send_displayed(GroupJID, StanzaID, [Msg|Msgs]) ->
   end,
   send_displayed(GroupJID, StanzaID, Msgs).
 
-shift_references(Els, Length) ->
-  lists:filtermap(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCES) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub}};
-          #xmppreference{type = Type, 'begin' = Begin, 'end' = End, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = Begin + Length, 'end' = End + Length, sub_els = Sub}}
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els).
+shift_references(Els, Offset) ->
+  lists:filtermap(fun(El) ->
+    case decode_reference(El) of
+      {ok, Ref} ->
+        {true, shift_reference(Ref, Offset)};
+      false ->
+        true;
+      error ->
+        false
+    end
+  end, Els).
+
+shift_reference(#xmppreference{'begin' = undefined, 'end' = undefined} = Ref, _) ->
+  Ref;
+shift_reference(#xmppreference{'begin' = Begin, 'end' = End} = Ref, Offset) ->
+  Ref#xmppreference{'begin' = Begin + Offset, 'end' = End + Offset}.
 
 %% limit on the number of error messages per user of time
 
@@ -697,4 +756,3 @@ kill_zombies() ->
        end,
   mnesia:transaction(FN),
   ok.
-

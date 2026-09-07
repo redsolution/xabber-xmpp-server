@@ -46,12 +46,20 @@
 %% API
 -export([
   modify/1,
+  denied_sender_is_banned/1,
+  clear_denied_sender_on_join/2,
   delete_all_sessions/1,
   get_present/1,
   select_sessions/2,
   delete_all_user_sessions/2,
   change_present_state/3,
   set_displayed/4]).
+
+-define(DENIED_SENDERS_TABLE, groups_denied_senders).
+
+-type denied_message_reason() ::
+  nested_forwarded | inactive | restricted | notexist.
+-type denied_message_action() :: reply | ban_and_drop | drop.
 
 -record(state, {host :: binary()}).
 -record(participant_session, {group, username, server, resource, ts}).
@@ -83,6 +91,8 @@ mod_options(_Opts) -> [].
 %%====================================================================
 init([Host, _Opts]) ->
   init_db(),
+  ejabberd_hooks:add(groups_presence_subscribed, Host, ?MODULE,
+    clear_denied_sender_on_join, 30),
   %% run task once for all hosts
   Hosts = lists:sort(ejabberd_config:get_myhosts()),
   case Hosts of
@@ -103,7 +113,8 @@ init_db() ->
   ejabberd_mnesia:create(?MODULE, groups_send_displayed,
     [{disc_only_copies, [node()]},{type, bag},
       {attributes, record_info(fields, groups_send_displayed)}]),
-  catch ets:new(groups_strangers, [named_table, public,
+  catch ets:new(?DENIED_SENDERS_TABLE, [named_table, public, set,
+    {read_concurrency, true}, {write_concurrency, true},
     {heir, erlang:group_leader(), none}]).
 
 handle_call(_Call, _From, State) ->
@@ -115,11 +126,7 @@ handle_cast(Msg, State) ->
 
 
 handle_info(clean, State) ->
-  ?DEBUG("cleaning ~p ETS table", [groups_strangers]),
-  Now = erlang:system_time(second),
-  ets:select_delete(
-    groups_strangers,
-    ets:fun2ms(fun({_, UnbanTS}) -> UnbanTS =< Now end)),
+  clean_denied_senders(erlang:system_time(second)),
   erlang:send_after(timer:minutes(10), self(), clean),
   {noreply, State};
 handle_info('delete_zombie_sessions', State) ->
@@ -131,7 +138,9 @@ handle_info(Info, State) ->
   ?WARNING_MSG("unexpected info: ~p", [Info]),
   {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{host = Host}) ->
+  ejabberd_hooks:delete(groups_presence_subscribed, Host, ?MODULE,
+    clear_denied_sender_on_join, 30),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -237,8 +246,19 @@ process_message(#message{type = Type} = Msg)
   when Type == normal orelse Type == chat ->
   case xmpp:get_subtag(Msg, #groups_invite{}) of
     false ->
-      IsPermitted = is_permitted(Msg),
-      process_message(IsPermitted, Msg);
+      case check_message_permission(Msg) of
+        allowed ->
+          process_message(allowed, Msg);
+        {denied, Reason, Why} ->
+          case register_denied_message(Msg, Reason) of
+            reply ->
+              process_message({denied, Reason, Why}, Msg);
+            ban_and_drop ->
+              ok;
+            drop ->
+              ok
+          end
+      end;
     _ ->
       ?DEBUG("Drop message with invite",[]),
       ok
@@ -246,18 +266,11 @@ process_message(#message{type = Type} = Msg)
 process_message(_Message) ->
   ok.
 
-process_message({false, <<>>}, Pkt) ->
+process_message({denied, _Reason, <<>>}, Pkt) ->
   ejabberd_router:route_error(Pkt, xmpp:err_not_allowed());
-process_message({false, Why}, Pkt) ->
-  UserJID = Pkt#message.from,
-  GroupJID = Pkt#message.to,
-  Body = [#text{lang = <<>>,data = Why}],
-  Els = [#groups_x{}],
-  Message = #message{from = GroupJID, to = UserJID,
-    id = randoms:get_string(),
-    type = chat, body = Body, sub_els = Els, meta = #{}},
-  ejabberd_router:route_error(Pkt, xmpp:err_not_allowed(Why, Pkt#message.lang)),
-  send_not_allowed(UserJID, GroupJID, Message);
+process_message({denied, Reason, Why}, Pkt) ->
+  ejabberd_router:route_error(Pkt,
+    denied_message_error(Reason, Why, Pkt#message.lang));
 process_message(_, Pkt) ->
   OriginID = case xmpp:get_subtag(Pkt, #origin_id{}) of
                false -> Pkt#message.id;
@@ -271,27 +284,36 @@ process_message(_, Pkt) ->
       re_sent_msg(Pkt1)
   end.
 
-is_permitted(#message{to =To, from = From} = Pkt) ->
+-spec check_message_permission(message()) ->
+  allowed | {denied, denied_message_reason(), binary()}.
+check_message_permission(#message{to = To, from = From} = Pkt) ->
   User = jid:to_string(jid:remove_resource(From)),
   Group = jid:to_string(jid:remove_resource(To)),
   case has_nested_forwarded(Pkt) of
     true ->
-      {false, <<"Forwarded messages cannot contain forwarded messages.">>};
+      {denied, nested_forwarded,
+        <<"Forwarded messages cannot contain forwarded messages.">>};
     false ->
       case groups_groups:group_is_active(Group) of
         inactive ->
-          {false, <<"Group is inactive.">>};
+          {denied, inactive, <<"Group is inactive.">>};
         _ ->
           case check_permission_write(User, Group, Pkt) of
             restricted ->
-              {false, <<"You are not allowed to send such messages to this group.">>};
+              {denied, restricted,
+                <<"You are not allowed to send such messages to this group.">>};
             allowed ->
-              true;
+              allowed;
             _ ->
-              {false, <<>>}
+              {denied, notexist, <<>>}
           end
       end
   end.
+
+denied_message_error(nested_forwarded, Why, Lang) ->
+  xmpp:err_not_acceptable(Why, Lang);
+denied_message_error(_Reason, Why, Lang) ->
+  xmpp:err_not_allowed(Why, Lang).
 
 has_nested_forwarded(Msg) ->
   lists:any(fun reference_has_nested_forwarded/1, get_message_references(Msg)).
@@ -604,34 +626,118 @@ shift_reference(#xmppreference{'begin' = undefined, 'end' = undefined} = Ref, _)
 shift_reference(#xmppreference{'begin' = Begin, 'end' = End} = Ref, Offset) ->
   Ref#xmppreference{'begin' = Begin + Offset, 'end' = End + Offset}.
 
-%% limit on the number of error messages per user of time
+%% Rate limit denied group messages per user/group pair.
 
-send_not_allowed(UserJID, GroupJID, Message) ->
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  Group = jid:to_string(jid:remove_resource(GroupJID)),
-  UG = <<User/binary,Group/binary>>,
-  Last = ets:lookup(groups_strangers, UG),
-  case Last of
-    [] ->
-      add_stranger(UG),
-      ejabberd_router:route(Message);
-    [Blocked] ->
-      check_and_send(Blocked, Message)
-  end.
-
-check_and_send({UG, UnbanTS}, Message) ->
+-spec denied_sender_is_banned(message()) -> boolean().
+denied_sender_is_banned(#message{} = Pkt) ->
+  Key = denied_sender_key(Pkt),
   Now = erlang:system_time(second),
-  if
-    UnbanTS =< Now ->
-      ejabberd_router:route(Message),
-      add_stranger(UG);
-    true ->
-      ok
+  case ets:info(?DENIED_SENDERS_TABLE) of
+    undefined ->
+      false;
+    _ ->
+      case ets:lookup(?DENIED_SENDERS_TABLE, Key) of
+        [{Key, _WindowStart, _Count, BannedUntil, _ExpireAt}]
+          when BannedUntil > Now ->
+          true;
+        [{Key, _WindowStart, _Count, _BannedUntil, ExpireAt}]
+          when ExpireAt =< Now ->
+          ets:delete(?DENIED_SENDERS_TABLE, Key),
+          false;
+        _ ->
+          false
+      end
   end.
 
-add_stranger(UG) ->
-  TS = erlang:system_time(second) + 60,
-  ets:insert(groups_strangers, {UG, TS}).
+-spec clear_denied_sender(jid() | binary(), jid() | binary()) -> ok.
+clear_denied_sender(UserJID, GroupJID) ->
+  case ets:info(?DENIED_SENDERS_TABLE) of
+    undefined ->
+      ok;
+    _ ->
+      ets:delete(?DENIED_SENDERS_TABLE,
+        {bare_jid_string(UserJID), bare_jid_string(GroupJID)})
+  end,
+  ok.
+
+clear_denied_sender_on_join(Acc, {_Server, UserJID, Group}) ->
+  clear_denied_sender(UserJID, Group),
+  Acc.
+
+denied_sender_key(#message{from = From, to = To}) ->
+  {bare_jid_string(From), bare_jid_string(To)}.
+
+bare_jid_string(#jid{} = JID) ->
+  jid:to_string(jid:remove_resource(JID));
+bare_jid_string(JID) when is_binary(JID) ->
+  jid:to_string(jid:remove_resource(jid:from_string(JID))).
+
+denied_messages_limit(#message{to = To}) ->
+  mod_groups:get_option(To#jid.lserver, denied_messages_limit).
+
+-spec register_denied_message(message(), denied_message_reason()) ->
+  denied_message_action().
+register_denied_message(#message{} = Pkt, Reason) ->
+  Key = denied_sender_key(Pkt),
+  Now = erlang:system_time(second),
+  {Limit, Window, BanLifetime} = denied_messages_limit(Pkt),
+  register_denied_message(Key, Reason, Now, Limit, Window, BanLifetime).
+
+register_denied_message(Key, Reason, Now, Limit, Window, BanLifetime) ->
+  case ets:lookup(?DENIED_SENDERS_TABLE, Key) of
+    [] ->
+      insert_denied_window(Key, Now, Window, 1),
+      reply;
+    [{Key, _WindowStart, _Count, BannedUntil, _ExpireAt}]
+      when BannedUntil > Now ->
+      drop;
+    [{Key, _WindowStart, _Count, _BannedUntil, ExpireAt}]
+      when ExpireAt =< Now ->
+      insert_denied_window(Key, Now, Window, 1),
+      reply;
+    [{Key, WindowStart, _Count, _BannedUntil, _ExpireAt}]
+      when WindowStart + Window =< Now ->
+      insert_denied_window(Key, Now, Window, 1),
+      reply;
+    [{Key, WindowStart, Count, _BannedUntil, _ExpireAt}] ->
+      NewCount = Count + 1,
+      case NewCount > Limit of
+        true ->
+          block_denied_sender(Key, Reason, Now, WindowStart,
+            Window, BanLifetime, NewCount);
+        false ->
+          insert_denied_window(Key, WindowStart, Window, NewCount),
+          reply
+      end
+  end.
+
+insert_denied_window(Key, WindowStart, Window, Count) ->
+  ets:insert(?DENIED_SENDERS_TABLE,
+    {Key, WindowStart, Count, 0, WindowStart + Window}).
+
+block_denied_sender(Key, notexist, Now, _WindowStart,
+    _Window, BanLifetime, Count) ->
+  ban_denied_sender(Key, notexist, Now, BanLifetime, Count),
+  ban_and_drop;
+block_denied_sender(Key, _Reason, _Now, WindowStart,
+    Window, _BanLifetime, Count) ->
+  insert_denied_window(Key, WindowStart, Window, Count),
+  drop.
+
+ban_denied_sender({User, Group} = Key, Reason, Now, BanLifetime, Count) ->
+  BannedUntil = Now + BanLifetime,
+  ?INFO_MSG("Temporarily blocked denied group message sender ~p "
+    "for group ~p for ~p seconds after ~p denied messages; reason: ~p",
+    [User, Group, BanLifetime, Count, Reason]),
+  ets:insert(?DENIED_SENDERS_TABLE,
+    {Key, Now, Count, BannedUntil, BannedUntil}).
+
+clean_denied_senders(Now) ->
+  ?DEBUG("cleaning ~p ETS table", [?DENIED_SENDERS_TABLE]),
+  ets:select_delete(
+    ?DENIED_SENDERS_TABLE,
+    ets:fun2ms(fun({_, _, _, _, ExpireAt}) -> ExpireAt =< Now end)).
+
 
 %%%===================================================================
 %%% present functions

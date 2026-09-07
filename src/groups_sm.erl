@@ -125,17 +125,22 @@ handle_info({route, #iq{to = To} = Iq}, State) ->
   end,
   {noreply, State};
 handle_info({route, #message{} = Packet}, State) ->
-  {LUser, LServer, _} = jid:tolower(Packet#message.to),
-  ProcName = binary_to_atom(<<LUser/binary,$_,LServer/binary,"_messages">>, utf8),
-  Proc = case whereis(ProcName) of
-           undefined ->
-             PID = spawn(groups_messages, process_messages, []),
-             register(ProcName, PID),
-             PID;
-            PID ->
-              PID
+  case groups_messages:denied_sender_is_banned(Packet) of
+    true ->
+      skip;
+    false ->
+      {LUser, LServer, _} = jid:tolower(Packet#message.to),
+      ProcName = binary_to_atom(<<LUser/binary,$_,LServer/binary,"_messages">>, utf8),
+      Proc = case whereis(ProcName) of
+               undefined ->
+                 PID = spawn(groups_messages, process_messages, []),
+                 register(ProcName, PID),
+                 PID;
+               PID ->
+                 PID
+             end,
+      Proc ! {message, Packet}
   end,
-  Proc ! {message, Packet},
   {noreply, State};
 handle_info(_Info, State = #xabber_sm_state{}) ->
   {noreply, State}.

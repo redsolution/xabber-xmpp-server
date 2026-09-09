@@ -231,7 +231,7 @@ send_sys_msg(Server, Group, _User, UserCard, Type, Txt, SubEls) ->
 send_to_all(Server, Group, OriginID, Msg) ->
   #message{meta = #{stanza_id := TS}} = Msg,
   GroupJID = jid:from_string(Group),
-  groups_messages:set_displayed(GroupJID, GroupJID,
+  groups_displayed:cache_message(GroupJID, GroupJID,
     TS, OriginID),
   Users = groups_members:users_to_send(Server, Group),
   lists:foreach(fun(To) ->

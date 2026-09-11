@@ -270,12 +270,6 @@ select(LServer, JidRequestor, #jid{luser = LUser} = JidArchive,
 	       {groupchat, _Role, _MUCState} -> jid:encode(JidArchive)
 	   end,
     {Query, CountQuery} = make_sql_query(User, LServer, MAMQuery, RSM),
-    % TODO from XEP-0313 v0.2: "To conserve resources, a server MAY place a
-    % reasonable limit on how many stanzas may be pushed to a client in one
-    % request. If a query returns a number of stanzas greater than this limit
-    % and the client did not specify a limit using RSM then the server should
-    % return a policy-violation error to the client." We currently don't do this
-    % for v0.2 requests, but we do limit #rsm_in.max for v0.3 and newer.
     case {ejabberd_sql:sql_query(LServer, Query),
 	  ejabberd_sql:sql_query(LServer, CountQuery)} of
 	{{selected, _, Res}, {selected, _, [[Count]]}} ->
@@ -290,11 +284,11 @@ select(LServer, JidRequestor, #jid{luser = LUser} = JidArchive,
 		   true ->
 			{Res, true}
 		end,
-      %% Due to the fact that the COUNT(*) function in PostgreSQL can be slow,
-      %% we return a fake value if the actual value is not necessary.
+      %% COUNT(*) can be slow on large PostgreSQL archives, so include RSM
+      %% count only when the client explicitly asks for it.
 	    Count1 = case proplists:get_value('rsm-counter', MAMQuery) of
                  true -> binary_to_integer(Count);
-                 _ -> length(Res)
+                 _ -> undefined
                end,
 	    {lists:flatmap(
 	       fun([TS, XML, PeerBin, Kind, Nick]) ->
@@ -521,7 +515,8 @@ make_sql_query(User, LServer, MAMQuery, RSM) ->
               StartClause, EndClause, IDsClause, AfterIDClause,
                BeforeIDClause, TagsClause, ConvClause, <<";">>]};
         _ ->
-            %% count(*) is slow in PostgreSQL.
+            %% Keep a cheap placeholder query because select/6 expects
+            %% a count query result even when the count is omitted.
             {QueryPage,[<<"SELECT 0;">>]}
     end.
 

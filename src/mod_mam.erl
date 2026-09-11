@@ -1389,9 +1389,7 @@ filter_by_max(Msgs, Len) when is_integer(Len), Len >= 0 ->
 filter_by_max(_Msgs, _Junk) ->
     {[], true}.
 
--spec limit_max(rsm_set(), binary()) -> rsm_set() | undefined.
-limit_max(RSM, ?NS_MAM_TMP) ->
-    RSM; % XEP-0313 v0.2 doesn't require clients to support RSM.
+-spec limit_max(rsm_set() | undefined, binary()) -> rsm_set().
 limit_max(undefined, _NS) ->
     #rsm_set{max = ?DEF_PAGE_SIZE};
 limit_max(#rsm_set{max = Max} = RSM, _NS) when not is_integer(Max) ->

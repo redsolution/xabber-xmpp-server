@@ -150,7 +150,7 @@ is_encrypted(LServer, StanzaID) ->
   case ejabberd_sql:sql_query(
     LServer,
     ?SQL("select @(conversation_type)s
-       from archive where timestamp=%(StanzaID)d")) of
+       from archive where timestamp=%(StanzaID)d and %(LServer)H")) of
     {selected,[{PType}]} when PType /= ?NS_XABBER_CHAT ->
       {true, PType};
     _ ->

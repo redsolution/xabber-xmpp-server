@@ -57,13 +57,11 @@
 -type c2s_state() :: ejabberd_c2s:state().
 
 % API
--export([is_muted/3, is_muted/4]).
+-export([is_muted/3, is_muted/4, migrate_external_group_message_meta/1]).
 
 %% records
 -record(state, {
-  host = <<"">> :: binary(),
-  eg_last_message=[] :: list(),
-  eg_last_retract=[] :: list()
+  host = <<"">> :: binary()
 }).
 
 -record(external_group_last_msg,
@@ -76,12 +74,11 @@
 }
 ).
 
--record(external_group_msgs,
+-record(external_group_dedup,
 {
-  group_sid = {{<<"">>, <<"">>}, <<"">>}  :: {{binary(), binary()}, binary()} | '_',
-  uid = <<>>                              :: binary() | '_',
-  ts = <<>>                               :: binary() | '_',
-  deleted = false                         :: boolean() | '_'
+  group = {<<"">>, <<"">>}              :: {binary(), binary()} | '_',
+  messages = []                         :: list() | '_',
+  retracts = []                         :: list() | '_'
 }).
 
 -type(us_peer() ::{{binary(), binary()}, {binary(), binary()}}).
@@ -96,6 +93,7 @@
 ).
 
 -define(TABLE_SIZE_LIMIT, 2000000000). % A bit less than 2 GiB.
+-define(EXTERNAL_GROUP_DEDUP_LIMIT, 50).
 -define(NS_OMEMO, <<"urn:xmpp:omemo:2">>).
 -define(AUTO_CLEAN_INTERVAL, 43200000). % 12 hours
 
@@ -139,11 +137,10 @@ init([Host, _Opts]) ->
     [{disc_only_copies, [node()]},
       {type, set},
       {attributes, record_info(fields, external_group_last_msg)}]),
-  ejabberd_mnesia:create(?MODULE, external_group_msgs,
-    [{disc_only_copies, [node()]},
+  ejabberd_mnesia:create(?MODULE, external_group_dedup,
+    [{ram_copies, [node()]},
       {type, set},
-      {attributes, record_info(fields, external_group_msgs)}]),
-  migrate(),
+      {attributes, record_info(fields, external_group_dedup)}]),
   register_iq_handlers(Host),
   register_hooks(Host),
   erlang:send_after(?AUTO_CLEAN_INTERVAL + rand:uniform(10) * 3600000,
@@ -160,52 +157,50 @@ handle_call(_Request, _From, State) ->
   {reply, Reply, State}.
 
 handle_cast({eg_save_message, Record , TS},
-    #state{eg_last_message = Acc} = State) ->
-%% Acc stores last N saved messages
-%% to prevent overwrites in the database of the same message
+    #state{host = LServer} = State) ->
   #external_group_last_msg{group = {GUser, GServer},id = StanzaID,
     user_id = UserID} = Record,
   Group_SID = {{GUser, GServer}, StanzaID},
-  Acc1 = case lists:member(Group_SID, Acc) of
-           true -> Acc;
-           _ ->
-             eg_store_last_msg(Record),
-             eg_store_message1(Group_SID, UserID, TS),
-             save_last_action(Acc, Group_SID)
-          end,
-  {noreply, State#state{eg_last_message = Acc1}};
+  case eg_remember_action({GUser, GServer}, messages, StanzaID) of
+    duplicate ->
+      ok;
+    new ->
+      eg_store_last_msg(Record, TS),
+      eg_store_message1(LServer, Group_SID, UserID, TS)
+  end,
+  {noreply, State};
 handle_cast({eg_change_last_message, Group, Replace},
-    #state{eg_last_retract = Acc} = State)->
+    State)->
   ID = Replace#replace.id,
   Ver = integer_to_binary(Replace#replace.version),
-  Acc1 = case lists:member({Group, ID, Ver}, Acc) of
-           true -> Acc;
-           _->
-             case eg_select_last_msg(Group) of
-               #external_group_last_msg{retract_version = Ver, id = ID} ->
-                 ok;
-               #external_group_last_msg{id = ID} = Record ->
-                 eg_change_last_msg(Replace, Record);
-               _ ->
-                 ok
-             end,
-             save_last_action(Acc, {Group, ID, Ver})
-         end,
-  {noreply, State#state{eg_last_retract = Acc1}};
+  case eg_remember_action(Group, retracts, {message, ID, Ver}) of
+    duplicate ->
+      ok;
+    new ->
+      case eg_select_last_msg(Group) of
+        #external_group_last_msg{retract_version = Ver, id = ID} ->
+          ok;
+        #external_group_last_msg{id = ID} = Record ->
+          eg_change_last_msg(Replace, Record);
+        _ ->
+          ok
+      end
+  end,
+  {noreply, State};
 handle_cast({eg_delete_msg, _, <<>>, <<>>, _}, State) ->
   {noreply, State};
 handle_cast({eg_delete_msg, Group, ID, <<>>, Ver},
-    #state{eg_last_retract = Acc} = State) ->
-  Acc1 = eg_remove_message(Acc, Group, ID, <<>>, Ver),
-  {noreply,  State#state{eg_last_retract = Acc1}};
+    #state{host = LServer} = State) ->
+  eg_remove_message(LServer, Group, ID, <<>>, Ver),
+  {noreply, State};
 handle_cast({eg_delete_msg, Group, <<>>, UserID, Ver},
-    #state{eg_last_retract = Acc} = State) ->
-  Acc1 = eg_remove_message(Acc, Group, <<>>, UserID, Ver),
-  {noreply, State#state{eg_last_retract = Acc1}};
+    #state{host = LServer} = State) ->
+  eg_remove_message(LServer, Group, <<>>, UserID, Ver),
+  {noreply, State};
 handle_cast({eg_delete_msg, Group, all, all, Ver},
-    #state{eg_last_retract = Acc} = State) ->
-  Acc1 = eg_remove_message(Acc, Group, all, all, Ver),
-  {noreply, State#state{eg_last_retract = Acc1}};
+    #state{host = LServer} = State) ->
+  eg_remove_message(LServer, Group, all, all, Ver),
+  {noreply, State};
 handle_cast({send_push, LUser, LServer, PushType, PushPayload}, State) ->
   ejabberd_hooks:run(xabber_push_notification,
     LServer, [PushType, LUser,LServer, PushPayload]),
@@ -574,10 +569,7 @@ process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = 
     _ ->
     Displayed = xmpp:get_subtag(Pkt, #mark_displayed{}),
     Conversation = jid:to_string(jid:make(PUser,PServer)),
-    Type = case get_conversation_type(LServer,LUser,Conversation) of
-             [T] -> T;
-             _ -> undefined
-           end,
+    Type = get_preferred_conversation_type(LServer, LUser, Conversation),
 
     case Displayed of
       #mark_displayed{id = _OriginID} when Type == ?NS_GROUPS ->
@@ -586,7 +578,7 @@ process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = 
                      #stanza_id{id = SID} -> SID;
                      _ ->
                        %% for legacy or bad clients
-                       {V, _} = get_group_last_message_id_ts(PUser, PServer),
+                       {V, _} = get_group_last_message_id_ts(LServer, PUser, PServer),
                        V
                    end,
         case is_local(PServer) of
@@ -594,7 +586,7 @@ process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = 
             update_metainfo(read, LServer,LUser,Conversation,
               StanzaID,Type,StanzaID);
           _ ->
-            MsgTS = eg_get_message_ts(PUser, PServer, StanzaID),
+            MsgTS = eg_get_message_ts(LServer, PUser, PServer, StanzaID),
             update_metainfo(read, LServer,LUser,Conversation,
               StanzaID,Type,MsgTS)
         end,
@@ -957,7 +949,7 @@ get_unread_counts(LServer, LUser, ConvRes, StatusMap) ->
   ChatCountMap = batch_get_count_messages(LServer, LUser, ChatReqList),
   GroupCountMap = batch_get_local_group_counts(
     jid:to_string(jid:make(LUser,LServer)), GroupReqList),
-  ExternalCountMap = batch_get_external_group_counts(ExternalReqList),
+  ExternalCountMap = batch_get_external_group_counts(LServer, ExternalReqList),
   maps:merge(
     maps:merge(maps:merge(CountMap0, ChatCountMap), GroupCountMap),
     ExternalCountMap).
@@ -1014,7 +1006,7 @@ collect_external_group_unread_count_request(Chat, GUser, GServer, ReadTS,
   Key = {external_group, Chat},
   ReqKey = {GServer, Chat},
   {ChatReqs, GroupReqs,
-    maps:put(ReqKey, {Key, {GUser, GServer}, ReadTS}, ExternalReqs),
+    maps:put(ReqKey, {Key, Chat, GUser, GServer, ReadTS}, ExternalReqs),
     CountMap};
 collect_external_group_unread_count_request(Chat, _GUser, _GServer, _ReadTS,
     _Status, {ChatReqs, GroupReqs, ExternalReqs, CountMap}) ->
@@ -1120,19 +1112,48 @@ batch_local_group_count_row(ToString, Chat, GUser, Read) ->
   [<<"(">>, ToString(Chat), <<", ">>, ToString(GUser), <<", ">>,
     sql_integer_literal(Read), <<")">>].
 
-batch_get_external_group_counts([]) ->
+batch_get_external_group_counts(_LServer, []) ->
   #{};
-batch_get_external_group_counts(Reqs) ->
-  maps:from_list([{Key, eg_get_unread_msgs_count(
-      Group, external_group_read_ts(ReadTS), both)}
-    || {Key, Group, ReadTS} <- Reqs]).
+batch_get_external_group_counts(LServer, Reqs) ->
+  ODBCType = ejabberd_config:get_option({sql_type, LServer}),
+  ToString = fun(S) -> ejabberd_sql:to_string_literal(ODBCType, S) end,
+  Rows = lists:join(<<",">>,
+    [batch_external_group_count_row(ToString, Chat, GUser, GServer, ReadTS)
+      || {_Key, Chat, GUser, GServer, ReadTS} <- Reqs]),
+  Query = [<<"select c.chat, coalesce(m.unread_count, 0) "
+  "from (values ">>, Rows,
+  <<") as c(chat, group_user, group_server, read_ts) "
+  "left join lateral (select count(*) as unread_count "
+  "from external_group_message_meta m where m.group_user=c.group_user "
+  "and m.group_server=c.group_server "
+  "and m.timestamp > c.read_ts "
+  "and not m.deleted) m on true;">>],
+  case ejabberd_sql:sql_query(LServer, Query) of
+    {selected, _, ResultRows} ->
+      maps:from_list(
+        [{{external_group, Chat}, sql_count_to_integer(Count)}
+          || [Chat, Count] <- ResultRows]);
+    Error ->
+      ?ERROR_MSG("mod_sync batch external group count failed for ~s: ~p",
+        [LServer, Error]),
+      #{}
+  end.
+
+batch_external_group_count_row(ToString, Chat, GUser, GServer, ReadTS) ->
+  [<<"(">>, ToString(Chat), <<", ">>, ToString(GUser), <<", ">>,
+    ToString(GServer), <<", ">>,
+    sql_integer_literal(external_group_read_ts(ReadTS)), <<")">>].
 
 external_group_read_ts(ReadTS) when is_integer(ReadTS) ->
-  integer_to_binary(ReadTS);
-external_group_read_ts(ReadTS) when is_binary(ReadTS) ->
   ReadTS;
+external_group_read_ts(ReadTS) when is_binary(ReadTS) ->
+  try binary_to_integer(ReadTS) of
+    TS -> TS
+  catch
+    _:_ -> 0
+  end;
 external_group_read_ts(_) ->
-  <<"0">>.
+  0.
 
 sql_integer_literal(I) when is_integer(I) ->
   integer_to_binary(I);
@@ -1433,7 +1454,7 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
     ?NS_GROUPS ->
       {Sub, _, _} = mod_roster:get_jid_info(<<>>, LUser, LServer,
         jid:from_string(Conversation)),
-      Count = eg_get_unread_msgs_count({PUser, PServer}, ReadTS, Sub),
+      Count = eg_get_unread_msgs_count(LServer, {PUser, PServer}, ReadTS, Sub),
       LastMessage = eg_get_last_message(LUser, LServer, PUser, PServer, Sub),
       Unread = #sync_unread{count = Count, 'after' = Read},
       XabberDelivered = #sync_delivered{id = Delivered},
@@ -1615,39 +1636,138 @@ eg_is_last_message(Group, ID) ->
   end.
 
 %% Save the message of the external group
-eg_store_message(LServer, LastMessage, TS) when is_integer(TS) ->
-  eg_store_message(LServer, LastMessage, integer_to_binary(TS));
 eg_store_message(LServer, LastMessage, TS) ->
-  send_cast(LServer, {eg_save_message, LastMessage, TS}).
+  send_cast(LServer, {eg_save_message, LastMessage, external_group_read_ts(TS)}).
 
-eg_store_message1(Group_SID, UserID, TS) ->
-  case {mnesia:table_info(external_group_msgs, disc_only_copies),
-    mnesia:table_info(external_group_msgs, memory)} of
-    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
-      ?ERROR_MSG("external_group_msgs too large, won't store ~p",[Group_SID]),
-      {error, overflow};
-    _ ->
-      F1 = fun() ->
-        mnesia:write(
-          #external_group_msgs{
-            group_sid = Group_SID,
-            uid = UserID,
-            ts = TS
-          })
-           end,
-      case mnesia:transaction(F1) of
-        {atomic, ok} ->
-          ?DEBUG("Save external group message ~p~n",[Group_SID]),
-          ok;
-        {aborted, Err1} ->
-          ?DEBUG("Cannot save external group message ~p: ~s",
-            [Group_SID, Err1]),
-          Err1
+eg_store_message1(LServer, {{GUser, GServer}, StanzaID}, UserID, TS) ->
+  AuthorID = external_group_author_id(UserID),
+  Deleted = false,
+  case eg_store_message_meta(LServer, GUser, GServer, StanzaID, AuthorID, TS, Deleted) of
+    ok ->
+      ?DEBUG("Save external group message ~p~n", [{{GUser, GServer}, StanzaID}]),
+      ok;
+    Err ->
+      ?DEBUG("Cannot save external group message ~p: ~p",
+        [{{GUser, GServer}, StanzaID}, Err]),
+      Err
+  end.
+
+migrate_external_group_message_meta(Server) when is_list(Server) ->
+  migrate_external_group_message_meta(iolist_to_binary(Server));
+migrate_external_group_message_meta(LServer) when is_binary(LServer) ->
+  case external_group_msgs_table_exists() of
+    false ->
+      {ok, 0, 0};
+    true ->
+      case mnesia:wait_for_tables([external_group_msgs], 60000) of
+        ok ->
+          case catch mnesia:dirty_first(external_group_msgs) of
+            {'EXIT', Reason} ->
+              {error, Reason};
+            Key ->
+              migrate_external_group_message_meta(LServer, Key, 0, 0)
+          end;
+        Error ->
+          Error
       end
   end.
 
+migrate_external_group_message_meta(_LServer, '$end_of_table', Migrated, Skipped) ->
+  {ok, Migrated, Skipped};
+migrate_external_group_message_meta(LServer, Key, Migrated, Skipped) ->
+  Rows = case catch mnesia:dirty_read(external_group_msgs, Key) of
+           {'EXIT', _Reason} -> [];
+           Result when is_list(Result) -> Result;
+           _ -> []
+         end,
+  case migrate_external_group_message_meta_rows(LServer, Rows, Migrated, Skipped) of
+    {Migrated1, Skipped1, undefined} ->
+      case catch mnesia:dirty_next(external_group_msgs, Key) of
+        {'EXIT', Reason} ->
+          {error, Reason, Migrated1, Skipped1};
+        NextKey ->
+          migrate_external_group_message_meta(LServer, NextKey, Migrated1, Skipped1)
+      end;
+    {Migrated1, Skipped1, Error} ->
+      {error, Error, Migrated1, Skipped1}
+  end.
+
+migrate_external_group_message_meta_rows(LServer, Rows, Migrated, Skipped) ->
+  lists:foldl(
+    fun(Row, {MigratedAcc, SkippedAcc, ErrorAcc}) ->
+      case ErrorAcc of
+        undefined ->
+          case migrate_external_group_message_meta_row(LServer, Row) of
+            ok -> {MigratedAcc + 1, SkippedAcc, undefined};
+            skip -> {MigratedAcc, SkippedAcc + 1, undefined};
+            Error -> {MigratedAcc, SkippedAcc + 1, Error}
+          end;
+        Error ->
+          {MigratedAcc, SkippedAcc, Error}
+      end
+    end,
+    {Migrated, Skipped, undefined},
+    Rows).
+
+migrate_external_group_message_meta_row(
+    LServer,
+    {external_group_msgs, {{GUser0, GServer0}, StanzaID0}, UserID0, TS0, Deleted0}) ->
+  GUser = external_group_meta_text(GUser0),
+  GServer = external_group_meta_text(GServer0),
+  StanzaID = external_group_meta_text(StanzaID0),
+  AuthorID = external_group_author_id(UserID0),
+  TS = external_group_read_ts(TS0),
+  Deleted = external_group_deleted(Deleted0),
+  case GUser == <<>> orelse GServer == <<>> orelse StanzaID == <<>> of
+    true ->
+      skip;
+    false ->
+      eg_store_message_meta(LServer, GUser, GServer, StanzaID, AuthorID, TS, Deleted)
+  end;
+migrate_external_group_message_meta_row(_, _) ->
+  skip.
+
+external_group_msgs_table_exists() ->
+  case catch mnesia:system_info(tables) of
+    Tables when is_list(Tables) ->
+      lists:member(external_group_msgs, Tables);
+    _ ->
+      false
+  end.
+
+eg_store_message_meta(LServer, GUser, GServer, StanzaID, AuthorID, TS, Deleted) ->
+  ?SQL_UPSERT(
+    LServer,
+    "external_group_message_meta",
+    ["!group_user=%(GUser)s",
+      "!group_server=%(GServer)s",
+      "!stanza_id=%(StanzaID)s",
+      "author_id=%(AuthorID)s",
+      "timestamp=%(TS)d",
+      "deleted=%(Deleted)b"]).
+
+external_group_meta_text(Value) when is_binary(Value) ->
+  Value;
+external_group_meta_text(Value) when is_integer(Value) ->
+  integer_to_binary(Value);
+external_group_meta_text(_) ->
+  <<"">>.
+
+external_group_author_id(false) ->
+  <<"">>;
+external_group_author_id(UserID) ->
+  external_group_meta_text(UserID).
+
+external_group_deleted(true) ->
+  true;
+external_group_deleted(_) ->
+  false.
+
 %% Save the last message of the external group
 eg_store_last_msg(Record1) ->
+  eg_store_last_msg(Record1, undefined).
+
+eg_store_last_msg(Record1, TS) ->
   #external_group_last_msg{packet = Pkt} = Record1,
   XML = fxml:element_to_binary(xmpp:encode(Pkt)),
   Record = Record1#external_group_last_msg{packet = XML},
@@ -1658,10 +1778,15 @@ eg_store_last_msg(Record1) ->
        won't store ~p",[Record]),
       {error, overflow};
     _ ->
-      F1 = fun() -> mnesia:write(Record) end,
+      F1 = fun() -> eg_maybe_write_last_msg(Record, TS) end,
       case mnesia:transaction(F1) of
         {atomic, ok} ->
           ?DEBUG("Save last message ~p ~p",
+            [Record#external_group_last_msg.group,
+              Record#external_group_last_msg.id]),
+          ok;
+        {atomic, stale} ->
+          ?DEBUG("Skip stale last message ~p ~p",
             [Record#external_group_last_msg.group,
               Record#external_group_last_msg.id]),
           ok;
@@ -1671,6 +1796,56 @@ eg_store_last_msg(Record1) ->
               Record#external_group_last_msg.id, Err1]),
           Err1
       end
+  end.
+
+eg_maybe_write_last_msg(Record, TS) when is_integer(TS) ->
+  Group = Record#external_group_last_msg.group,
+  case mnesia:read(external_group_last_msg, Group, write) of
+    [Current] ->
+      case eg_last_msg_ts(Current) of
+        CurrentTS when is_integer(CurrentTS), TS < CurrentTS ->
+          stale;
+        _ ->
+          mnesia:write(Record)
+      end;
+    [] ->
+      mnesia:write(Record)
+  end;
+eg_maybe_write_last_msg(Record, _TS) ->
+  mnesia:write(Record).
+
+eg_last_msg_ts(#external_group_last_msg{
+    group = {GUser, GServer},
+    packet = Packet}) ->
+  eg_packet_delivery_ts(Packet, jid:make(GUser, GServer)).
+
+eg_packet_delivery_ts(Packet, BareJID) when is_binary(Packet) ->
+  case fxml_stream:parse_element(Packet) of
+    #xmlel{} = El ->
+      try xmpp:decode(El, ?NS_CLIENT, []) of
+        Decoded ->
+          eg_packet_delivery_ts(Decoded, BareJID)
+      catch _:_ ->
+        undefined
+      end;
+    _ ->
+      undefined
+  end;
+eg_packet_delivery_ts(Packet, BareJID) ->
+  Filtered = filter_packet(Packet, BareJID),
+  case xmpp:get_subtag(Filtered, #delivery_time{}) of
+    #delivery_time{stamp = TS} ->
+      eg_stamp_to_usec(TS);
+    _ ->
+      undefined
+  end.
+
+eg_stamp_to_usec(TS) ->
+  try misc:now_to_usec(TS) of
+    Usec when is_integer(Usec) ->
+      Usec
+  catch _:_ ->
+    undefined
   end.
 
 eg_select_last_msg(Group) ->
@@ -1732,102 +1907,63 @@ get_user_id(Pkt) ->
     _ -> false
   end.
 
+eg_get_unread_msgs_count(LServer, {GUser, GServer}, ReadTS, both) ->
+  Chat = jid:to_string(jid:make(GUser, GServer)),
+  Key = {external_group, Chat},
+  CountMap = batch_get_external_group_counts(
+    LServer, [{Key, Chat, GUser, GServer, ReadTS}]),
+  maps:get(Key, CountMap, 0);
+eg_get_unread_msgs_count(_, _, _, _) -> 0.
 
-%%eg_store_message(PUser, PServer, UserID, StanzaID, false) ->
-%%  case {mnesia:table_info(external_group_msgs, disc_only_copies),
-%%    mnesia:table_info(external_group_msgs, memory)} of
-%%    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
-%%      ?ERROR_MSG("Unread counter too large, won't store message id for ~s@~s",
-%%        [PUser, PServer]),
-%%      {error, overflow};
-%%    _ ->
-%%      F1 = fun() ->
-%%        mnesia:write(
-%%          #external_group_msgs{
-%%            group_sid = {{PUser, PServer}, StanzaID},
-%%            uid = UserID,
-%%            ts = integer_to_binary(time_now())
-%%          })
-%%           end,
-%%      case mnesia:transaction(F1) of
-%%        {atomic, ok} ->
-%%          ?DEBUG("Save external group msg for ~p@~p~n",[PUser, PServer]),
-%%          ok;
-%%        {aborted, Err1} ->
-%%          ?DEBUG("Cannot save external group msg for ~s@~s: ~s",
-%%            [PUser, PServer, Err1]),
-%%          Err1
-%%      end
-%%  end;
-%%eg_store_message(_Peer, _UserID, _TS, _OriginID, _IsService) ->
-%%  ok.
-
-eg_get_unread_msgs_count(Group, ReadTS, Subscription) when is_integer(ReadTS) ->
-  eg_get_unread_msgs_count(Group, integer_to_binary(ReadTS), Subscription);
-eg_get_unread_msgs_count(Group, ReadTS, both) ->
-  FN = fun()->
-    MatchHead = #external_group_msgs{group_sid='$1', ts = '$2', deleted = false, _ = '_'},
-    Guards = [{'=:=', {const, Group}, {element, 1, '$1'}},{'>', '$2', ReadTS}],
-    Result = {size,'$1'}, %% just to minimize memory usage
-    length(mnesia:select(external_group_msgs,[{MatchHead, Guards, [Result]}]))
-      end,
-   case mnesia:transaction(FN) of
-     {atomic,Count} when is_integer(Count) -> Count;
-     _ -> 0
-   end;
-eg_get_unread_msgs_count(_, _, _) -> 0.
-
-eg_remove_message(Acc, Group, StanzaID, UserID, RVer) ->
-  AID = if
-         StanzaID == all, UserID == all -> RVer;
-         StanzaID /= <<>> -> StanzaID;
-         UserID /= <<>> -> UserID
-       end,
-  case lists:member({Group, AID, RVer}, Acc) of
-    true -> Acc;
-    _ ->
-      eg_do_remove_msg(Group, StanzaID, UserID),
-      save_last_action(Acc, {Group, AID, RVer})
+eg_remove_message(LServer, Group, StanzaID, UserID, RVer) ->
+  Action = eg_retract_dedup_key(StanzaID, UserID, RVer),
+  case eg_remember_action(Group, retracts, Action) of
+    duplicate ->
+      ok;
+    new ->
+      eg_do_remove_msg(LServer, Group, StanzaID, UserID)
   end.
 
+eg_retract_dedup_key(all, all, RVer) ->
+  {all, RVer};
+eg_retract_dedup_key(StanzaID, <<>>, RVer) when StanzaID /= <<>> ->
+  {message, StanzaID, RVer};
+eg_retract_dedup_key(<<>>, UserID, RVer) when UserID /= <<>> ->
+  {user, UserID, RVer}.
+
 %% Delete all external group messages
-eg_do_remove_msg(Group, all, all) ->
+eg_do_remove_msg(LServer, {GUser, GServer} = Group, all, all) ->
   mnesia:dirty_delete(external_group_last_msg, Group),
-  FN = fun()->
-    MatchHead = #external_group_msgs{group_sid='$1', _ = '_'},
-    Guards = [{'=:=', {const, Group}, {element, 1, '$1'}}],
-    Msgs = mnesia:select(external_group_msgs,[{MatchHead, Guards, ['$_']}]),
-    lists:foreach(fun(O) -> mnesia:delete_object(O) end, Msgs)
-       end,
-  mnesia:transaction(FN);
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("delete from external_group_message_meta "
+    "where group_user=%(GUser)s and group_server=%(GServer)s"));
 %% Mark the message of the external group as deleted by the stanza ID
-eg_do_remove_msg(Group, ID, <<>>) when ID /= <<>> ->
+eg_do_remove_msg(LServer, {GUser, GServer} = Group, ID, <<>>) when ID /= <<>> ->
   case eg_is_last_message(Group, ID) of
     false -> ok;
     _ ->
       mnesia:dirty_delete(external_group_last_msg, Group)
   end,
-  FN = fun() ->
-    case mnesia:read(external_group_msgs, {Group, ID}) of
-      [Msg] -> mnesia:write(Msg#external_group_msgs{deleted = true});
-      _ -> ok
-    end end,
-  mnesia:transaction(FN);
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("update external_group_message_meta set deleted=true "
+    "where group_user=%(GUser)s and group_server=%(GServer)s "
+    "and stanza_id=%(ID)s"));
 %% Mark the message of the external group as deleted by the user ID
-eg_do_remove_msg(Group, <<>>, UserID) when UserID /= <<>> ->
-  case eg_select_last_msg(Group) of
-    #external_group_last_msg{user_id = UserID} = LMsg ->
-      mnesia:dirty_delete_object(LMsg);
+eg_do_remove_msg(LServer, {GUser, GServer} = Group, <<>>, UserID)
+    when UserID /= <<>> ->
+  case mnesia:dirty_read(external_group_last_msg, Group) of
+    [#external_group_last_msg{user_id = UserID}] ->
+      mnesia:dirty_delete(external_group_last_msg, Group);
     _ -> ok
   end,
-  FN = fun()->
-    MatchHead = #external_group_msgs{group_sid='$1', uid='$2', _ = '_'},
-    Guards = [{'=:=', {const, Group}, {element, 1, '$1'}},{'=:=', UserID,'$2'}],
-    Msgs = mnesia:select(external_group_msgs,[{MatchHead, Guards, ['$_']}]),
-    lists:foreach(fun(O) -> mnesia:delete_object(O) end, Msgs)
-       end,
-  mnesia:transaction(FN);
-eg_do_remove_msg(_, _, _) ->
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("delete from external_group_message_meta "
+    "where group_user=%(GUser)s and group_server=%(GServer)s "
+    "and author_id=%(UserID)s"));
+eg_do_remove_msg(_, _, _, _) ->
   ok.
 
 %% Get last message in the external group
@@ -1842,29 +1978,25 @@ eg_get_last_message(LUser, LServer, GUser, GServer, _Sub) ->
   get_invite(LServer,LUser,GUser, GServer).
 
 %% Get the last non-system message ID in the external group
-eg_get_last_message_id_ts(GUser, GServer) ->
-  FN = fun(R, {ID, TS}) ->
-    case R of
-      #external_group_msgs{
-        ts = TS1,
-        group_sid = {{GUser, GServer} , ID1}
-      } when TS1 > TS ->
-        {ID1, TS1};
-      _ -> {ID, TS}
-
-    end
-    end,
-  Result = mnesia:transaction(fun() ->
-    mnesia:foldl(FN, {0, time_now()}, external_group_msgs) end),
-  case Result of
-    {atomic, {ID, TS}} -> {ID,TS};
+eg_get_last_message_id_ts(LServer, GUser, GServer) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(stanza_id)s, @(timestamp)d "
+    "from external_group_message_meta "
+    "where group_user=%(GUser)s and group_server=%(GServer)s "
+    "and not deleted "
+    "order by timestamp desc limit 1")) of
+    {selected, [{ID, TS}]} -> {ID, TS};
     _ -> undefined
   end.
 
-eg_get_message_ts(GUser, GServer, StanzaID) ->
-  case mnesia:dirty_read(external_group_msgs,
-    {{GUser, GServer}, StanzaID}) of
-    [#external_group_msgs{ts=TS}] -> TS;
+eg_get_message_ts(LServer, GUser, GServer, StanzaID) ->
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(timestamp)d from external_group_message_meta "
+    "where group_user=%(GUser)s and group_server=%(GServer)s "
+    "and stanza_id=%(StanzaID)s")) of
+    {selected, [{TS}]} -> TS;
     _ -> time_now()
   end.
 
@@ -1881,33 +2013,8 @@ eg_delete_all_msgs(LServer, PUser, PServer, Version) ->
   send_cast(LServer, {eg_delete_msg, {PUser, PServer}, all, all, Version}).
 
 %% Delete messages that all group members have read
-eg_delete_read_messages(LServer) ->
-  Type = ?NS_GROUPS,
-  Like = <<"%@",LServer/binary>>,
-  IDsList = case ejabberd_sql:sql_query(LServer,
-    ?SQL("select @(conversation)s, @(min(read_until))s from conversation_metadata "
-    " where type = %(Type)s  and read_until !='0'"
-    " and conversation not like %(Like)s and %(LServer)H "
-    " group by conversation")) of
-              {selected, L} -> L;
-              R -> R
-            end,
-  FN = fun()->
-    TSsList = lists:filtermap(fun({GroupS, Read}) ->
-      {GUser, GServer, _} = jid:tolower(jid:from_string(GroupS)),
-      case mnesia:read(external_group_msgs, {{GUser, GServer}, Read}) of
-        [#external_group_msgs{ts = TS}] -> {true,{{GUser, GServer}, TS}};
-        _ -> false
-      end end, IDsList),
-    lists:foreach(fun({Group, TS}) ->
-      MatchHead = #external_group_msgs{group_sid='$1', ts = '$2', _ = '_'},
-      Guards = [{'=:=', {const, Group}, {element, 1, '$1'}},{'<', '$2', TS}],
-      Result = '$_',
-      Msgs = mnesia:select(external_group_msgs,[{MatchHead, Guards, [Result]}]),
-      lists:foreach(fun(M) -> mnesia:delete_object(M) end, Msgs)
-                  end, TSsList) end,
-
-  mnesia:transaction(FN).
+eg_delete_read_messages(_LServer) ->
+  ok.
 
 get_stanza_id(Pkt,BareJID) ->
   case xmpp:get_subtag(Pkt, #stanza_id{}) of
@@ -1934,13 +2041,13 @@ get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
       StanzaID
   end.
 
-get_group_last_message_id_ts(GUser, GServer)->
+get_group_last_message_id_ts(LServer, GUser, GServer)->
   case is_local(GServer) of
     true ->
       R = lg_get_last_message_id(GUser, GServer),
       {R, R};
     _ ->
-      eg_get_last_message_id_ts(GUser, GServer)
+      eg_get_last_message_id_ts(LServer, GUser, GServer)
   end.
 
 update_metainfo(LServer, LUser, Conv, Type) ->
@@ -2141,6 +2248,21 @@ get_conversation_type(LServer,LUser,Conversation) ->
     _ -> error
   end.
 
+get_preferred_conversation_type(LServer, LUser, Conversation) ->
+  case get_conversation_type(LServer, LUser, Conversation) of
+    Types when is_list(Types) ->
+      case lists:member(?NS_GROUPS, Types) of
+        true -> ?NS_GROUPS;
+        false ->
+          case Types of
+            [Type] -> Type;
+            _ -> undefined
+          end
+      end;
+    _ ->
+      undefined
+  end.
+
 
 update_retract(LServer, LUser, Conv, Ver, CType, TS) ->
   case ejabberd_sql:sql_query(LServer,
@@ -2239,10 +2361,7 @@ handle_sub_els(chat, #mark_displayed{id = OriginID} = Displayed, From, To) ->
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
   BareJID = jid:make(LUser,LServer),
-  Type = case get_conversation_type(LServer,LUser,Conversation) of
-           [T] -> T;
-           _ -> undefined
-         end,
+  Type = get_preferred_conversation_type(LServer, LUser, Conversation),
   PeerJID = jid:make(PUser,PServer),
   {Type1, StanzaID, TS} =
     if
@@ -2251,7 +2370,7 @@ handle_sub_els(chat, #mark_displayed{id = OriginID} = Displayed, From, To) ->
         SID = get_stanza_id(Displayed2,PeerJID,LServer,OriginID),
         TS1 = case is_local(PServer) of
                true -> SID;
-               _ -> eg_get_message_ts(PUser, PServer, SID)
+               _ -> eg_get_message_ts(LServer, PUser, PServer, SID)
              end,
         {Type, SID, TS1};
       Type =/= undefined ->
@@ -2304,7 +2423,7 @@ handle_sub_els(headline, #retract_message{type = Type, version = Version, id = S
   update_retract(LServer,LUser,Conversation,Version,Type, TS),
   ok;
 handle_sub_els(headline, #retract_user{version = Version, id = UserID,
-  conversation = ConversationJID}, _From, To) ->
+  conversation = ConversationJID, type = Type0}, _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
@@ -2314,7 +2433,12 @@ handle_sub_els(headline, #retract_user{version = Version, id = UserID,
   end,
   Conversation = jid:to_string(ConversationJID),
   TS = time_now(),
-  update_retract(LServer,LUser,Conversation,Version,<<>>,TS),
+  Type = case Type0 of
+           <<>> -> ?NS_GROUPS;
+           undefined -> ?NS_GROUPS;
+           _ -> Type0
+         end,
+  update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
 handle_sub_els(headline,
   #retract_all{type = Type, version = Version,
@@ -2928,7 +3052,7 @@ create_conversation(LServer, LUser, Conversation,
       update_mam_prefs(add,jid:make(LUser,LServer),GroupJID),
       {GUser, GServer, _} = jid:tolower(GroupJID),
       %% Set "read_until" for correct unread count.
-      {LastMsgID, TS} = case get_group_last_message_id_ts(GUser,GServer) of
+      {LastMsgID, TS} = case get_group_last_message_id_ts(LServer, GUser, GServer) of
                           undefined ->  {0,time_now()};
                           V -> V
                         end,
@@ -3058,11 +3182,44 @@ send_cast(LServer, Message) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
   gen_server:cast(Proc, Message).
 
-save_last_action(Acc, Message) ->
-  lists:sublist([Message | Acc],50).
+eg_remember_action(Group, Field, Key) ->
+  F = fun() ->
+    Record = case mnesia:read(external_group_dedup, Group, write) of
+               [Stored] -> Stored;
+               [] -> #external_group_dedup{group = Group}
+             end,
+    Keys = eg_dedup_keys(Field, Record),
+    case lists:member(Key, Keys) of
+      true ->
+        duplicate;
+      false ->
+        mnesia:write(eg_update_dedup_keys(Field, Key, Record)),
+        new
+    end
+      end,
+  case mnesia:transaction(F) of
+    {atomic, Result} ->
+      Result;
+    {aborted, Reason} ->
+      ?ERROR_MSG("external group dedup failed for ~p: ~p",
+        [{Group, Field, Key}, Reason]),
+      new
+  end.
+
+eg_dedup_keys(messages, #external_group_dedup{messages = Keys}) ->
+  Keys;
+eg_dedup_keys(retracts, #external_group_dedup{retracts = Keys}) ->
+  Keys.
+
+eg_update_dedup_keys(messages, Key, Record) ->
+  Keys = eg_push_dedup_key(Key, Record#external_group_dedup.messages),
+  Record#external_group_dedup{messages = Keys};
+eg_update_dedup_keys(retracts, Key, Record) ->
+  Keys = eg_push_dedup_key(Key, Record#external_group_dedup.retracts),
+  Record#external_group_dedup{retracts = Keys}.
+
+eg_push_dedup_key(Key, Keys) ->
+  lists:sublist([Key | Keys], ?EXTERNAL_GROUP_DEDUP_LIMIT).
 
 is_local(Host) ->
   lists:member(Host,ejabberd_config:get_myhosts()).
-
-migrate() ->
-  ok.

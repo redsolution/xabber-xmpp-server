@@ -472,9 +472,15 @@ create_p2p_avatar(_LServer,_Chat,_AvatarID1,_AvatarID2) ->
 do_http_request(Server, Group , User, AvatarInfo, Iq) ->
   #avatar_info{bytes = Size, url = Url} = AvatarInfo,
   Options = [{sync, false},{stream, self}],
-  HttpOptions = [{timeout, 5000}, {autoredirect, false}], % 5 seconds.
+  HttpOptions = avatar_http_options(Url),
   httpc:request(get, {binary_to_list(Url), []}, HttpOptions, Options),
   http_response_process(Server, Group , User, AvatarInfo, Iq, Size, <<>>).
+
+avatar_http_options(<<"https://", _/binary>>) ->
+  %% Avatar downloads should not depend on CA bundle configuration.
+  [{timeout, 5000}, {autoredirect, false}, {ssl, [{verify, verify_none}]}];
+avatar_http_options(_) ->
+  [{timeout, 5000}, {autoredirect, false}].
 
 http_response_process(Server, Group , User, AvatarInfo, Iq, Size, Data) ->
   receive

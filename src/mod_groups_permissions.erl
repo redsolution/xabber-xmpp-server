@@ -232,6 +232,9 @@ is_permitted(Permission, User, Group)->
 %% Internal
 
 defaults() ->
+  extra_perms(base_perms()).
+
+base_perms() ->
   [
     #perms_permission{name = <<"send-messages">>, display = <<"Send messages">>,
       level = <<"member">>, status = true},
@@ -252,15 +255,19 @@ defaults() ->
     #perms_permission{name = <<"delete-messages">>, display = <<"Delete messages">>,
       level = <<"admin">>, status = false},
     #perms_permission{name = <<"change-permissions">>, display = <<"Change users' permissions">>,
-      level = <<"admin">>, status = false},
+      level = <<"admin">>, tag = <<"Change permissions">>, status = false},
     #perms_permission{name = <<"change-default-permissions">>, display = <<"Change default permissions">>,
-      level = <<"admin">>, status = false},
+      level = <<"admin">>, tag = <<"Change permissions">>, status = false},
     #perms_permission{name = <<"block-users">>, display = <<"Kick and block users">>,
       level = <<"admin">>, status = false},
     #perms_permission{name = <<"create-admins">>, display = <<"Create admins">>,
       level = <<"admin">>, status = false}
   ].
+
 fast_permissions() ->
+  extra_fast_perms(base_fast_perms()).
+
+base_fast_perms() ->
   [<<"send-messages">>, <<"send-media">>].
 
 process_iq_personal(#iq{type = get, from = From, to = To,
@@ -650,30 +657,54 @@ del_fast_perm(Group, Member, P) ->
     {Group, Member, P#perms_permission.name}).
 
 check_payload(User, Group, Msg) ->
-  case fast_is_permitted(<<"send-media">>, User, Group) of
-    false ->
-      not check_media_files(Msg);
-    _ -> true
+  extra_check_payload(User, Group, Msg).
+
+message_references(Msg) ->
+  Refs = get_message_references(Msg),
+  Refs ++ forwarded_message_references(Refs).
+
+forwarded_message_references(References) ->
+  lists:flatmap(fun forwarded_reference_references/1, References).
+
+forwarded_reference_references(Reference) ->
+  case xmpp:get_subtag(Reference, #forwarded{}) of
+    #forwarded{sub_els = [ForwardedMsg]} ->
+      get_message_references(ForwardedMsg);
+    _ ->
+      []
   end.
 
-check_media_files(Msg) ->
-  Refs = lists:filtermap(fun(El) ->
-    case {xmpp:get_name(El), xmpp:get_ns(El)} of
-      {<<"reference">>, ?NS_REFERENCES} ->
-        {true, xmpp:decode(El)};
-      _ -> false
-    end end, xmpp:get_els(Msg)),
-  search_in_references(Refs).
+get_message_references(#message{} = Msg) ->
+  get_references(xmpp:get_els(Msg));
+get_message_references(El) ->
+  try xmpp:decode(El) of
+    #message{} = Msg ->
+      get_message_references(Msg);
+    _ ->
+      []
+  catch _:{xmpp_codec, _} ->
+    []
+  end.
 
-
-search_in_references(References) ->
-  Files = lists:filter(fun(Reference) ->
-    case xmpp:get_subtag(Reference, #files_file_sharing{}) of
-      #files_file_sharing{} -> true;
-      _ ->
-        false
-    end end, References),
-  Files /= [].
+get_references(Els) ->
+  lists:filtermap(fun
+    (#xmppreference{} = Reference) ->
+      {true, Reference};
+    (El) ->
+      case {xmpp:get_name(El), xmpp:get_ns(El)} of
+        {<<"reference">>, ?NS_REFERENCES} ->
+          try xmpp:decode(El) of
+            #xmppreference{} = Reference ->
+              {true, Reference};
+            _ ->
+              false
+          catch _:{xmpp_codec, _} ->
+            false
+          end;
+        _ ->
+          false
+      end
+  end, Els).
 
 newbies_perms(Server, Group)->
   Values = sql_select_newbies_perms(Server, Group),
@@ -1091,3 +1122,30 @@ sql_get_users(Server, Group) ->
     _ -> []
   end.
 
+%% Extra hooks
+
+extra_perms(Perms) ->
+  Perms.
+
+extra_fast_perms(Names) ->
+  Names.
+
+extra_check_payload(User, Group, Msg) ->
+  case fast_is_permitted(<<"send-media">>, User, Group) of
+    false ->
+      not check_media_files(Msg);
+    _ -> true
+  end.
+
+check_media_files(Msg) ->
+  Refs = message_references(Msg),
+  search_in_references(Refs).
+
+search_in_references(References) ->
+  Files = lists:filter(fun(Reference) ->
+    case xmpp:get_subtag(Reference, #files_file_sharing{}) of
+      #files_file_sharing{} -> true;
+      _ ->
+        false
+    end end, References),
+  Files /= [].

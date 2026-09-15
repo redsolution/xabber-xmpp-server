@@ -47,7 +47,7 @@
 
 %% hooks
 -export([c2s_stream_features/2, sm_receive_packet/1, user_send_packet/1,
-  process_messages/0, remove_user/2]).
+  process_messages/0, remove_user/2, roster_in_subscription/2]).
 
 %% iq
 -export([process_iq/1]).
@@ -201,6 +201,11 @@ handle_cast({eg_delete_msg, Group, all, all, Ver},
     #state{host = LServer} = State) ->
   eg_remove_message(LServer, Group, all, all, Ver),
   {noreply, State};
+handle_cast({cleanup_external_group_cache, Conversation, Group},
+    #state{host = LServer} = State) ->
+  maybe_delete_unused_external_group_cache_for_group(
+    LServer, Conversation, Group),
+  {noreply, State};
 handle_cast({send_push, LUser, LServer, PushType, PushPayload}, State) ->
   ejabberd_hooks:run(xabber_push_notification,
     LServer, [PushType, LUser,LServer, PushPayload]),
@@ -245,25 +250,7 @@ handle_cast({user_send, #presence{type = unsubscribed,
   {LUser, LServer,_} = jid:tolower(From),
   maybe_delete_invite_or_presence(LUser, LServer, To),
   {noreply, State};
-handle_cast({sm, #presence{type = subscribe,from = From,
-  to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
-  case mod_xabber_entity:is_group(LUser, LServer) of
-    false ->
-      Type =
-        case xmpp:get_subtag(Presence, #groups_group{}) of
-          false ->
-            maybe_push_notification(LUser, LServer,
-              jid:to_string(jid:remove_resource(From)), ?NS_XABBER_CHAT,
-              <<"subscribe">>, #presence{type = subscribe, from = From}),
-            ?NS_XABBER_CHAT;
-          _ ->
-            ?NS_GROUPS
-        end,
-      Conversation = jid:to_string(jid:remove_resource(From)),
-      create_conversation(LServer, LUser, Conversation, <<"">>, false, Type);
-    _ ->
-      ok
-  end,
+handle_cast({sm, #presence{type = subscribe}}, State) ->
   {noreply, State};
 handle_cast({sm, #presence{type = unsubscribe,from = From, to = To}},State) ->
   {LUser, LServer,_} = jid:tolower(To),
@@ -298,6 +285,8 @@ register_hooks(Host) ->
     user_send_packet, 101),
   ejabberd_hooks:add(sm_receive_packet, Host, ?MODULE,
     sm_receive_packet, 55),
+  ejabberd_hooks:add(roster_in_subscription, Host, ?MODULE,
+    roster_in_subscription, 60),
   ejabberd_hooks:add(c2s_post_auth_features, Host, ?MODULE,
     c2s_stream_features, 50),
   ejabberd_hooks:add(remove_user, Host, ?MODULE,
@@ -310,6 +299,8 @@ unregister_hooks(Host) ->
     user_send_packet, 101),
   ejabberd_hooks:delete(sm_receive_packet, Host, ?MODULE,
     sm_receive_packet, 55),
+  ejabberd_hooks:delete(roster_in_subscription, Host, ?MODULE,
+    roster_in_subscription, 60),
   ejabberd_hooks:delete(c2s_post_auth_features, Host, ?MODULE,
     c2s_stream_features, 50),
   ejabberd_hooks:delete(remove_user, Host, ?MODULE,
@@ -328,11 +319,43 @@ sm_receive_packet(#message{to = #jid{luser = LUser, lserver = LServer}} = Pkt) -
   Proc = get_subprocess(LUser,LServer),
   Proc ! {in, Pkt},
   Pkt;
+%% Incoming subscribe is handled via roster_in_subscription so online and
+%% offline requests update sync conversations through the same roster state.
+sm_receive_packet(#presence{type = subscribe} = Pkt) ->
+  Pkt;
 sm_receive_packet(#presence{to = #jid{lserver = LServer}} = Pkt) ->
   send_cast(LServer, {sm,Pkt}),
   Pkt;
 sm_receive_packet(Acc) ->
   Acc.
+
+-spec roster_in_subscription(boolean(), presence()) -> boolean().
+roster_in_subscription(true = Acc, #presence{type = subscribe} = Presence) ->
+  process_subscription_request(Presence),
+  Acc;
+roster_in_subscription(Acc, _Presence) ->
+  Acc.
+
+-spec process_subscription_request(presence()) -> ok.
+process_subscription_request(#presence{from = From,
+  to = #jid{lserver = LServer, luser = LUser}} = Presence) ->
+  case mod_xabber_entity:is_group(LUser, LServer) of
+    false ->
+      Type =
+        case xmpp:get_subtag(Presence, #groups_group{}) of
+          false ->
+            maybe_push_notification(LUser, LServer,
+              jid:to_string(jid:remove_resource(From)), ?NS_XABBER_CHAT,
+              <<"subscribe">>, #presence{type = subscribe, from = From}),
+            ?NS_XABBER_CHAT;
+          _ ->
+            ?NS_GROUPS
+        end,
+      Conversation = jid:to_string(jid:remove_resource(From)),
+      create_conversation(LServer, LUser, Conversation, <<"">>, false, Type);
+    _ ->
+      ok
+  end.
 
 -spec user_send_packet({stanza(), c2s_state()})
       -> {stanza(), c2s_state()}.
@@ -674,9 +697,10 @@ make_result(User, Server, LastStamp, Stamp, RSM, Form) ->
   {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(Server, QueryCount),
   Count = binary_to_integer(CountBinary),
   ConvRes = convert_result(Res),
-  Presences = get_pending_subscriptions(User, Server),
+  Roster = mod_roster:get_roster(User, Server),
+  Presences = get_pending_subscriptions(User, Server, Roster),
   make_result_with_metadata(User, Server, LastStamp, RSM, ConvRes,
-    Presences, Count).
+    Presences, Count, Roster).
 
 convert_result(Result) ->
   lists:map(fun(El) ->
@@ -709,8 +733,8 @@ make_result_el(LServer, LUser, El) ->
   end.
 
 make_result_with_metadata(User, Server, LastStamp, RSM, ConvRes,
-    Presences, Count) ->
-  StatusMap = get_group_statuses(Server, User, ConvRes),
+    Presences, Count, Roster) ->
+  StatusMap = get_group_statuses(Server, User, ConvRes, Roster),
   CountMap = get_unread_counts(Server, User, ConvRes, StatusMap),
   LastMap = get_last_messages(Server, User, ConvRes, StatusMap),
   MetadataMap = maps:merge(maps:merge(StatusMap, CountMap), LastMap),
@@ -851,7 +875,7 @@ external_group_status(Chat, MetadataMap) ->
     error -> error({missing_external_group_status, Chat})
   end.
 
-get_group_statuses(LServer, LUser, ConvRes) ->
+get_group_statuses(LServer, LUser, ConvRes, Roster) ->
   {LocalReqs, ExternalReqs} =
     lists:foldl(
       fun collect_group_status_request/2,
@@ -862,7 +886,7 @@ get_group_statuses(LServer, LUser, ConvRes) ->
   LocalStatusMap = batch_get_local_group_statuses(
     LServer, LUser, LocalReqList),
   ExternalStatusMap = batch_get_external_group_statuses(
-    LServer, LUser, ExternalReqList),
+    LServer, LUser, ExternalReqList, Roster),
   maps:merge(LocalStatusMap, ExternalStatusMap).
 
 collect_group_status_request(
@@ -926,14 +950,19 @@ sql_subscription(undefined) ->
 sql_subscription(Subscription) ->
   Subscription.
 
-batch_get_external_group_statuses(_LServer, _LUser, []) ->
+batch_get_external_group_statuses(_LServer, _LUser, [], _Roster) ->
   #{};
-batch_get_external_group_statuses(LServer, LUser, Reqs) ->
+batch_get_external_group_statuses(_LServer, _LUser, Reqs, Roster) ->
+  RosterStatusMap = roster_status_map(Roster),
   maps:from_list(
-    [begin
-       {Sub, _, _} = mod_roster:get_jid_info(<<>>, LUser, LServer, JID),
-       {{status, external_group, Chat}, Sub}
-     end || {Chat, JID} <- Reqs]).
+    [{{status, external_group, Chat},
+      maps:get(jid:tolower(jid:remove_resource(JID)), RosterStatusMap, none)}
+     || {Chat, JID} <- Reqs]).
+
+roster_status_map(Roster) ->
+  maps:from_list(
+    [{jid:remove_resource(JID), Subscription}
+      || #roster{jid = JID, subscription = Subscription} <- Roster]).
 
 get_unread_counts(LServer, LUser, ConvRes, StatusMap) ->
   {ChatReqs, GroupReqs, ExternalReqs, CountMap0} =
@@ -1492,9 +1521,8 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
           sub_els = SubEls}] ++ LastCall ++ Acc}
   end.
 
-get_pending_subscriptions(LUser, LServer) ->
+get_pending_subscriptions(LUser, LServer, Roster) ->
   BareJID = jid:make(LUser, LServer),
-  Result = mod_roster:get_roster(LUser, LServer),
   lists:filtermap(
     fun(#roster{ask = Ask} = R) when Ask == in; Ask == both ->
       Message = R#roster.askmessage,
@@ -1507,7 +1535,7 @@ get_pending_subscriptions(LUser, LServer) ->
         status = xmpp:mk_text(Status)}};
       (_) ->
         false
-    end, Result).
+    end, Roster).
 
 %% Get the last informative chat message
 get_last_message(LServer,LUser,Conversation) ->
@@ -2810,6 +2838,7 @@ deactivate_conversation(LServer,LUser,#sync_conversation{type = Type, jid = JID}
     {updated,0} ->
       {error,xmpp:err_item_not_found()};
     {updated,_N} ->
+      maybe_delete_unused_external_group_cache(LServer, Type, Conversation),
       make_sync_push(LServer,LUser,Conversation,TS,Type,false),
       ok;
     _ ->
@@ -2820,10 +2849,71 @@ deactivate_conversation(_,_,_) ->
 
 %% Delete all user conversations
 delete_conversations(LUser, LServer) ->
+  ExternalGroups = get_user_external_group_conversations(LServer, LUser),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL("delete from conversation_metadata "
     " where username = %(LUser)s and %(LServer)H")),
+  lists:foreach(
+    fun(Conversation) ->
+      maybe_delete_unused_external_group_cache(LServer, ?NS_GROUPS, Conversation)
+    end, ExternalGroups),
+  ok.
+
+get_user_external_group_conversations(LServer, LUser) ->
+  Type = ?NS_GROUPS,
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(conversation)s from conversation_metadata "
+    "where username = %(LUser)s and type = %(Type)s "
+    "and status != 'deleted' and %(LServer)H")) of
+    {selected, Rows} ->
+      lists:usort([Conversation || {Conversation} <- Rows]);
+    _ ->
+      []
+  end.
+
+maybe_delete_unused_external_group_cache(LServer, ?NS_GROUPS, Conversation) ->
+  {GUser, GServer, _} = jid:tolower(jid:from_string(Conversation)),
+  case is_local(GServer) of
+    true ->
+      ok;
+    false ->
+      send_cast(
+        LServer,
+        {cleanup_external_group_cache, Conversation, {GUser, GServer}})
+  end;
+maybe_delete_unused_external_group_cache(_, _, _) ->
+  ok.
+
+maybe_delete_unused_external_group_cache_for_group(LServer, Conversation, Group) ->
+  case external_group_has_local_participants(LServer, Conversation) of
+    true ->
+      ok;
+    false ->
+      delete_external_group_cache(LServer, Group)
+  end.
+
+external_group_has_local_participants(LServer, Conversation) ->
+  Type = ?NS_GROUPS,
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @('true')b from conversation_metadata "
+    "where conversation = %(Conversation)s and type = %(Type)s "
+    "and status != 'deleted' limit 1")) of
+    {selected, [_|_]} ->
+      true;
+    _ ->
+      false
+  end.
+
+delete_external_group_cache(LServer, {GUser, GServer} = Group) ->
+  ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("delete from external_group_message_meta "
+    "where group_user = %(GUser)s and group_server = %(GServer)s")),
+  mnesia:dirty_delete(external_group_last_msg, Group),
+  mnesia:dirty_delete(external_group_dedup, Group),
   ok.
 
 is_muted(LUser, LServer, Conversation) ->
@@ -3022,7 +3112,7 @@ make_sync_push(LServer,LUser,Conversation, TS, Type, WithPresence) ->
                        jid:from_string(Conversation)) of
                        {_, Ask ,_} when Ask == in; Ask == both ->
                          P = #presence{from = jid:from_string(Conversation),
-                           type = subcribe},
+                           type = subscribe},
                          SubEls = [P | xmpp_codec:get_els(CnElem)],
                          xmpp_codec:set_els(CnElem, SubEls);
                        _ -> CnElem

@@ -411,6 +411,24 @@ process_message(in, #message{type = Type, body = [], from = From,
   handle_control_message(in, Type, From, To, Pkt);
 process_message(in, #message{type = chat, from = Peer, to = To,
   meta = #{stanza_id := TS}} = Pkt) ->
+  handle_incoming_chat_message(Peer, To, TS, Pkt);
+%%process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
+%%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
+%%  handle_control_sub_el(headline,DecSubEls,From,To);
+process_message(out, #message{from = #jid{luser =  LUser, lserver = LServer},
+  to = #jid{luser = <<>>, lserver = PDomain, lresource = <<>>},
+  meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
+  handle_outgoing_domain_message(LServer, LUser, PDomain, StanzaID, Pkt);
+process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
+  to = To, meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
+  handle_outgoing_archived_message(LServer, LUser, To, StanzaID, Pkt);
+process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
+  to = #jid{luser =  PUser,lserver = PServer}} = Pkt) ->
+  handle_outgoing_chat_control_message(LServer, LUser, PUser, PServer, Pkt);
+process_message(_Direction,_Pkt) ->
+  ok.
+
+handle_incoming_chat_message(Peer, To, TS, Pkt) ->
   {LUser, LServer, _ } = jid:tolower(To),
   {PUser, PServer, _} = jid:tolower(Peer),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
@@ -427,22 +445,7 @@ process_message(in, #message{type = chat, from = Peer, to = To,
     true ->
       handle_incoming_regular_message(
         LServer, LUser, To, Conversation, Type, TS, Pkt)
-  end;
-%%process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
-%%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-%%  handle_control_sub_el(headline,DecSubEls,From,To);
-process_message(out, #message{from = #jid{luser =  LUser, lserver = LServer},
-  to = #jid{luser = <<>>, lserver = PDomain, lresource = <<>>},
-  meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
-  handle_outgoing_domain_message(LServer, LUser, PDomain, StanzaID, Pkt);
-process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
-  to = To, meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
-  handle_outgoing_archived_message(LServer, LUser, To, StanzaID, Pkt);
-process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
-  to = #jid{luser =  PUser,lserver = PServer}} = Pkt) ->
-  handle_outgoing_chat_control_message(LServer, LUser, PUser, PServer, Pkt);
-process_message(_Direction,_Pkt) ->
-  ok.
+  end.
 
 handle_incoming_domain_message(LServer, LUser, PDomain, Body, TS, Pkt) ->
   ShouldArchive = (xmpp:has_subtag(Pkt, #hint{type = 'store'}) orelse
@@ -1467,6 +1470,37 @@ handle_control_sub_els(Type, SubEls, From, To) ->
 
 handle_control_sub_el(chat, #mark_displayed{id = OriginID} = Displayed,
     From, To) ->
+  handle_displayed_control(Displayed, OriginID, From, To);
+handle_control_sub_el(chat, #mark_received{id = OriginID} = Delivered,
+    From, To) ->
+  handle_delivered_control(Delivered, OriginID, From, To);
+handle_control_sub_el(headline, #retract_message{} = Rewrite, _From, To) ->
+  handle_rewrite_control(Rewrite, To);
+handle_control_sub_el(headline, #retract_user{} = Rewrite, _From, To) ->
+  handle_rewrite_control(Rewrite, To);
+handle_control_sub_el(headline, #retract_all{} = Rewrite, _From, To) ->
+  handle_rewrite_control(Rewrite, To);
+handle_control_sub_el(headline, #replace{} = Rewrite, _From, To) ->
+  handle_rewrite_control(Rewrite, To);
+handle_control_sub_el(headline, #groups_x{} = GroupX, From, To) ->
+  handle_group_forwarded_control(GroupX, From, To);
+handle_control_sub_el(_Type, _SubEl, _From, _To) ->
+  ok.
+
+handle_group_forwarded_control(GroupX, From, To) ->
+  case xmpp:get_subtag(GroupX, #forwarded{}) of
+    #forwarded{sub_els = [Message]} ->
+      MessageD = xmpp:decode(Message),
+      %% Bad server or client may send an error message
+      if
+        MessageD#message.type == chat ->
+          process_delivery_msg(MessageD, From, To);
+        true -> ok
+      end;
+    _ -> ok
+  end.
+
+handle_displayed_control(Displayed, OriginID, From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
@@ -1495,9 +1529,9 @@ handle_control_sub_el(chat, #mark_displayed{id = OriginID} = Displayed,
           _-> {?NS_XABBER_CHAT, SID, SID}
         end
     end,
-  update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type1,TS);
-handle_control_sub_el(chat, #mark_received{id = OriginID} = Delivered,
-    From, To) ->
+  update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type1,TS).
+
+handle_delivered_control(Delivered, OriginID, From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
@@ -1510,19 +1544,19 @@ handle_control_sub_el(chat, #mark_received{id = OriginID} = Delivered,
       update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,NS,StanzaID1);
     _ ->
       update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,?NS_XABBER_CHAT,StanzaID1)
-  end;
-handle_control_sub_el(headline, #retract_message{version = _Version,
-  id = undefined, conversation = _Conv}, _From, _To) ->
+  end.
+
+handle_rewrite_control(#retract_message{version = _Version,
+  id = undefined, conversation = _Conv}, _To) ->
   ok;
-handle_control_sub_el(headline, #retract_message{version = _Version,
-  id = _ID, conversation = undefined}, _From, _To) ->
+handle_rewrite_control(#retract_message{version = _Version,
+  id = _ID, conversation = undefined}, _To) ->
   ok;
-handle_control_sub_el(headline, #retract_message{version =  undefined,
-  id = _ID, conversation = _Conv}, _From, _To) ->
+handle_rewrite_control(#retract_message{version =  undefined,
+  id = _ID, conversation = _Conv}, _To) ->
   ok;
-handle_control_sub_el(headline, #retract_message{type = Type,
-  version = Version, id = StanzaID, conversation = ConversationJID}, _From,
-  To) ->
+handle_rewrite_control(#retract_message{type = Type, version = Version,
+  id = StanzaID, conversation = ConversationJID}, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
@@ -1535,8 +1569,8 @@ handle_control_sub_el(headline, #retract_message{type = Type,
   TS = time_now(),
   update_retract(LServer,LUser,Conversation,Version,Type, TS),
   ok;
-handle_control_sub_el(headline, #retract_user{version = Version,
-  id = UserID, conversation = ConversationJID, type = Type0}, _From, To) ->
+handle_rewrite_control(#retract_user{version = Version, id = UserID,
+  conversation = ConversationJID, type = Type0}, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
@@ -1554,9 +1588,8 @@ handle_control_sub_el(headline, #retract_user{version = Version,
          end,
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_control_sub_el(headline,
-  #retract_all{type = Type, version = Version,
-  conversation = ConversationJID}, _From, To)
+handle_rewrite_control(#retract_all{type = Type, version = Version,
+  conversation = ConversationJID}, To)
   when ConversationJID =/= undefined andalso Version =/= undefined ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
@@ -1569,30 +1602,18 @@ handle_control_sub_el(headline,
   end,
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_control_sub_el(headline, #replace{version = undefined,
-  conversation = _ConversationJID} = _Retract, _From, _To) ->
+handle_rewrite_control(#replace{version = undefined,
+  conversation = _ConversationJID} = _Retract, _To) ->
   ok;
-handle_control_sub_el(headline, #replace{type = Type, version = Version,
-  conversation = ConversationJID} = Replace, _From, To) ->
+handle_rewrite_control(#replace{type = Type, version = Version,
+  conversation = ConversationJID} = Replace, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   Conversation = jid:to_string(ConversationJID),
   maybe_change_external_group_last_message(LServer, ConversationJID, Replace),
   TS = time_now(),
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_control_sub_el(headline, #groups_x{} = GroupX, From, To) ->
-  case xmpp:get_subtag(GroupX, #forwarded{}) of
-    #forwarded{sub_els = [Message]} ->
-      MessageD = xmpp:decode(Message),
-      %% Bad server or client may send an error message
-      if
-        MessageD#message.type == chat ->
-          process_delivery_msg(MessageD, From, To);
-        true -> ok
-      end;
-    _ -> ok
-  end;
-handle_control_sub_el(_Type, _SubEl, _From, _To) ->
+handle_rewrite_control(_Rewrite, _To) ->
   ok.
 
 process_delivery_msg(MessageD, From, To) ->

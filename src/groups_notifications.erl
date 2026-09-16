@@ -93,7 +93,7 @@ pinned_changed(Server, Group, User, Messages) ->
     do_send_notice(GroupJID, Member, GroupEl)
                 end, Members),
   case User of
-    undefinde -> ok;
+    undefined -> ok;
     _ -> system_message(pinned, Server, Group, User)
   end.
 

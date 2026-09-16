@@ -420,17 +420,9 @@ process_message(in, #message{to = #jid{luser = LUser, lserver = LServer},
     true ->
       ok
   end;
-process_message(in, #message{type = Type, body = [], from = From, to = To,
-  sub_els = SubEls} = Pkt) ->
-  case check_voip_msg(in, Pkt) of
-    true -> ok;
-    _ ->
-      lists:foreach(fun(El)->
-        try xmpp:decode(El) of
-          R ->  handle_sub_els(Type, R, From, To)
-        catch _:_ -> ok
-        end end, SubEls)
-  end;
+process_message(in, #message{type = Type, body = [], from = From,
+  to = To} = Pkt) ->
+  handle_control_message(in, Type, From, To, Pkt);
 process_message(in, #message{type = chat, from = Peer, to = To,
   meta = #{stanza_id := TS}} = Pkt) ->
   {LUser, LServer, _ } = jid:tolower(To),
@@ -479,19 +471,19 @@ process_message(in, #message{type = chat, from = Peer, to = To,
             Type, <<"message">>, StanzaID)
       end;
     true ->
-      case check_voip_msg(in, Pkt) of
-        false ->
+      case handle_call_message(in, Pkt) of
+        pass ->
           maybe_push_notification(LUser, LServer, Conversation, Type,
             <<"message">>,#stanza_id{id = integer_to_binary(TS),
               by = jid:remove_resource(To)}),
           update_metainfo(LServer, LUser, Conversation, Type);
-        _ ->
+        handled ->
           ok
       end
   end;
 %%process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
 %%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-%%  handle_sub_els(headline,DecSubEls,From,To);
+%%  handle_control_sub_el(headline,DecSubEls,From,To);
 process_message(out, #message{from = #jid{luser =  LUser, lserver = LServer},
   to = #jid{luser = <<>>, lserver = PDomain, lresource = <<>>},
   meta = #{stanza_id := StanzaID, mam_archived := true} = Meta})->
@@ -508,9 +500,9 @@ process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
   %% Messages for groups should not get here,
   %% because the archive for them should be disabled.
   %% But if this happens, only "metadata_updated_at" will be updated.
-  case check_voip_msg(out, Pkt) of
-    true -> ok;
-    _ ->
+  case handle_call_message(out, Pkt) of
+    handled -> ok;
+    pass ->
       Conversation = jid:to_string(jid:remove_resource(To)),
       Type = case xmpp:get_meta(Pkt, conversation_type, undefined) of
                 undefined -> not_encrypted;
@@ -522,9 +514,9 @@ process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
   end;
 process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
   to = #jid{luser =  PUser,lserver = PServer}} = Pkt) ->
-  case check_voip_msg(out, Pkt) of
-    true -> ok;
-    _ ->
+  case handle_call_message(out, Pkt) of
+    handled -> ok;
+    pass ->
     Displayed = xmpp:get_subtag(Pkt, #mark_displayed{}),
     Conversation = jid:to_string(jid:make(PUser,PServer)),
     Type = get_preferred_conversation_type(LServer, LUser, Conversation),
@@ -1381,6 +1373,11 @@ get_preferred_conversation_type(LServer, LUser, Conversation) ->
   end.
 
 
+%% Retract version in sync metadata is a client-side optimization hint.
+%% Authoritative rewrite/retract state lives in retract archives. For p2p
+%% chats the archive version is per user, while group chats have their own
+%% archive versions, so this watermark is stored on each conversation row
+%% returned by sync.
 update_retract(LServer, LUser, Conv, Ver, CType, TS) ->
   case ejabberd_sql:sql_query(LServer,
     ?SQL("update conversation_metadata SET "
@@ -1418,10 +1415,27 @@ convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer) ->
 
 
 %%%===================================================================
-%%% Handle sub_els
+%%% Handle control messages
 %%%===================================================================
 
-handle_sub_els(chat, #mark_displayed{id = OriginID} = Displayed, From, To) ->
+handle_control_message(Direction, Type, From, To,
+    #message{sub_els = SubEls} = Pkt) ->
+  case handle_call_message(Direction, Pkt) of
+    handled ->
+      ok;
+    pass ->
+      handle_control_sub_els(Type, SubEls, From, To)
+  end.
+
+handle_control_sub_els(Type, SubEls, From, To) ->
+  lists:foreach(fun(El)->
+    try xmpp:decode(El) of
+      SubEl -> handle_control_sub_el(Type, SubEl, From, To)
+    catch _:_ -> ok
+    end end, SubEls).
+
+handle_control_sub_el(chat, #mark_displayed{id = OriginID} = Displayed,
+    From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
@@ -1451,7 +1465,8 @@ handle_sub_els(chat, #mark_displayed{id = OriginID} = Displayed, From, To) ->
         end
     end,
   update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type1,TS);
-handle_sub_els(chat, #mark_received{id = OriginID} = Delivered, From, To) ->
+handle_control_sub_el(chat, #mark_received{id = OriginID} = Delivered,
+    From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
@@ -1465,17 +1480,18 @@ handle_sub_els(chat, #mark_received{id = OriginID} = Delivered, From, To) ->
     _ ->
       update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,?NS_XABBER_CHAT,StanzaID1)
   end;
-handle_sub_els(headline, #retract_message{version = _Version, id = undefined,
-  conversation = _Conv}, _From, _To) ->
+handle_control_sub_el(headline, #retract_message{version = _Version,
+  id = undefined, conversation = _Conv}, _From, _To) ->
   ok;
-handle_sub_els(headline, #retract_message{version = _Version,  id = _ID,
-  conversation = undefined}, _From, _To) ->
+handle_control_sub_el(headline, #retract_message{version = _Version,
+  id = _ID, conversation = undefined}, _From, _To) ->
   ok;
-handle_sub_els(headline, #retract_message{version =  undefined, id = _ID,
-  conversation = _Conv}, _From, _To) ->
+handle_control_sub_el(headline, #retract_message{version =  undefined,
+  id = _ID, conversation = _Conv}, _From, _To) ->
   ok;
-handle_sub_els(headline, #retract_message{type = Type, version = Version, id = StanzaID,
-  conversation = ConversationJID}, _From, To) ->
+handle_control_sub_el(headline, #retract_message{type = Type,
+  version = Version, id = StanzaID, conversation = ConversationJID}, _From,
+  To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
@@ -1488,8 +1504,8 @@ handle_sub_els(headline, #retract_message{type = Type, version = Version, id = S
   TS = time_now(),
   update_retract(LServer,LUser,Conversation,Version,Type, TS),
   ok;
-handle_sub_els(headline, #retract_user{version = Version, id = UserID,
-  conversation = ConversationJID, type = Type0}, _From, To) ->
+handle_control_sub_el(headline, #retract_user{version = Version,
+  id = UserID, conversation = ConversationJID, type = Type0}, _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
@@ -1507,7 +1523,7 @@ handle_sub_els(headline, #retract_user{version = Version, id = UserID,
          end,
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_sub_els(headline,
+handle_control_sub_el(headline,
   #retract_all{type = Type, version = Version,
   conversation = ConversationJID}, _From, To)
   when ConversationJID =/= undefined andalso Version =/= undefined ->
@@ -1522,18 +1538,18 @@ handle_sub_els(headline,
   end,
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_sub_els(headline, #replace{version = undefined, conversation = _ConversationJID} = _Retract,
-    _From, _To) ->
+handle_control_sub_el(headline, #replace{version = undefined,
+  conversation = _ConversationJID} = _Retract, _From, _To) ->
   ok;
-handle_sub_els(headline, #replace{type = Type, version = Version, conversation = ConversationJID} = Replace,
-    _From, To) ->
+handle_control_sub_el(headline, #replace{type = Type, version = Version,
+  conversation = ConversationJID} = Replace, _From, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   Conversation = jid:to_string(ConversationJID),
   maybe_change_external_group_last_message(LServer, ConversationJID, Replace),
   TS = time_now(),
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_sub_els(headline, #groups_x{} = GroupX, From, To) ->
+handle_control_sub_el(headline, #groups_x{} = GroupX, From, To) ->
   case xmpp:get_subtag(GroupX, #forwarded{}) of
     #forwarded{sub_els = [Message]} ->
       MessageD = xmpp:decode(Message),
@@ -1545,7 +1561,7 @@ handle_sub_els(headline, #groups_x{} = GroupX, From, To) ->
       end;
     _ -> ok
   end;
-handle_sub_els(_Type, _SubEl, _From, _To) ->
+handle_control_sub_el(_Type, _SubEl, _From, _To) ->
   ok.
 
 process_delivery_msg(MessageD, From, To) ->
@@ -1573,9 +1589,9 @@ process_delivery_msg(MessageD, From, To) ->
   end.
 
 %%%===================================================================
-%%% Check VoIP message
+%%% Handle call messages
 %%%===================================================================
-check_voip_msg(Direction, #message{type = chat,
+handle_call_message(Direction, #message{type = chat,
   from = From, to = To, meta = #{stanza_id := StanzaID}} = Pkt)->
   Propose = xmpp:has_subtag(Pkt, #jingle_propose{}),
   Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
@@ -1590,27 +1606,27 @@ check_voip_msg(Direction, #message{type = chat,
     Propose andalso Direction == in ->
       maybe_push_notification(LUser,LServer,<<"call">>,Pkt),
       store_last_call(Pkt, Peer, LUser, LServer, StanzaID),
-      true;
+      handled;
     Propose ->
       %% Direction is out
-      true;
+      handled;
     Accept /= false ->
       maybe_push_notification(LUser,LServer,<<"data">>,Accept),
       update_metainfo(call, LServer,LUser,Conversation,
         StanzaID,?NS_XABBER_CHAT, StanzaID),
       delete_last_call(Peer, LUser, LServer),
-      true;
+      handled;
     Reject /= false ->
       maybe_push_notification(LUser,LServer,<<"data">>,Reject),
       update_metainfo(call, LServer,LUser,Conversation,
         StanzaID,?NS_XABBER_CHAT, StanzaID),
       delete_last_call(Peer, LUser, LServer),
-      true;
+      handled;
     true ->
-      false
+      pass
   end;
-check_voip_msg(_, _) ->
-  false.
+handle_call_message(_, _) ->
+  pass.
 
 %%%===================================================================
 %%% Internal functions

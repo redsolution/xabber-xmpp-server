@@ -409,10 +409,7 @@ process_message(in, #message{to = #jid{luser = LUser, lserver = LServer},
   xmpp:get_text(Body) /= <<>>),
   if
     ShouldArchive ->
-      CType = case xmpp:get_meta(Pkt, conversation_type, undefined) of
-                undefined -> not_encrypted;
-                T -> T
-              end,
+      CType = packet_conversation_type(Pkt, not_encrypted),
       maybe_push_notification(LUser, LServer, PDomain, CType,
         <<"message">>, #stanza_id{id = integer_to_binary(TS),
           by = jid:make(LUser, LServer)}),
@@ -430,73 +427,42 @@ process_message(in, #message{type = chat, from = Peer, to = To,
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   Invite = xmpp:get_subtag(Pkt, #groups_invite{}),
   IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
-  Type = case xmpp:get_meta(Pkt, conversation_type, undefined) of
-            undefined -> ?NS_XABBER_CHAT;
-            T -> T
-          end,
+  Type = packet_conversation_type(Pkt, ?NS_XABBER_CHAT),
   if
     Invite  =/= false ->
-      #groups_invite{jid = GroupJID} = Invite,
-      case GroupJID of
-        undefined ->
-          %% Bad invite
-          ok;
-        _ ->
-          Group = jid:to_string(jid:remove_resource(GroupJID)),
-          store_invite(LUser, LServer, GroupJID, integer_to_binary(TS)),
-          create_conversation(LServer,LUser, Group, <<>>, false, ?NS_GROUPS),
-          maybe_push_notification(LUser ,LServer, Conversation, ?NS_XABBER_CHAT,
-            <<"message">>, #stanza_id{id = integer_to_binary(TS),
-              by = jid:remove_resource(To)})
-      end;
+      handle_incoming_group_invite(
+        LServer, LUser, To, Conversation, Invite, TS);
     Type == ?NS_GROUPS ->
-      FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
-      StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
-      UTime = xmpp:get_subtag(FilPacket, #delivery_time{}),
-      if
-        %% Bad message
-        StanzaID == false; UTime == false -> ok;
-        true ->
-          SID = StanzaID#stanza_id.id,
-          case IsLocal of
-            false ->
-              MsgTS = misc:now_to_usec(UTime#delivery_time.stamp),
-              store_external_group_message(
-                LServer, {PUser, PServer}, SID, Pkt, MsgTS);
-            _ ->
-              ok
-          end,
-          update_metainfo(LServer,LUser,Conversation, Type),
-          maybe_push_notification(LUser, LServer, Conversation,
-            Type, <<"message">>, StanzaID)
-      end;
+      handle_incoming_group_message(
+        LServer, LUser, PUser, PServer, Peer, Conversation, IsLocal, Pkt);
     true ->
-      case handle_call_message(in, Pkt) of
-        pass ->
-          maybe_push_notification(LUser, LServer, Conversation, Type,
-            <<"message">>,#stanza_id{id = integer_to_binary(TS),
-              by = jid:remove_resource(To)}),
-          update_metainfo(LServer, LUser, Conversation, Type);
-        handled ->
-          ok
-      end
+      handle_incoming_regular_message(
+        LServer, LUser, To, Conversation, Type, TS, Pkt)
   end;
 %%process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
 %%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
 %%  handle_control_sub_el(headline,DecSubEls,From,To);
 process_message(out, #message{from = #jid{luser =  LUser, lserver = LServer},
   to = #jid{luser = <<>>, lserver = PDomain, lresource = <<>>},
-  meta = #{stanza_id := StanzaID, mam_archived := true} = Meta})->
-  CType = case maps:get(conversation_type, Meta, undefined) of
-            undefined -> not_encrypted;
-            T -> T
-          end,
+  meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
+  handle_outgoing_domain_message(LServer, LUser, PDomain, StanzaID, Pkt);
+process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
+  to = To, meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
+  handle_outgoing_archived_message(LServer, LUser, To, StanzaID, Pkt);
+process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
+  to = #jid{luser =  PUser,lserver = PServer}} = Pkt) ->
+  handle_outgoing_chat_control_message(LServer, LUser, PUser, PServer, Pkt);
+process_message(_Direction,_Pkt) ->
+  ok.
+
+handle_outgoing_domain_message(LServer, LUser, PDomain, StanzaID, Pkt) ->
+  CType = packet_conversation_type(Pkt, not_encrypted),
   update_metainfo(LServer, LUser, PDomain, CType, [{read, StanzaID}]),
   maybe_push_notification(LUser,LServer,<<"outgoing">>,
     #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LUser, LServer)}),
-  ok;
-process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
-  to = To, meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
+  ok.
+
+handle_outgoing_archived_message(LServer, LUser, To, StanzaID, Pkt) ->
   %% Messages for groups should not get here,
   %% because the archive for them should be disabled.
   %% But if this happens, only "metadata_updated_at" will be updated.
@@ -504,65 +470,117 @@ process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
     handled -> ok;
     pass ->
       Conversation = jid:to_string(jid:remove_resource(To)),
-      Type = case xmpp:get_meta(Pkt, conversation_type, undefined) of
-                undefined -> not_encrypted;
-                T -> T
-              end,
+      Type = packet_conversation_type(Pkt, not_encrypted),
       update_metainfo(LServer, LUser, Conversation, Type, [{read, StanzaID}]),
       maybe_push_notification(LUser,LServer,<<"outgoing">>,
         #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LUser, LServer)})
-  end;
-process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
-  to = #jid{luser =  PUser,lserver = PServer}} = Pkt) ->
+  end.
+
+handle_outgoing_chat_control_message(LServer, LUser, PUser, PServer, Pkt) ->
   case handle_call_message(out, Pkt) of
     handled -> ok;
     pass ->
-    Displayed = xmpp:get_subtag(Pkt, #mark_displayed{}),
-    Conversation = jid:to_string(jid:make(PUser,PServer)),
-    Type = get_preferred_conversation_type(LServer, LUser, Conversation),
+      Displayed = xmpp:get_subtag(Pkt, #mark_displayed{}),
+      Conversation = jid:to_string(jid:make(PUser,PServer)),
+      Type = get_preferred_conversation_type(LServer, LUser, Conversation),
 
-    case Displayed of
-      #mark_displayed{id = _OriginID} when Type == ?NS_GROUPS ->
-        FilPacket = filter_packet(Displayed,jid:make(PUser,PServer)),
-        StanzaID = case xmpp:get_subtag(FilPacket, #stanza_id{}) of
-                     #stanza_id{id = SID} -> SID;
-                     _ ->
-                       %% for legacy or bad clients
-                       {V, _} = get_group_last_message_id_ts(LServer, PUser, PServer),
-                       V
-                   end,
-        case is_local(PServer) of
-          true ->
-            update_metainfo(read, LServer,LUser,Conversation,
-              StanzaID,Type,StanzaID);
-          _ ->
-            MsgTS = get_external_group_message_ts(
-              LServer, PUser, PServer, StanzaID),
-            update_metainfo(read, LServer,LUser,Conversation,
-              StanzaID,Type,MsgTS)
-        end,
-        maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed);
-      #mark_displayed{id = OriginID} ->
-        BareJID = jid:make(LUser,LServer),
-        Displayed2 = filter_packet(Displayed,BareJID),
-        StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
-        Type1 = case Type of
-                  undefined ->
-                    case mod_mam_sql:is_encrypted(LServer,StanzaID) of
-                      {true, NS} -> NS;
-                      _-> ?NS_XABBER_CHAT
-                    end;
-                  _-> Type
-                end,
-        update_metainfo(read, LServer,LUser,Conversation,
-          StanzaID,Type1,StanzaID),
-        maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed);
-      _ ->
-        ok
-    end
-  end;
-process_message(_Direction,_Pkt) ->
-  ok.
+      case Displayed of
+        #mark_displayed{id = _OriginID} when Type == ?NS_GROUPS ->
+          FilPacket = filter_packet(Displayed,jid:make(PUser,PServer)),
+          StanzaID = case xmpp:get_subtag(FilPacket, #stanza_id{}) of
+                       #stanza_id{id = SID} -> SID;
+                       _ ->
+                         %% for legacy or bad clients
+                         {V, _} =
+                           get_group_last_message_id_ts(LServer, PUser, PServer),
+                         V
+                     end,
+          case is_local(PServer) of
+            true ->
+              update_metainfo(read, LServer,LUser,Conversation,
+                StanzaID,Type,StanzaID);
+            _ ->
+              MsgTS = get_external_group_message_ts(
+                LServer, PUser, PServer, StanzaID),
+              update_metainfo(read, LServer,LUser,Conversation,
+                StanzaID,Type,MsgTS)
+          end,
+          maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed);
+        #mark_displayed{id = OriginID} ->
+          BareJID = jid:make(LUser,LServer),
+          Displayed2 = filter_packet(Displayed,BareJID),
+          StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
+          Type1 = case Type of
+                    undefined ->
+                      case mod_mam_sql:is_encrypted(LServer,StanzaID) of
+                        {true, NS} -> NS;
+                        _-> ?NS_XABBER_CHAT
+                      end;
+                    _-> Type
+                  end,
+          update_metainfo(read, LServer,LUser,Conversation,
+            StanzaID,Type1,StanzaID),
+          maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed);
+        _ ->
+          ok
+      end
+  end.
+
+handle_incoming_group_invite(LServer, LUser, To, Conversation,
+    #groups_invite{jid = GroupJID}, TS) ->
+  case GroupJID of
+    undefined ->
+      %% Bad invite
+      ok;
+    _ ->
+      Group = jid:to_string(jid:remove_resource(GroupJID)),
+      store_invite(LUser, LServer, GroupJID, integer_to_binary(TS)),
+      create_conversation(LServer,LUser, Group, <<>>, false, ?NS_GROUPS),
+      maybe_push_notification(LUser ,LServer, Conversation, ?NS_XABBER_CHAT,
+        <<"message">>, #stanza_id{id = integer_to_binary(TS),
+          by = jid:remove_resource(To)})
+  end.
+
+handle_incoming_group_message(LServer, LUser, PUser, PServer, Peer,
+    Conversation, IsLocal, Pkt) ->
+  FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
+  StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
+  UTime = xmpp:get_subtag(FilPacket, #delivery_time{}),
+  if
+    %% Bad message
+    StanzaID == false; UTime == false -> ok;
+    true ->
+      SID = StanzaID#stanza_id.id,
+      case IsLocal of
+        false ->
+          MsgTS = misc:now_to_usec(UTime#delivery_time.stamp),
+          store_external_group_message(
+            LServer, {PUser, PServer}, SID, Pkt, MsgTS);
+        _ ->
+          ok
+      end,
+      update_metainfo(LServer,LUser,Conversation, ?NS_GROUPS),
+      maybe_push_notification(LUser, LServer, Conversation,
+        ?NS_GROUPS, <<"message">>, StanzaID)
+  end.
+
+handle_incoming_regular_message(LServer, LUser, To, Conversation, Type, TS,
+    Pkt) ->
+  case handle_call_message(in, Pkt) of
+    pass ->
+      maybe_push_notification(LUser, LServer, Conversation, Type,
+        <<"message">>,#stanza_id{id = integer_to_binary(TS),
+          by = jid:remove_resource(To)}),
+      update_metainfo(LServer, LUser, Conversation, Type);
+    handled ->
+      ok
+  end.
+
+packet_conversation_type(Pkt, Default) ->
+  case xmpp:get_meta(Pkt, conversation_type, undefined) of
+    undefined -> Default;
+    Type -> Type
+  end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

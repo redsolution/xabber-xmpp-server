@@ -51,10 +51,10 @@
   handle_pubsub_iq/1,
   get_group_avatar/1,
   make_group_avatar/2,
+  delete_group_avatar/3,
   store_user_avatar_file/5,
   async_maybe_update_avatar/3,
   send_pep_msg/3,
-  async_send_pep_msg/2,
   async_send_pep_msg/3,
   request_pubsub_metadata/2,
   download_avatar/5,
@@ -143,32 +143,9 @@ code_change(_OldVsn, State, _Extra) ->
 %% External API
 
 get_group_avatar(Group)->
-  {LUser, LServer, _} = LBJID = jid:tolower(jid:from_string(Group)),
-  case mod_pubsub:get_items(LBJID, ?NS_AVATAR_METADATA) of
-    [#pubsub_item{itemid = {ItemID, _}, payload = [Payload|_]}|_] ->
-      try xmpp:decode(Payload) of
-        #avatar_meta{info = []} ->
-          undefined;
-        #avatar_meta{info = L} ->
-          #groups_avatar{info = hd(L)};
-        _ ->
-          ?WARNING_MSG("invalid metadata payload detected "
-          "for ~s@~s with item id ~s",
-            [LUser, LServer, ItemID]),
-          undefined
-      catch _:{xmpp_codec, Why} ->
-        ?WARNING_MSG("failed to decode metadata for "
-        "~s@~s with item id ~s: ~s",
-          [LUser, LServer, ItemID,
-            xmpp:format_error(Why)]),
-        undefined
-      end;
-    {error, #stanza_error{reason = 'item-not-found'}} ->
-      undefined;
-    {error, Reason} ->
-      ?WARNING_MSG("failed to get items for ~s@~s at node ~s: ~p",
-        [LUser, LServer, ?NS_AVATAR_METADATA, Reason]),
-      undefined
+  case do_get_group_avatar(Group) of
+    error -> undefined;
+    A -> A
   end.
 
 make_group_avatar(Server, Group)->
@@ -183,6 +160,24 @@ make_group_avatar(Server, Group)->
       publish_group_avatar(Server, Group, AvatarInfo, Bin);
     _ ->
       ok
+  end.
+
+delete_group_avatar(Server, Group, Iq)->
+  delete_group_avatar_file(Group),
+  AvatarMeta = xmpp:encode(#avatar_meta{}),
+  GroupJID = jid:from_string(Group),
+  LBJID = jid:tolower(GroupJID),
+  case mod_pubsub:publish_item(LBJID, Server,
+    ?NS_AVATAR_METADATA, GroupJID, <<>>, [AvatarMeta]) of
+    {result, _} ->
+      Avatar = #groups_avatar{info = undefined},
+      GI = #groups_info{avatar = Avatar},
+      ejabberd_router:route(xmpp:make_iq_result(Iq, GI)),
+      send_pep_msg(Server, Group) ;
+    {error, StanzaErr} ->
+      ?ERROR_MSG("Error piblish group avatar: ~p", [StanzaErr]),
+      ejabberd_router:route(xmpp:make_error(Iq,
+        xmpp:err_internal_server_error()))
   end.
 
 get_user_avatar(Server, User, Group)->
@@ -379,28 +374,8 @@ async_maybe_update_avatar(Server, Group, User) ->
       ok
   end.
 
-async_send_pep_msg(Server, Group) ->
-  case groups_groups:get_info(Group, [parent, p2pusers]) of
-    [<<"0">>, _] ->
-      case get_group_avatar(Group) of
-        undefined -> ok;
-        #groups_avatar{info = Info} ->
-          GroupJID = jid:from_string(Group),
-          NodeId = Info#avatar_info.id,
-          Metadata = #avatar_meta{info = [Info]},
-          Users = groups_members:users_to_send(Server, Group),
-          lists:foreach(fun(UserJID) ->
-            send_avatar_meta(GroupJID, UserJID, NodeId, Metadata)
-                        end, Users)
-      end;
-    [_, P2PUsers] ->
-      Users = groups_members:users_to_send(Server, Group),
-      lists:foreach(fun(UserJID) ->
-        send_p2p_avatar(Server, Group, UserJID, P2PUsers)
-                    end, Users);
-    _ ->
-      ok
-  end.
+send_pep_msg(Server, Group) ->
+  spawn(?MODULE, async_send_pep_msg,[Server, Group, undefined]).
 
 send_pep_msg(Server, Group, UserJID) ->
   spawn(?MODULE, async_send_pep_msg,[Server, Group, UserJID]).
@@ -408,18 +383,48 @@ send_pep_msg(Server, Group, UserJID) ->
 async_send_pep_msg(Server, Group, UserJID) ->
   case groups_groups:get_info(Group, [parent, p2pusers]) of
     [<<"0">>, _] ->
-      case get_group_avatar(Group) of
-        undefined -> ok;
-        #groups_avatar{info = Info} ->
-          GroupJID = jid:from_string(Group),
-          NodeId = Info#avatar_info.id,
-          Metadata = #avatar_meta{info = [Info]},
-          send_avatar_meta(GroupJID, UserJID, NodeId, Metadata)
+      case UserJID of
+        undefined ->
+          Users = groups_members:users_to_send(Server, Group),
+          async_send_pep_msg(false, [], Server, Group, Users);
+        _ ->
+          async_send_pep_msg(false, [], Server, Group, [UserJID])
       end;
     [_, P2PUsers] ->
-      send_p2p_avatar(Server, Group, UserJID, P2PUsers);
+      case UserJID of
+        undefined ->
+          Users = [jid:from_string(U) || {U, _} <- P2PUsers],
+          async_send_pep_msg(true, P2PUsers, Server, Group, Users);
+        _ ->
+          async_send_pep_msg(true, P2PUsers, Server, Group, [UserJID])
+      end
+  end.
+
+async_send_pep_msg(false, _P2PUsers, _Server, Group, Users) ->
+  case get_data_for_pep_msg(Group) of
+    {NodeId, Metadata} ->
+      GroupJID = jid:from_string(Group),
+      lists:foreach(fun(UserJID) ->
+        send_avatar_meta(GroupJID, UserJID, NodeId, Metadata)
+                    end, Users);
     _ ->
       ok
+  end;
+async_send_pep_msg(true, P2PUsers, Server, Group, Users) ->
+  lists:foreach(fun(UserJID) ->
+    send_p2p_avatar(Server, Group, UserJID, P2PUsers)
+                end, Users).
+
+get_data_for_pep_msg(Group)->
+  case do_get_group_avatar(Group) of
+    undefined ->
+      {<<"current">>, #avatar_meta{}};
+    #groups_avatar{info = Info} ->
+      Id = Info#avatar_info.id,
+      Meta = #avatar_meta{info = [Info]},
+      {Id, Meta};
+    _ ->
+      error
   end.
 
 request_pubsub_metadata(Group, User) ->
@@ -468,6 +473,35 @@ create_p2p_avatar(_LServer,_Chat,_AvatarID1,_AvatarID2) ->
   ok.
 
 %% Internal functions
+
+do_get_group_avatar(Group)->
+  {LUser, LServer, _} = LBJID = jid:tolower(jid:from_string(Group)),
+  case mod_pubsub:get_items(LBJID, ?NS_AVATAR_METADATA) of
+    [#pubsub_item{itemid = {ItemID, _}, payload = [Payload|_]}|_] ->
+      try xmpp:decode(Payload) of
+        #avatar_meta{info = []} ->
+          undefined;
+        #avatar_meta{info = L} ->
+          #groups_avatar{info = hd(L)};
+        _ ->
+          ?WARNING_MSG("invalid metadata payload detected "
+          "for ~s@~s with item id ~s",
+            [LUser, LServer, ItemID]),
+          error
+      catch _:{xmpp_codec, Why} ->
+        ?WARNING_MSG("failed to decode metadata for "
+        "~s@~s with item id ~s: ~s",
+          [LUser, LServer, ItemID,
+            xmpp:format_error(Why)]),
+        error
+      end;
+    {error, #stanza_error{reason = 'item-not-found'}} ->
+      error;
+    {error, Reason} ->
+      ?WARNING_MSG("failed to get items for ~s@~s at node ~s: ~p",
+        [LUser, LServer, ?NS_AVATAR_METADATA, Reason]),
+      error
+  end.
 
 do_http_request(Server, Group , User, AvatarInfo, Iq) ->
   #avatar_info{bytes = Size, url = Url} = AvatarInfo,
@@ -598,9 +632,6 @@ group_avatar_opts(Group, ID) ->
   AvaUrl = <<Url/binary,$/,UserStr/binary,$/,"avatar",$/,
     FileName/binary,"?v=",ID/binary>>,
   {FileName, UserStr, AvaUrl}.
-
-send_pep_msg(Server, Group) ->
-  spawn(?MODULE, async_send_pep_msg,[Server, Group]).
 
 send_p2p_avatar(Server, Group, User, Names)->
   UserS = jid:to_string(jid:remove_resource(User)),

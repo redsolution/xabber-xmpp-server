@@ -632,6 +632,8 @@ update_group_info(Server, Group, GroupInfo) ->
   ejabberd_hooks:run(groups_group_changed, Server, [Server, Group, State]),
   Result.
 
+change_group_avatar(Server, Group, #groups_avatar{info = undefined}, Iq) ->
+  groups_avatars:delete_group_avatar(Server, Group, Iq);
 change_group_avatar(Server, Group, NewAvatar, Iq) ->
   #groups_avatar{info = NewInfo, data = Data} = NewAvatar,
   CurAvatar = groups_avatars:get_group_avatar(Group),

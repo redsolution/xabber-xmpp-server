@@ -117,15 +117,22 @@ user_join(Acc, {Server, UserJID, Group}) ->
   Acc.
 
 %% External API
+send_present(_Group, [], _Present) ->
+  ok;
 send_present(Group, Users, Present) ->
-  [Privacy, Members] = groups_groups:get_info(Group,
-    [privacy, user_count]),
-  GroupEl = #groups_group{privacy = Privacy, members = Members,
-    present = Present},
-  GroupJID = jid:from_string(Group),
-  lists:foreach(fun(Member) ->
-    do_send_notice(GroupJID, Member, GroupEl)
-                end, Users).
+  case groups_groups:get_info(Group, [privacy, user_count]) of
+    error ->
+      %% Can happen while a deleted group is still receiving unavailable
+      %% presences from participant resources.
+      ok;
+    [Privacy, Members] ->
+      GroupEl = #groups_group{privacy = Privacy, members = Members,
+        present = Present},
+      GroupJID = jid:from_string(Group),
+      lists:foreach(fun(Member) ->
+        do_send_notice(GroupJID, Member, GroupEl)
+                    end, Users)
+  end.
 
 %% Internal functions
 

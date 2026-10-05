@@ -25,13 +25,11 @@
 
 -module(groups_messages).
 -author('ilya.kalashnikov@redsolution.com').
--compile([{parse_transform, ejabberd_sql_pt}]).
 -behavior(gen_mod).
 -behaviour(gen_server).
 
 -include("logger.hrl").
 -include("xmpp.hrl").
--include("ejabberd_sql_pt.hrl").
 -include_lib("stdlib/include/ms_transform.hrl").
 
 %% gen_mod, gen_server
@@ -46,22 +44,22 @@
 %% API
 -export([
   modify/1,
+  denied_sender_is_banned/1,
+  clear_denied_sender_on_join/2,
   delete_all_sessions/1,
   get_present/1,
   select_sessions/2,
   delete_all_user_sessions/2,
-  change_present_state/3,
-  set_displayed/4]).
+  change_present_state/3]).
+
+-define(DENIED_SENDERS_TABLE, groups_denied_senders).
+
+-type denied_message_reason() ::
+  nested_forwarded | inactive | restricted | notexist.
+-type denied_message_action() :: reply | ban_and_drop | drop.
 
 -record(state, {host :: binary()}).
 -record(participant_session, {group, username, server, resource, ts}).
--record(groups_send_displayed,
-{
-  group = <<"">>                              :: binary() | '_',
-  user = <<"">>                               :: binary() | '_',
-  stanza_id = <<>>                            :: binary() | '_',
-  displayed                                   :: xmpp_element() | '_'
-}).
 
 
 %%====================================================================
@@ -83,6 +81,8 @@ mod_options(_Opts) -> [].
 %%====================================================================
 init([Host, _Opts]) ->
   init_db(),
+  ejabberd_hooks:add(groups_presence_subscribed, Host, ?MODULE,
+    clear_denied_sender_on_join, 30),
   %% run task once for all hosts
   Hosts = lists:sort(ejabberd_config:get_myhosts()),
   case Hosts of
@@ -100,11 +100,10 @@ init_db() ->
     [{ram_copies, [node()]},
       {attributes, record_info(fields, participant_session)},
       {type, bag}]),
-  ejabberd_mnesia:create(?MODULE, groups_send_displayed,
-    [{disc_only_copies, [node()]},{type, bag},
-      {attributes, record_info(fields, groups_send_displayed)}]),
-  catch ets:new(groups_strangers, [named_table, public,
-    {heir, erlang:group_leader(), none}]).
+  catch ets:new(?DENIED_SENDERS_TABLE, [named_table, public, set,
+    {read_concurrency, true}, {write_concurrency, true},
+    {heir, erlang:group_leader(), none}]),
+  groups_displayed:init_db().
 
 handle_call(_Call, _From, State) ->
   {noreply, State}.
@@ -115,11 +114,9 @@ handle_cast(Msg, State) ->
 
 
 handle_info(clean, State) ->
-  ?DEBUG("cleaning ~p ETS table", [groups_strangers]),
   Now = erlang:system_time(second),
-  ets:select_delete(
-    groups_strangers,
-    ets:fun2ms(fun({_, UnbanTS}) -> UnbanTS =< Now end)),
+  clean_denied_senders(Now),
+  groups_displayed:clean(Now),
   erlang:send_after(timer:minutes(10), self(), clean),
   {noreply, State};
 handle_info('delete_zombie_sessions', State) ->
@@ -131,7 +128,9 @@ handle_info(Info, State) ->
   ?WARNING_MSG("unexpected info: ~p", [Info]),
   {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{host = Host}) ->
+  ejabberd_hooks:delete(groups_presence_subscribed, Host, ?MODULE,
+    clear_denied_sender_on_join, 30),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -162,15 +161,6 @@ modify(#message{to = To, from = From, body = Body} = Pkt) ->
     Val ->
       xmpp:put_meta(Pkt1, groups_mentions, Val)
   end.
-
-set_displayed(GroupJID, UserJID, StanzaID, OriginID) ->
-  GroupS = jid:to_string(jid:remove_resource(GroupJID)),
-  UserS = jid:to_string(jid:remove_resource(UserJID)),
-  Displayed = #mark_displayed{id = OriginID,
-    sub_els = [#stanza_id{id = integer_to_binary(StanzaID), by = GroupJID}]},
-  mnesia:dirty_write(#groups_send_displayed{
-    group = GroupS, user = UserS,
-    stanza_id = StanzaID, displayed = Displayed}).
 
 %%--------------------------------------------------------------------
 %% Sub process.
@@ -215,7 +205,7 @@ process_message(#message{body=[], from = From, type = Type, to = To} = Msg)
   LServer = To#jid.lserver,
   GroupJID = jid:remove_resource(To),
   User = jid:to_string(jid:remove_resource(From)),
-  Displayed = get_displayed(Msg, GroupJID),
+  Displayed = groups_displayed:get_marker(Msg, GroupJID),
   PresentType = get_present_type(Msg),
   IsAllowed = case {Displayed, PresentType} of
                 {false, false} -> false;
@@ -225,9 +215,7 @@ process_message(#message{body=[], from = From, type = Type, to = To} = Msg)
               end,
   if
     Displayed /= false  andalso IsAllowed ->
-      #mark_displayed{id = OriginID} = Displayed,
-      StanzaID = get_stanza_id(Displayed, GroupJID, LServer, OriginID),
-      check_displayed(GroupJID, From, StanzaID);
+      groups_displayed:process_marker(GroupJID, From, Displayed);
     PresentType /= false andalso IsAllowed ->
       change_present_state(To, From, PresentType);
     true ->
@@ -237,8 +225,19 @@ process_message(#message{type = Type} = Msg)
   when Type == normal orelse Type == chat ->
   case xmpp:get_subtag(Msg, #groups_invite{}) of
     false ->
-      IsPermitted = is_permitted(Msg),
-      process_message(IsPermitted, Msg);
+      case check_message_permission(Msg) of
+        allowed ->
+          process_message(allowed, Msg);
+        {denied, Reason, Why} ->
+          case register_denied_message(Msg, Reason) of
+            reply ->
+              process_message({denied, Reason, Why}, Msg);
+            ban_and_drop ->
+              ok;
+            drop ->
+              ok
+          end
+      end;
     _ ->
       ?DEBUG("Drop message with invite",[]),
       ok
@@ -246,18 +245,11 @@ process_message(#message{type = Type} = Msg)
 process_message(_Message) ->
   ok.
 
-process_message({false, <<>>}, Pkt) ->
+process_message({denied, _Reason, <<>>}, Pkt) ->
   ejabberd_router:route_error(Pkt, xmpp:err_not_allowed());
-process_message({false, Why}, Pkt) ->
-  UserJID = Pkt#message.from,
-  GroupJID = Pkt#message.to,
-  Body = [#text{lang = <<>>,data = Why}],
-  Els = [#groups_x{}],
-  Message = #message{from = GroupJID, to = UserJID,
-    id = randoms:get_string(),
-    type = chat, body = Body, sub_els = Els, meta = #{}},
-  ejabberd_router:route_error(Pkt, xmpp:err_not_allowed()),
-  send_not_allowed(UserJID, GroupJID, Message);
+process_message({denied, Reason, Why}, Pkt) ->
+  ejabberd_router:route_error(Pkt,
+    denied_message_error(Reason, Why, Pkt#message.lang));
 process_message(_, Pkt) ->
   OriginID = case xmpp:get_subtag(Pkt, #origin_id{}) of
                false -> Pkt#message.id;
@@ -271,20 +263,90 @@ process_message(_, Pkt) ->
       re_sent_msg(Pkt1)
   end.
 
-is_permitted(#message{to =To, from = From} = Pkt) ->
+-spec check_message_permission(message()) ->
+  allowed | {denied, denied_message_reason(), binary()}.
+check_message_permission(#message{to = To, from = From} = Pkt) ->
   User = jid:to_string(jid:remove_resource(From)),
   Group = jid:to_string(jid:remove_resource(To)),
-  UserStatus = check_permission_write(User, Group, Pkt),
-  ChatState = groups_groups:group_is_active(Group),
-  if
-    UserStatus == restricted ->
-      {false, <<"You are not allowed to send such messages to this group.">>};
-    ChatState == inactive ->
-      {false, <<"Group is inactive.">>};
-    UserStatus == allowed andalso ChatState =/= inactive ->
-      true;
+  case has_nested_forwarded(Pkt) of
     true ->
-      {false, <<>>}
+      {denied, nested_forwarded,
+        <<"Forwarded messages cannot contain forwarded messages.">>};
+    false ->
+      case groups_groups:group_is_active(Group) of
+        inactive ->
+          {denied, inactive, <<"Group is inactive.">>};
+        _ ->
+          case check_permission_write(User, Group, Pkt) of
+            restricted ->
+              {denied, restricted,
+                <<"You are not allowed to send such messages to this group.">>};
+            allowed ->
+              allowed;
+            _ ->
+              {denied, notexist, <<>>}
+          end
+      end
+  end.
+
+denied_message_error(nested_forwarded, Why, Lang) ->
+  xmpp:err_not_acceptable(Why, Lang);
+denied_message_error(_Reason, Why, Lang) ->
+  xmpp:err_not_allowed(Why, Lang).
+
+has_nested_forwarded(Msg) ->
+  lists:any(fun reference_has_nested_forwarded/1, get_message_references(Msg)).
+
+reference_has_nested_forwarded(Reference) ->
+  case xmpp:get_subtag(Reference, #forwarded{}) of
+    #forwarded{sub_els = [ForwardedMsg]} ->
+      forwarded_message_has_forwarded(ForwardedMsg);
+    _ ->
+      false
+  end.
+
+forwarded_message_has_forwarded(#message{} = Msg) ->
+  message_has_forwarded(Msg);
+forwarded_message_has_forwarded(El) ->
+  try xmpp:decode(El) of
+    #message{} = Msg ->
+      message_has_forwarded(Msg);
+    _ ->
+      false
+  catch _:{xmpp_codec, _} ->
+    false
+  end.
+
+message_has_forwarded(Msg) ->
+  lists:any(fun(Reference) ->
+    xmpp:get_subtag(Reference, #forwarded{}) /= false
+  end, get_message_references(Msg)).
+
+get_message_references(Msg) ->
+  lists:filtermap(fun(El) ->
+    case decode_reference(El) of
+      {ok, Reference} ->
+        {true, Reference};
+      _ ->
+        false
+    end
+  end, xmpp:get_els(Msg)).
+
+decode_reference(#xmppreference{} = Ref) ->
+  {ok, Ref};
+decode_reference(El) ->
+  case {xmpp:get_name(El), xmpp:get_ns(El)} of
+    {<<"reference">>, ?NS_REFERENCES} ->
+      try xmpp:decode(El) of
+        #xmppreference{} = Ref ->
+          {ok, Ref};
+        _ ->
+          error
+      catch _:{xmpp_codec, _} ->
+        error
+      end;
+    _ ->
+      false
   end.
 
 -spec check_permission_write(binary(), binary(), xmlel()) -> allowed | restricted | notexist .
@@ -302,30 +364,6 @@ check_permission_write(User,Chat, Pkt) ->
       notexist
   end.
 
-get_displayed(Pkt, GroupJID) ->
-  case xmpp:get_subtag(Pkt, #mark_displayed{}) of
-    #mark_displayed{sub_els = Els} = D ->
-      NewEls = lists:filtermap(
-        fun(El) ->
-          Name = xmpp:get_name(El),
-          NS = xmpp:get_ns(El),
-          if (Name == <<"stanza-id">> andalso NS == ?NS_SID_0) ->
-            try xmpp:decode(El) of
-              #stanza_id{by = GroupJID} = SID ->
-                {true, SID};
-              _ -> false
-            catch _:{xmpp_codec, _} ->
-              false
-            end;
-            true ->
-              false
-          end
-        end, Els),
-      D#mark_displayed{sub_els = NewEls};
-    _ ->
-      false
-  end.
-
 get_present_type(Msg) ->
   lists:foldl(fun(CType, Result) ->
     case xmpp:get_subtag(Msg, #chatstate{type = CType}) of
@@ -333,15 +371,6 @@ get_present_type(Msg) ->
       _ when CType == active -> present;
       _ -> not_present
     end end, false, [active, gone, inactive]).
-
-get_stanza_id(Pkt, BareJID, LServer, OriginID) ->
-  case xmpp:get_subtag(Pkt, #stanza_id{}) of
-    #stanza_id{by = BareJID, id = StanzaID} ->
-      binary_to_integer(StanzaID);
-    _ ->
-      mod_unique:get_stanza_id_by_origin_id(LServer,
-        OriginID, BareJID#jid.luser)
-  end.
 
 re_sent_msg(#message{from = From, to = To, id = Id} = Pkt) ->
   {LP, Server, _} = jid:tolower(To),
@@ -470,7 +499,7 @@ send_received(Pkt, UserJID, GroupJID) ->
   #message{meta = #{stanza_id := StanzaID}, id = OriginID} = Pkt,
   Pkt2 = xmpp:set_from_to(Pkt, UserJID, GroupJID),
   Forwarded = #forwarded{sub_els = [Pkt2]},
-  set_displayed(GroupJID, UserJID, StanzaID, OriginID),
+  groups_displayed:cache_message(GroupJID, UserJID, StanzaID, OriginID),
   Received = #groups_x{sub_els = [Forwarded]},
   Confirmation = #message{
     from = GroupJID,
@@ -479,100 +508,135 @@ send_received(Pkt, UserJID, GroupJID) ->
     sub_els = [Received]},
   ejabberd_router:route(Confirmation).
 
-check_displayed(GroupJID, UserJID, StanzaID) ->
-  Group = jid:to_string(jid:remove_resource(GroupJID)),
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  Msgs = mnesia:dirty_read(groups_send_displayed, Group),
-  case lists:keyfind(StanzaID, #groups_send_displayed.stanza_id, Msgs) of
-    false -> ok;
-    #groups_send_displayed{user = Group} = Msg ->
-      Sorted = lists:reverse(lists:keysort(
-        #groups_send_displayed.stanza_id, Msgs)),
-      Msgs1 = [M || M <- Sorted,
-        M#groups_send_displayed.stanza_id < StanzaID],
-      case Msgs1 of
-        [] ->
-          mnesia:dirty_delete_object(Msg);
-        _ ->
-          LM = hd(Msgs1),
-          if
-            LM#groups_send_displayed.user == User ->
-              ok;
-            true ->
-              NewSID = LM#groups_send_displayed.stanza_id,
-              send_displayed(GroupJID, NewSID, Msgs1)
-          end
-      end;
-    _ ->
-      send_displayed(GroupJID, StanzaID, Msgs)
-  end.
+shift_references(Els, Offset) ->
+  lists:filtermap(fun(El) ->
+    case decode_reference(El) of
+      {ok, Ref} ->
+        {true, shift_reference(Ref, Offset)};
+      false ->
+        true;
+      error ->
+        false
+    end
+  end, Els).
 
-send_displayed(_GroupJID, _StanzaID, []) ->
-  ok;
-send_displayed(GroupJID, StanzaID, [Msg|Msgs]) ->
-  #groups_send_displayed{user = User, displayed = D,
-    stanza_id = SID} = Msg,
-  if
-    SID == StanzaID ->
-      mnesia:dirty_delete_object(Msg),
-      M = #message{type = chat, from = GroupJID,
-        to = jid:from_string(User), sub_els = [D],
-        id=randoms:get_string()},
-      ejabberd_router:route(M);
-    SID < StanzaID ->
-      mnesia:dirty_delete_object(Msg);
-    true ->
-      ok
-  end,
-  send_displayed(GroupJID, StanzaID, Msgs).
+shift_reference(#xmppreference{'begin' = undefined, 'end' = undefined} = Ref, _) ->
+  Ref;
+shift_reference(#xmppreference{'begin' = Begin, 'end' = End} = Ref, Offset) ->
+  Ref#xmppreference{'begin' = Begin + Offset, 'end' = End + Offset}.
 
-shift_references(Els, Length) ->
-  lists:filtermap(
-    fun(El) ->
-      Name = xmpp:get_name(El),
-      NS = xmpp:get_ns(El),
-      if (Name == <<"reference">> andalso NS == ?NS_REFERENCES) ->
-        try xmpp:decode(El) of
-          #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = undefined, 'end' = undefined, sub_els = Sub}};
-          #xmppreference{type = Type, 'begin' = Begin, 'end' = End, sub_els = Sub} ->
-            {true, #xmppreference{type = Type, 'begin' = Begin + Length, 'end' = End + Length, sub_els = Sub}}
-        catch _:{xmpp_codec, _} ->
-          false
-        end;
-        true ->
-          true
-      end
-    end, Els).
+%% Rate limit denied group messages per user/group pair.
 
-%% limit on the number of error messages per user of time
-
-send_not_allowed(UserJID, GroupJID, Message) ->
-  User = jid:to_string(jid:remove_resource(UserJID)),
-  Group = jid:to_string(jid:remove_resource(GroupJID)),
-  UG = <<User/binary,Group/binary>>,
-  Last = ets:lookup(groups_strangers, UG),
-  case Last of
-    [] ->
-      add_stranger(UG),
-      ejabberd_router:route(Message);
-    [Blocked] ->
-      check_and_send(Blocked, Message)
-  end.
-
-check_and_send({UG, UnbanTS}, Message) ->
+-spec denied_sender_is_banned(message()) -> boolean().
+denied_sender_is_banned(#message{} = Pkt) ->
+  Key = denied_sender_key(Pkt),
   Now = erlang:system_time(second),
-  if
-    UnbanTS =< Now ->
-      ejabberd_router:route(Message),
-      add_stranger(UG);
-    true ->
-      ok
+  case ets:info(?DENIED_SENDERS_TABLE) of
+    undefined ->
+      false;
+    _ ->
+      case ets:lookup(?DENIED_SENDERS_TABLE, Key) of
+        [{Key, _WindowStart, _Count, BannedUntil, _ExpireAt}]
+          when BannedUntil > Now ->
+          true;
+        [{Key, _WindowStart, _Count, _BannedUntil, ExpireAt}]
+          when ExpireAt =< Now ->
+          ets:delete(?DENIED_SENDERS_TABLE, Key),
+          false;
+        _ ->
+          false
+      end
   end.
 
-add_stranger(UG) ->
-  TS = erlang:system_time(second) + 60,
-  ets:insert(groups_strangers, {UG, TS}).
+-spec clear_denied_sender(jid() | binary(), jid() | binary()) -> ok.
+clear_denied_sender(UserJID, GroupJID) ->
+  case ets:info(?DENIED_SENDERS_TABLE) of
+    undefined ->
+      ok;
+    _ ->
+      ets:delete(?DENIED_SENDERS_TABLE,
+        {bare_jid_string(UserJID), bare_jid_string(GroupJID)})
+  end,
+  ok.
+
+clear_denied_sender_on_join(Acc, {_Server, UserJID, Group}) ->
+  clear_denied_sender(UserJID, Group),
+  Acc.
+
+denied_sender_key(#message{from = From, to = To}) ->
+  {bare_jid_string(From), bare_jid_string(To)}.
+
+bare_jid_string(#jid{} = JID) ->
+  jid:to_string(jid:remove_resource(JID));
+bare_jid_string(JID) when is_binary(JID) ->
+  jid:to_string(jid:remove_resource(jid:from_string(JID))).
+
+denied_messages_limit(#message{to = To}) ->
+  mod_groups:get_option(To#jid.lserver, denied_messages_limit).
+
+-spec register_denied_message(message(), denied_message_reason()) ->
+  denied_message_action().
+register_denied_message(#message{} = Pkt, Reason) ->
+  Key = denied_sender_key(Pkt),
+  Now = erlang:system_time(second),
+  {Limit, Window, BanLifetime} = denied_messages_limit(Pkt),
+  register_denied_message(Key, Reason, Now, Limit, Window, BanLifetime).
+
+register_denied_message(Key, Reason, Now, Limit, Window, BanLifetime) ->
+  case ets:lookup(?DENIED_SENDERS_TABLE, Key) of
+    [] ->
+      insert_denied_window(Key, Now, Window, 1),
+      reply;
+    [{Key, _WindowStart, _Count, BannedUntil, _ExpireAt}]
+      when BannedUntil > Now ->
+      drop;
+    [{Key, _WindowStart, _Count, _BannedUntil, ExpireAt}]
+      when ExpireAt =< Now ->
+      insert_denied_window(Key, Now, Window, 1),
+      reply;
+    [{Key, WindowStart, _Count, _BannedUntil, _ExpireAt}]
+      when WindowStart + Window =< Now ->
+      insert_denied_window(Key, Now, Window, 1),
+      reply;
+    [{Key, WindowStart, Count, _BannedUntil, _ExpireAt}] ->
+      NewCount = Count + 1,
+      case NewCount > Limit of
+        true ->
+          block_denied_sender(Key, Reason, Now, WindowStart,
+            Window, BanLifetime, NewCount);
+        false ->
+          insert_denied_window(Key, WindowStart, Window, NewCount),
+          reply
+      end
+  end.
+
+insert_denied_window(Key, WindowStart, Window, Count) ->
+  ets:insert(?DENIED_SENDERS_TABLE,
+    {Key, WindowStart, Count, 0, WindowStart + Window}).
+
+block_denied_sender(Key, notexist, Now, _WindowStart,
+    _Window, BanLifetime, Count) ->
+  ban_denied_sender(Key, notexist, Now, BanLifetime, Count),
+  ban_and_drop;
+block_denied_sender(Key, _Reason, _Now, WindowStart,
+    Window, _BanLifetime, Count) ->
+  insert_denied_window(Key, WindowStart, Window, Count),
+  drop.
+
+ban_denied_sender({User, Group} = Key, Reason, Now, BanLifetime, Count) ->
+  BannedUntil = Now + BanLifetime,
+  ?INFO_MSG("Temporarily blocked denied group message sender ~p "
+    "for group ~p for ~p seconds after ~p denied messages; reason: ~p",
+    [User, Group, BanLifetime, Count, Reason]),
+  ets:insert(?DENIED_SENDERS_TABLE,
+    {Key, Now, Count, BannedUntil, BannedUntil}).
+
+clean_denied_senders(Now) ->
+  ?DEBUG("cleaning ~p ETS table", [?DENIED_SENDERS_TABLE]),
+  ets:select_delete(
+    ?DENIED_SENDERS_TABLE,
+    ets:fun2ms(fun({_, _, _, _, ExpireAt}) -> ExpireAt =< Now end)).
+
 
 %%%===================================================================
 %%% present functions
@@ -697,4 +761,3 @@ kill_zombies() ->
        end,
   mnesia:transaction(FN),
   ok.
-

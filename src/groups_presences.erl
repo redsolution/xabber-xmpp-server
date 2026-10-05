@@ -174,9 +174,14 @@ answer_presence(#presence{type = available,
       %% Thr user account became the group account
       process_unsubscribe(UserJID, GroupJID, unsubscribe);
     false ->
-      case groups_members:check_if_exist(Server, Group, User) of
-        true -> process_available(UserJID, GroupJID, Decoded);
-        _ -> ok
+      case groups_members:user_subscription(Server, User, Group) of
+        <<"both">> ->
+          process_available(UserJID, GroupJID, Decoded);
+        <<"none">> ->
+          %% This state is kept for former members.
+          send_unsubscribe_presence(UserJID, GroupJID);
+        _ ->
+          ok
       end
   end;
 answer_presence(#presence{type = subscribe,
@@ -300,6 +305,15 @@ process_unsubscribe(UserJID, GroupJID, Type)->
       ejabberd_router:route(GroupFJID, UserJID, #presence{type = unsubscribed,
         id = randoms:get_string()})
   end,
+  ejabberd_router:route(GroupFJID, UserJID, #presence{type = unavailable,
+    id = randoms:get_string()}).
+
+send_unsubscribe_presence(UserJID, GroupJID) ->
+  GroupFJID = jid:replace_resource(GroupJID,<<"Group">>),
+  ejabberd_router:route(GroupFJID, UserJID, #presence{type = unsubscribed,
+    id = randoms:get_string()}),
+  ejabberd_router:route(GroupFJID, UserJID, #presence{type = unsubscribe,
+    id = randoms:get_string()}),
   ejabberd_router:route(GroupFJID, UserJID, #presence{type = unavailable,
     id = randoms:get_string()}).
 

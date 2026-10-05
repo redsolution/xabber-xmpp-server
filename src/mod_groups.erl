@@ -64,7 +64,8 @@ mod_options(_Host) ->
 %%    {session_lifetime, 45},
     {remove_empty, true},
     {global_indexs, []},
-    {avatar_max_size, 524288}
+    {avatar_max_size, 524288},
+    {denied_messages_limit, "5/10:60"}
   ].
 
 %%mod_opt_type(session_lifetime) ->
@@ -75,7 +76,23 @@ mod_opt_type(remove_empty) ->
 mod_opt_type(global_indexs) ->
   fun (L) -> lists:map(fun iolist_to_binary/1, L) end;
 mod_opt_type(avatar_max_size) ->
-  fun (A) when is_integer(A) andalso A >= 0 -> A end.
+  fun (A) when is_integer(A) andalso A >= 0 -> A end;
+mod_opt_type(denied_messages_limit) ->
+  fun parse_denied_messages_limit/1.
+
+parse_denied_messages_limit(Value) when is_list(Value) ->
+  case re:run(Value,
+    "^([1-9][0-9]*)/([1-9][0-9]*):([1-9][0-9]*)$",
+    [{capture, all_but_first, list}]) of
+    {match, [Limit, Window, BanLifetime]} ->
+      {list_to_integer(Limit),
+        list_to_integer(Window),
+        list_to_integer(BanLifetime)};
+    nomatch ->
+      erlang:error(badarg)
+  end;
+parse_denied_messages_limit(_) ->
+  erlang:error(badarg).
 
 %% Internal
 start_module(Host, Module) ->

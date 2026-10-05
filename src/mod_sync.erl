@@ -47,41 +47,18 @@
 
 %% hooks
 -export([c2s_stream_features/2, sm_receive_packet/1, user_send_packet/1,
-  process_messages/0, remove_user/2]).
+  process_messages/0, remove_user/2, roster_in_subscription/2]).
 
 %% iq
 -export([process_iq/1]).
-
-% syncronization_query hook
--export([create_synchronization_metadata/12]).
 -type c2s_state() :: ejabberd_c2s:state().
 
 % API
--export([is_muted/3, is_muted/4]).
+-export([is_muted/3, is_muted/4, migrate_external_group_message_meta/1]).
 
 %% records
 -record(state, {
-  host = <<"">> :: binary(),
-  eg_last_message=[] :: list(),
-  eg_last_retract=[] :: list()
-}).
-
--record(external_group_last_msg,
-{
-  group = {<<"">>, <<"">>}             :: {binary(), binary()} | '_',
-  id = <<>>                            :: binary() | '_',
-  user_id = <<>>                       :: binary() | '_',
-  packet = <<>>                        :: binary() | xmlel() | message() | '_',
-  retract_version = <<>>               :: binary() | '_'
-}
-).
-
--record(external_group_msgs,
-{
-  group_sid = {{<<"">>, <<"">>}, <<"">>}  :: {{binary(), binary()}, binary()} | '_',
-  uid = <<>>                              :: binary() | '_',
-  ts = <<>>                               :: binary() | '_',
-  deleted = false                         :: boolean() | '_'
+  host = <<"">> :: binary()
 }).
 
 -type(us_peer() ::{{binary(), binary()}, {binary(), binary()}}).
@@ -95,8 +72,8 @@
 }
 ).
 
--define(TABLE_SIZE_LIMIT, 2000000000). % A bit less than 2 GiB.
 -define(NS_OMEMO, <<"urn:xmpp:omemo:2">>).
+-define(TABLE_SIZE_LIMIT, 2000000000). % A bit less than 2 GiB.
 -define(AUTO_CLEAN_INTERVAL, 43200000). % 12 hours
 
 %%--------------------------------------------------------------------
@@ -135,15 +112,7 @@ init([Host, _Opts]) ->
     [{disc_only_copies, [node()]},
       {type, set},
       {attributes, record_info(fields, sync_data)}]),
-  ejabberd_mnesia:create(?MODULE, external_group_last_msg,
-    [{disc_only_copies, [node()]},
-      {type, set},
-      {attributes, record_info(fields, external_group_last_msg)}]),
-  ejabberd_mnesia:create(?MODULE, external_group_msgs,
-    [{disc_only_copies, [node()]},
-      {type, set},
-      {attributes, record_info(fields, external_group_msgs)}]),
-  migrate(),
+  sync_external_groups:init_tables(),
   register_iq_handlers(Host),
   register_hooks(Host),
   erlang:send_after(?AUTO_CLEAN_INTERVAL + rand:uniform(10) * 3600000,
@@ -159,53 +128,24 @@ handle_call(_Request, _From, State) ->
   Reply = ok,
   {reply, Reply, State}.
 
-handle_cast({eg_save_message, Record , TS},
-    #state{eg_last_message = Acc} = State) ->
-%% Acc stores last N saved messages
-%% to prevent overwrites in the database of the same message
-  #external_group_last_msg{group = {GUser, GServer},id = StanzaID,
-    user_id = UserID} = Record,
-  Group_SID = {{GUser, GServer}, StanzaID},
-  Acc1 = case lists:member(Group_SID, Acc) of
-           true -> Acc;
-           _ ->
-             eg_store_last_msg(Record),
-             eg_store_message1(Group_SID, UserID, TS),
-             save_last_action(Acc, Group_SID)
-          end,
-  {noreply, State#state{eg_last_message = Acc1}};
-handle_cast({eg_change_last_message, Group, Replace},
-    #state{eg_last_retract = Acc} = State)->
-  ID = Replace#replace.id,
-  Ver = integer_to_binary(Replace#replace.version),
-  Acc1 = case lists:member({Group, ID, Ver}, Acc) of
-           true -> Acc;
-           _->
-             case eg_select_last_msg(Group) of
-               #external_group_last_msg{retract_version = Ver, id = ID} ->
-                 ok;
-               #external_group_last_msg{id = ID} = Record ->
-                 eg_change_last_msg(Replace, Record);
-               _ ->
-                 ok
-             end,
-             save_last_action(Acc, {Group, ID, Ver})
-         end,
-  {noreply, State#state{eg_last_retract = Acc1}};
-handle_cast({eg_delete_msg, _, <<>>, <<>>, _}, State) ->
+handle_cast({external_group, save_message, Group, StanzaID, Packet, TS},
+    #state{host = LServer} = State) ->
+  sync_external_groups:store_message(
+    LServer, Group, StanzaID, Packet, TS),
   {noreply, State};
-handle_cast({eg_delete_msg, Group, ID, <<>>, Ver},
-    #state{eg_last_retract = Acc} = State) ->
-  Acc1 = eg_remove_message(Acc, Group, ID, <<>>, Ver),
-  {noreply,  State#state{eg_last_retract = Acc1}};
-handle_cast({eg_delete_msg, Group, <<>>, UserID, Ver},
-    #state{eg_last_retract = Acc} = State) ->
-  Acc1 = eg_remove_message(Acc, Group, <<>>, UserID, Ver),
-  {noreply, State#state{eg_last_retract = Acc1}};
-handle_cast({eg_delete_msg, Group, all, all, Ver},
-    #state{eg_last_retract = Acc} = State) ->
-  Acc1 = eg_remove_message(Acc, Group, all, all, Ver),
-  {noreply, State#state{eg_last_retract = Acc1}};
+handle_cast({external_group, change_last_message, Group, Replace}, State)->
+  sync_external_groups:change_last_message(Group, Replace),
+  {noreply, State};
+handle_cast({external_group, delete_message, Group, StanzaID, UserID, Ver},
+    #state{host = LServer} = State) ->
+  sync_external_groups:delete_message(
+    LServer, Group, StanzaID, UserID, Ver),
+  {noreply, State};
+handle_cast({external_group, cleanup_cache, Conversation, Group},
+    #state{host = LServer} = State) ->
+  sync_external_groups:cleanup_if_unused(
+    LServer, Conversation, Group),
+  {noreply, State};
 handle_cast({send_push, LUser, LServer, PushType, PushPayload}, State) ->
   ejabberd_hooks:run(xabber_push_notification,
     LServer, [PushType, LUser,LServer, PushPayload]),
@@ -250,25 +190,7 @@ handle_cast({user_send, #presence{type = unsubscribed,
   {LUser, LServer,_} = jid:tolower(From),
   maybe_delete_invite_or_presence(LUser, LServer, To),
   {noreply, State};
-handle_cast({sm, #presence{type = subscribe,from = From,
-  to = #jid{lserver = LServer, luser = LUser}} = Presence},State) ->
-  case mod_xabber_entity:is_group(LUser, LServer) of
-    false ->
-      Type =
-        case xmpp:get_subtag(Presence, #groups_group{}) of
-          false ->
-            maybe_push_notification(LUser, LServer,
-              jid:to_string(jid:remove_resource(From)), ?NS_XABBER_CHAT,
-              <<"subscribe">>, #presence{type = subscribe, from = From}),
-            ?NS_XABBER_CHAT;
-          _ ->
-            ?NS_GROUPS
-        end,
-      Conversation = jid:to_string(jid:remove_resource(From)),
-      create_conversation(LServer, LUser, Conversation, <<"">>, false, Type);
-    _ ->
-      ok
-  end,
+handle_cast({sm, #presence{type = subscribe}}, State) ->
   {noreply, State};
 handle_cast({sm, #presence{type = unsubscribe,from = From, to = To}},State) ->
   {LUser, LServer,_} = jid:tolower(To),
@@ -283,7 +205,7 @@ handle_cast(_Msg, State) ->
   {noreply, State}.
 
 handle_info({'delete_read_messages', Host}, State) ->
-  eg_delete_read_messages(Host),
+  sync_external_groups:delete_read_messages(Host),
   erlang:send_after(?AUTO_CLEAN_INTERVAL + rand:uniform(10) * 3600000,
     self(), {'delete_read_messages', Host}),
   {noreply, State};
@@ -297,24 +219,24 @@ code_change(_OldVsn, State, _Extra) ->
 %% Hooks handlers.
 %%--------------------------------------------------------------------
 register_hooks(Host) ->
-  ejabberd_hooks:add(syncronization_query, Host, ?MODULE,
-    create_synchronization_metadata, 60),
   ejabberd_hooks:add(user_send_packet, Host, ?MODULE,
     user_send_packet, 101),
   ejabberd_hooks:add(sm_receive_packet, Host, ?MODULE,
     sm_receive_packet, 55),
+  ejabberd_hooks:add(roster_in_subscription, Host, ?MODULE,
+    roster_in_subscription, 60),
   ejabberd_hooks:add(c2s_post_auth_features, Host, ?MODULE,
     c2s_stream_features, 50),
   ejabberd_hooks:add(remove_user, Host, ?MODULE,
     remove_user, 60).
 
 unregister_hooks(Host) ->
-  ejabberd_hooks:delete(syncronization_query, Host, ?MODULE,
-    create_synchronization_metadata, 60),
   ejabberd_hooks:delete(user_send_packet, Host, ?MODULE,
     user_send_packet, 101),
   ejabberd_hooks:delete(sm_receive_packet, Host, ?MODULE,
     sm_receive_packet, 55),
+  ejabberd_hooks:delete(roster_in_subscription, Host, ?MODULE,
+    roster_in_subscription, 60),
   ejabberd_hooks:delete(c2s_post_auth_features, Host, ?MODULE,
     c2s_stream_features, 50),
   ejabberd_hooks:delete(remove_user, Host, ?MODULE,
@@ -333,11 +255,43 @@ sm_receive_packet(#message{to = #jid{luser = LUser, lserver = LServer}} = Pkt) -
   Proc = get_subprocess(LUser,LServer),
   Proc ! {in, Pkt},
   Pkt;
+%% Incoming subscribe is handled via roster_in_subscription so online and
+%% offline requests update sync conversations through the same roster state.
+sm_receive_packet(#presence{type = subscribe} = Pkt) ->
+  Pkt;
 sm_receive_packet(#presence{to = #jid{lserver = LServer}} = Pkt) ->
   send_cast(LServer, {sm,Pkt}),
   Pkt;
 sm_receive_packet(Acc) ->
   Acc.
+
+-spec roster_in_subscription(boolean(), presence()) -> boolean().
+roster_in_subscription(true = Acc, #presence{type = subscribe} = Presence) ->
+  process_subscription_request(Presence),
+  Acc;
+roster_in_subscription(Acc, _Presence) ->
+  Acc.
+
+-spec process_subscription_request(presence()) -> ok.
+process_subscription_request(#presence{from = From,
+  to = #jid{lserver = LServer, luser = LUser}} = Presence) ->
+  case mod_xabber_entity:is_group(LUser, LServer) of
+    false ->
+      Type =
+        case xmpp:get_subtag(Presence, #groups_group{}) of
+          false ->
+            maybe_push_notification(LUser, LServer,
+              jid:to_string(jid:remove_resource(From)), ?NS_XABBER_CHAT,
+              <<"subscribe">>, #presence{type = subscribe, from = From}),
+            ?NS_XABBER_CHAT;
+          _ ->
+            ?NS_GROUPS
+        end,
+      Conversation = jid:to_string(jid:remove_resource(From)),
+      create_conversation(LServer, LUser, Conversation, <<"">>, false, Type);
+    _ ->
+      ok
+  end.
 
 -spec user_send_packet({stanza(), c2s_state()})
       -> {stanza(), c2s_state()}.
@@ -451,175 +405,198 @@ process_message(in, #message{meta = #{from_offline := true}}) ->
 process_message(in, #message{to = #jid{luser = LUser, lserver = LServer},
   from = #jid{luser = <<>>, lresource = <<>>, lserver = PDomain},
   body = Body, meta = #{stanza_id := TS}} = Pkt) ->
+  handle_incoming_domain_message(LServer, LUser, PDomain, Body, TS, Pkt);
+process_message(in, #message{type = Type, body = [], from = From,
+  to = To} = Pkt) ->
+  handle_control_message(in, Type, From, To, Pkt);
+process_message(in, #message{type = chat, from = Peer, to = To,
+  meta = #{stanza_id := TS}} = Pkt) ->
+  handle_incoming_chat_message(Peer, To, TS, Pkt);
+%%process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
+%%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
+%%  handle_control_sub_el(headline,DecSubEls,From,To);
+process_message(out, #message{from = #jid{luser =  LUser, lserver = LServer},
+  to = #jid{luser = <<>>, lserver = PDomain, lresource = <<>>},
+  meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
+  handle_outgoing_domain_message(LServer, LUser, PDomain, StanzaID, Pkt);
+process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
+  to = To, meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
+  handle_outgoing_archived_message(LServer, LUser, To, StanzaID, Pkt);
+process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
+  to = #jid{luser =  PUser,lserver = PServer}} = Pkt) ->
+  handle_outgoing_chat_control_message(LServer, LUser, PUser, PServer, Pkt);
+process_message(_Direction,_Pkt) ->
+  ok.
+
+handle_incoming_chat_message(Peer, To, TS, Pkt) ->
+  {LUser, LServer, _ } = jid:tolower(To),
+  {PUser, PServer, _} = jid:tolower(Peer),
+  Conversation = jid:to_string(jid:make(PUser,PServer)),
+  Invite = xmpp:get_subtag(Pkt, #groups_invite{}),
+  IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
+  Type = packet_conversation_type(Pkt, ?NS_XABBER_CHAT),
+  if
+    Invite  =/= false ->
+      handle_incoming_group_invite(
+        LServer, LUser, To, Conversation, Invite, TS);
+    Type == ?NS_GROUPS ->
+      handle_incoming_group_message(
+        LServer, LUser, PUser, PServer, Peer, Conversation, IsLocal, Pkt);
+    true ->
+      handle_incoming_regular_message(
+        LServer, LUser, To, Conversation, Type, TS, Pkt)
+  end.
+
+handle_incoming_domain_message(LServer, LUser, PDomain, Body, TS, Pkt) ->
   ShouldArchive = (xmpp:has_subtag(Pkt, #hint{type = 'store'}) orelse
   xmpp:get_text(Body) /= <<>>),
   if
     ShouldArchive ->
-      CType = case xmpp:get_meta(Pkt, conversation_type, undefined) of
-                undefined -> not_encrypted;
-                T -> T
-              end,
+      CType = packet_conversation_type(Pkt, not_encrypted),
       maybe_push_notification(LUser, LServer, PDomain, CType,
         <<"message">>, #stanza_id{id = integer_to_binary(TS),
           by = jid:make(LUser, LServer)}),
       update_metainfo(LServer, LUser, PDomain, CType);
     true ->
       ok
-  end;
-process_message(in, #message{type = Type, body = [], from = From, to = To,
-  sub_els = SubEls} = Pkt) ->
-  case check_voip_msg(in, Pkt) of
-    true -> ok;
-    _ ->
-      lists:foreach(fun(El)->
-        try xmpp:decode(El) of
-          R ->  handle_sub_els(Type, R, From, To)
-        catch _:_ -> ok
-        end end, SubEls)
-  end;
-process_message(in, #message{type = chat, from = Peer, to = To,
-  meta = #{stanza_id := TS}} = Pkt) ->
-  {LUser, LServer, _ } = jid:tolower(To),
-  {PUser, PServer, _} = jid:tolower(Peer),
-  Conversation = jid:to_string(jid:make(PUser,PServer)),
-  Invite = xmpp:get_subtag(Pkt, #groups_invite{}),
-  IsLocal = lists:member(PServer,ejabberd_config:get_myhosts()),
-  Type = case xmpp:get_meta(Pkt, conversation_type, undefined) of
-            undefined -> ?NS_XABBER_CHAT;
-            T -> T
-          end,
-  if
-    Invite  =/= false ->
-      #groups_invite{jid = GroupJID} = Invite,
-      case GroupJID of
-        undefined ->
-          %% Bad invite
-          ok;
-        _ ->
-          Group = jid:to_string(jid:remove_resource(GroupJID)),
-          store_invite(LUser, LServer, GroupJID, integer_to_binary(TS)),
-          create_conversation(LServer,LUser, Group, <<>>, false, ?NS_GROUPS),
-          maybe_push_notification(LUser ,LServer, Conversation, ?NS_XABBER_CHAT,
-            <<"message">>, #stanza_id{id = integer_to_binary(TS),
-              by = jid:remove_resource(To)})
-      end;
-    Type == ?NS_GROUPS ->
-      FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
-      StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
-      UTime = xmpp:get_subtag(FilPacket, #delivery_time{}),
-      if
-        %% Bad message
-        StanzaID == false; UTime == false -> ok;
-        true ->
-          SID = StanzaID#stanza_id.id,
-          case IsLocal of
-            false ->
-              MsgTS = misc:now_to_usec(UTime#delivery_time.stamp),
-              LastMsg = #external_group_last_msg{group = {PUser, PServer},id = SID,
-                user_id =get_user_id(Pkt), packet = Pkt, retract_version = <<>> },
-              eg_store_message(LServer, LastMsg, MsgTS);
-            _ ->
-              ok
-          end,
-          update_metainfo(LServer,LUser,Conversation, Type),
-          maybe_push_notification(LUser, LServer, Conversation,
-            Type, <<"message">>, StanzaID)
-      end;
-    true ->
-      case check_voip_msg(in, Pkt) of
-        false ->
-          maybe_push_notification(LUser, LServer, Conversation, Type,
-            <<"message">>,#stanza_id{id = integer_to_binary(TS),
-              by = jid:remove_resource(To)}),
-          update_metainfo(LServer, LUser, Conversation, Type);
-        _ ->
-          ok
-      end
-  end;
-%%process_message(in, #message{type = headline, body = [], from = From, to = To, sub_els = SubEls})->
-%%  DecSubEls = lists:map(fun(El) -> xmpp:decode(El) end, SubEls),
-%%  handle_sub_els(headline,DecSubEls,From,To);
-process_message(out, #message{from = #jid{luser =  LUser, lserver = LServer},
-  to = #jid{luser = <<>>, lserver = PDomain, lresource = <<>>},
-  meta = #{stanza_id := StanzaID, mam_archived := true} = Meta})->
-  CType = case maps:get(conversation_type, Meta, undefined) of
-            undefined -> not_encrypted;
-            T -> T
-          end,
+  end.
+
+handle_outgoing_domain_message(LServer, LUser, PDomain, StanzaID, Pkt) ->
+  CType = packet_conversation_type(Pkt, not_encrypted),
   update_metainfo(LServer, LUser, PDomain, CType, [{read, StanzaID}]),
   maybe_push_notification(LUser,LServer,<<"outgoing">>,
     #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LUser, LServer)}),
-  ok;
-process_message(out, #message{from = #jid{luser =  LUser,lserver = LServer},
-  to = To, meta = #{stanza_id := StanzaID, mam_archived := true}} = Pkt)->
+  ok.
+
+handle_outgoing_archived_message(LServer, LUser, To, StanzaID, Pkt) ->
   %% Messages for groups should not get here,
   %% because the archive for them should be disabled.
   %% But if this happens, only "metadata_updated_at" will be updated.
-  case check_voip_msg(out, Pkt) of
-    true -> ok;
-    _ ->
+  case handle_call_message(out, Pkt) of
+    handled -> ok;
+    pass ->
       Conversation = jid:to_string(jid:remove_resource(To)),
-      Type = case xmpp:get_meta(Pkt, conversation_type, undefined) of
-                undefined -> not_encrypted;
-                T -> T
-              end,
+      Type = packet_conversation_type(Pkt, not_encrypted),
       update_metainfo(LServer, LUser, Conversation, Type, [{read, StanzaID}]),
       maybe_push_notification(LUser,LServer,<<"outgoing">>,
         #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LUser, LServer)})
-  end;
-process_message(out, #message{type = chat, from = #jid{luser =  LUser,lserver = LServer},
-  to = #jid{luser =  PUser,lserver = PServer}} = Pkt) ->
-  case check_voip_msg(out, Pkt) of
-    true -> ok;
-    _ ->
-    Displayed = xmpp:get_subtag(Pkt, #mark_displayed{}),
-    Conversation = jid:to_string(jid:make(PUser,PServer)),
-    Type = case get_conversation_type(LServer,LUser,Conversation) of
-             [T] -> T;
-             _ -> undefined
-           end,
+  end.
 
-    case Displayed of
-      #mark_displayed{id = _OriginID} when Type == ?NS_GROUPS ->
-        FilPacket = filter_packet(Displayed,jid:make(PUser,PServer)),
-        StanzaID = case xmpp:get_subtag(FilPacket, #stanza_id{}) of
-                     #stanza_id{id = SID} -> SID;
-                     _ ->
-                       %% for legacy or bad clients
-                       {V, _} = get_group_last_message_id_ts(PUser, PServer),
-                       V
-                   end,
-        case is_local(PServer) of
-          true ->
-            update_metainfo(read, LServer,LUser,Conversation,
-              StanzaID,Type,StanzaID);
-          _ ->
-            MsgTS = eg_get_message_ts(PUser, PServer, StanzaID),
-            update_metainfo(read, LServer,LUser,Conversation,
-              StanzaID,Type,MsgTS)
-        end,
-        maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed);
-      #mark_displayed{id = OriginID} ->
-        BareJID = jid:make(LUser,LServer),
-        Displayed2 = filter_packet(Displayed,BareJID),
-        StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
-        Type1 = case Type of
-                  undefined ->
-                    case mod_mam_sql:is_encrypted(LServer,StanzaID) of
-                      {true, NS} -> NS;
-                      _-> ?NS_XABBER_CHAT
-                    end;
-                  _-> Type
-                end,
-        update_metainfo(read, LServer,LUser,Conversation,
-          StanzaID,Type1,StanzaID),
-        maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed);
-      _ ->
-        ok
-    end
-  end;
-process_message(_Direction,_Pkt) ->
-  ok.
+handle_outgoing_chat_control_message(LServer, LUser, PUser, PServer, Pkt) ->
+  case handle_call_message(out, Pkt) of
+    handled -> ok;
+    pass ->
+      Displayed = xmpp:get_subtag(Pkt, #mark_displayed{}),
+      Conversation = jid:to_string(jid:make(PUser,PServer)),
+      Type = get_preferred_conversation_type(LServer, LUser, Conversation),
+
+      case Displayed of
+        #mark_displayed{id = _OriginID} when Type == ?NS_GROUPS ->
+          handle_outgoing_group_displayed_marker(
+            LServer, LUser, PUser, PServer, Conversation, Displayed);
+        #mark_displayed{id = OriginID} ->
+          handle_outgoing_chat_displayed_marker(
+            LServer, LUser, Conversation, Type, Displayed, OriginID);
+        _ ->
+          ok
+      end
+  end.
+
+handle_outgoing_group_displayed_marker(LServer, LUser, PUser, PServer,
+    Conversation, Displayed) ->
+  FilPacket = filter_packet(Displayed,jid:make(PUser,PServer)),
+  StanzaID = case xmpp:get_subtag(FilPacket, #stanza_id{}) of
+               #stanza_id{id = SID} -> SID;
+               _ ->
+                 %% for legacy or bad clients
+                 {V, _} =
+                   get_group_last_message_id_ts(LServer, PUser, PServer),
+                 V
+             end,
+  case is_local(PServer) of
+    true ->
+      update_metainfo(read, LServer,LUser,Conversation,
+        StanzaID,?NS_GROUPS,StanzaID);
+    _ ->
+      MsgTS = get_external_group_message_ts(
+        LServer, PUser, PServer, StanzaID),
+      update_metainfo(read, LServer,LUser,Conversation,
+        StanzaID,?NS_GROUPS,MsgTS)
+  end,
+  maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed).
+
+handle_outgoing_chat_displayed_marker(LServer, LUser, Conversation, Type,
+    Displayed, OriginID) ->
+  BareJID = jid:make(LUser,LServer),
+  Displayed2 = filter_packet(Displayed,BareJID),
+  StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
+  Type1 = case Type of
+            undefined ->
+              case mod_mam_sql:is_encrypted(LServer,StanzaID) of
+                {true, NS} -> NS;
+                _-> ?NS_XABBER_CHAT
+              end;
+            _-> Type
+          end,
+  update_metainfo(read, LServer,LUser,Conversation,
+    StanzaID,Type1,StanzaID),
+  maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed).
+
+handle_incoming_group_invite(LServer, LUser, To, Conversation,
+    #groups_invite{jid = GroupJID}, TS) ->
+  case GroupJID of
+    undefined ->
+      %% Bad invite
+      ok;
+    _ ->
+      Group = jid:to_string(jid:remove_resource(GroupJID)),
+      store_invite(LUser, LServer, GroupJID, integer_to_binary(TS)),
+      create_conversation(LServer,LUser, Group, <<>>, false, ?NS_GROUPS),
+      maybe_push_notification(LUser ,LServer, Conversation, ?NS_XABBER_CHAT,
+        <<"message">>, #stanza_id{id = integer_to_binary(TS),
+          by = jid:remove_resource(To)})
+  end.
+
+handle_incoming_group_message(LServer, LUser, PUser, PServer, Peer,
+    Conversation, IsLocal, Pkt) ->
+  FilPacket = filter_packet(Pkt,jid:remove_resource(Peer)),
+  StanzaID = xmpp:get_subtag(FilPacket, #stanza_id{}),
+  UTime = xmpp:get_subtag(FilPacket, #delivery_time{}),
+  if
+    %% Bad message
+    StanzaID == false; UTime == false -> ok;
+    true ->
+      SID = StanzaID#stanza_id.id,
+      case IsLocal of
+        false ->
+          MsgTS = misc:now_to_usec(UTime#delivery_time.stamp),
+          store_external_group_message(
+            LServer, {PUser, PServer}, SID, Pkt, MsgTS);
+        _ ->
+          ok
+      end,
+      update_metainfo(LServer,LUser,Conversation, ?NS_GROUPS),
+      maybe_push_notification(LUser, LServer, Conversation,
+        ?NS_GROUPS, <<"message">>, StanzaID)
+  end.
+
+handle_incoming_regular_message(LServer, LUser, To, Conversation, Type, TS,
+    Pkt) ->
+  case handle_call_message(in, Pkt) of
+    pass ->
+      maybe_push_notification(LUser, LServer, Conversation, Type,
+        <<"message">>,#stanza_id{id = integer_to_binary(TS),
+          by = jid:remove_resource(To)}),
+      update_metainfo(LServer, LUser, Conversation, Type);
+    handled ->
+      ok
+  end.
+
+packet_conversation_type(Pkt, Default) ->
+  case xmpp:get_meta(Pkt, conversation_type, undefined) of
+    undefined -> Default;
+    Type -> Type
+  end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -647,7 +624,9 @@ get_conversation_info(LServer, LUser, Conversation, Type) ->
       {error, notfound};
     {selected, _, [Res]} ->
       [ConvRes] = convert_result([Res]),
-      make_result_el(LServer, LUser, ConvRes);
+      Roster = mod_roster:get_roster(LUser, LServer),
+      MetadataMap = make_metadata_map(LServer, LUser, [ConvRes], Roster),
+      make_result_el_from_metadata(LServer, LUser, ConvRes, MetadataMap);
     _ ->
       {error, internal}
   end.
@@ -682,10 +661,38 @@ make_result(User, Server, LastStamp, Stamp, RSM, Form) ->
   {selected, _, [[CountBinary]]} = ejabberd_sql:sql_query(Server, QueryCount),
   Count = binary_to_integer(CountBinary),
   ConvRes = convert_result(Res),
-  Presences = get_pending_subscriptions(User, Server),
+  Roster = mod_roster:get_roster(User, Server),
+  Presences = get_pending_subscriptions(User, Server, Roster),
+  make_result_with_metadata(User, Server, LastStamp, RSM, ConvRes,
+    Presences, Count, Roster).
+
+convert_result(Result) ->
+  lists:map(fun(El) ->
+    [Conversation,Retract,Type,Thread,
+      Read,ReadTS,Delivered,Display,UpdateAt,
+      Status,Encrypted, Pinned,Mute] = El,
+    {Conversation,binary_to_integer(Retract),Type,Thread,
+      Read,ReadTS,Delivered,Display,binary_to_integer(UpdateAt),
+      binary_to_atom(Status,utf8),ejabberd_sql:to_bool(Encrypted),
+      Pinned,binary_to_integer(Mute)} end, Result).
+
+make_result_with_metadata(User, Server, LastStamp, RSM, ConvRes,
+    Presences, Count, Roster) ->
+  MetadataMap = make_metadata_map(Server, User, ConvRes, Roster),
+  make_result_from_metadata(User, Server, LastStamp, RSM, ConvRes,
+    Presences, Count, MetadataMap).
+
+make_metadata_map(Server, User, ConvRes, Roster) ->
+  StatusMap = get_group_statuses(Server, User, ConvRes, Roster),
+  CountMap = get_unread_counts(Server, User, ConvRes, StatusMap),
+  LastMap = get_last_messages(Server, User, ConvRes, StatusMap),
+  maps:merge(maps:merge(StatusMap, CountMap), LastMap).
+
+make_result_from_metadata(User, Server, LastStamp, RSM, ConvRes,
+    Presences, Count, MetadataMap) ->
   ReplacedConv = lists:map(
     fun(El) ->
-      C = make_result_el(Server, User, El),
+      C = make_result_el_from_metadata(Server, User, El, MetadataMap),
       case lists:keyfind(C#sync_conversation.jid,
         #presence.from, Presences) of
         false -> C;
@@ -709,23 +716,13 @@ make_result(User, Server, LastStamp, Stamp, RSM, Form) ->
   #sync_query{sub_els = ReplacedConv,
     stamp = LastStamp, rsm = ResRSM}.
 
-convert_result(Result) ->
-  lists:map(fun(El) ->
-    [Conversation,Retract,Type,Thread,
-      Read,ReadTS,Delivered,Display,UpdateAt,
-      Status,Encrypted, Pinned,Mute] = El,
-    {Conversation,binary_to_integer(Retract),Type,Thread,
-      Read,ReadTS,Delivered,Display,binary_to_integer(UpdateAt),
-      binary_to_atom(Status,utf8),ejabberd_sql:to_bool(Encrypted),
-      Pinned,binary_to_integer(Mute)} end, Result).
-
-make_result_el(LServer, LUser, El) ->
+make_result_el_from_metadata(LServer, LUser, El, MetadataMap) ->
   {Conversation, Retract, Type, Thread, Read, ReadTS, Delivered,
     Display, UpdateAt, ConversationStatus, Encrypted,
     Pinned,Mute} = El,
-  ConversationMetadata = ejabberd_hooks:run_fold(syncronization_query,
-    LServer, [], [LUser, LServer, Conversation, Read, ReadTS, Delivered, Display,
-      ConversationStatus, Retract, Type, Encrypted]),
+  ConversationMetadata = make_synchronization_metadata(
+    LUser, LServer, Conversation, Read, ReadTS, Delivered, Display,
+    ConversationStatus, Retract, Type, Encrypted, MetadataMap),
   CElem = #sync_conversation{
     stamp = integer_to_binary(UpdateAt),
     type = Type, status = ConversationStatus,
@@ -739,52 +736,52 @@ make_result_el(LServer, LUser, El) ->
     true -> CElem
   end.
 
-create_synchronization_metadata(_Acc,_LUser,_LServer,_Conversation,
-    _Read,_ReadTS,_Delivered,_Display,deleted,_Retract,_Type,_Encrypted) ->
-  {stop,[]};
-create_synchronization_metadata(Acc,LUser,LServer,Conversation,
-    Read,ReadTS,Delivered,Display,_ConversationStatus,Retract,Type,Encrypted) ->
+make_synchronization_metadata(_LUser, _LServer, _Conversation,
+    _Read, _ReadTS, _Delivered, _Display, deleted, _Retract, _Type,
+    _Encrypted, _MetadataMap) ->
+  [];
+make_synchronization_metadata(LUser, LServer, Conversation,
+    Read, _ReadTS, Delivered, Display, _ConversationStatus, Retract, Type,
+    Encrypted, MetadataMap) ->
   {PUser, PServer,_} = jid:tolower(jid:from_string(Conversation)),
   IsLocal = is_local(PServer),
   case Type of
     ?NS_GROUPS when IsLocal == true ->
-      User = jid:to_string(jid:make(LUser,LServer)),
       Chat = jid:to_string(jid:make(PUser,PServer)),
-      Status = groups_members:user_subscription(LServer,User,Chat),
-      Count = lg_get_count_messages(User,Chat,Read,Status),
-      LastMessage = lg_get_last_message(LUser, LServer, PUser, PServer,Status),
+      Count = unread_count({local_group, Chat}, MetadataMap),
+      LastMessage = last_message({last, local_group, Chat}, MetadataMap),
       Unread = #sync_unread{count = Count, 'after' = Read},
       XabberDelivered = #sync_delivered{id = Delivered},
       XabberDisplayed = #sync_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
+      [#sync_metadata{node = ?NS_XABBER_REWRITE,
         sub_els = [#sync_retract{version = Retract}]},
-        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}] ++ Acc};
+        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}];
     ?NS_GROUPS ->
-      {Sub, _, _} = mod_roster:get_jid_info(<<>>, LUser, LServer,
-        jid:from_string(Conversation)),
-      Count = eg_get_unread_msgs_count({PUser, PServer}, ReadTS, Sub),
-      LastMessage = eg_get_last_message(LUser, LServer, PUser, PServer, Sub),
+      Chat = jid:to_string(jid:make(PUser,PServer)),
+      Count = unread_count({external_group, Chat}, MetadataMap),
+      LastMessage = last_message({last, external_group, Chat}, MetadataMap),
       Unread = #sync_unread{count = Count, 'after' = Read},
       XabberDelivered = #sync_delivered{id = Delivered},
       XabberDisplayed = #sync_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
+      [#sync_metadata{node = ?NS_XABBER_REWRITE,
         sub_els = [#sync_retract{version = Retract}]},
-        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}] ++ Acc};
+        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}];
     _ when Encrypted == true ->
-      Count = get_count_messages(LServer,LUser,Conversation,Read,Type),
-      LastMessage = get_last_encrypted_message(LServer,LUser,Conversation,Type),
+      Count = unread_count({chat, Conversation, Type}, MetadataMap),
+      LastMessage = last_message({last, chat, Conversation, Type}, MetadataMap),
       Unread = #sync_unread{count = Count, 'after' = Read},
       XabberDelivered = #sync_delivered{id = Delivered},
       XabberDisplayed = #sync_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
+      [#sync_metadata{node = ?NS_XABBER_REWRITE,
         sub_els = [#sync_retract{version = Retract}]},
-        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}] ++ Acc};
+        #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}];
     _ ->
-      Count = get_count_messages(LServer,LUser,Conversation,Read,?NS_XABBER_CHAT),
-      LastMessage = get_last_message(LServer,LUser,Conversation),
+      Count = unread_count({chat, Conversation, ?NS_XABBER_CHAT}, MetadataMap),
+      LastMessage = last_message(
+        {last, chat, Conversation, ?NS_XABBER_CHAT}, MetadataMap),
       LastCall = case get_actual_last_call(LUser, LServer, PUser, PServer) of
                    [] -> [];
                    Calls ->
@@ -795,15 +792,281 @@ create_synchronization_metadata(Acc,LUser,LServer,Conversation,
       XabberDelivered = #sync_delivered{id = Delivered},
       XabberDisplayed = #sync_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
-      {stop,[#sync_metadata{node = ?NS_XABBER_REWRITE,
+      [#sync_metadata{node = ?NS_XABBER_REWRITE,
         sub_els = [#sync_retract{version = Retract}]},
         #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION,
-          sub_els = SubEls}] ++ LastCall ++ Acc}
+          sub_els = SubEls}] ++ LastCall
   end.
 
-get_pending_subscriptions(LUser, LServer) ->
+unread_count(Key, CountMap) ->
+  case maps:find(Key, CountMap) of
+    {ok, Count} -> Count;
+    error -> error({missing_unread_count, Key})
+  end.
+
+last_message(Key, MetadataMap) ->
+  case maps:find(Key, MetadataMap) of
+    {ok, Message} -> Message;
+    error -> error({missing_last_message, Key})
+  end.
+
+local_group_status(Chat, MetadataMap) ->
+  case maps:find({status, local_group, Chat}, MetadataMap) of
+    {ok, Status} -> Status;
+    error -> error({missing_local_group_status, Chat})
+  end.
+
+external_group_status(Chat, MetadataMap) ->
+  case maps:find({status, external_group, Chat}, MetadataMap) of
+    {ok, Status} -> Status;
+    error -> error({missing_external_group_status, Chat})
+  end.
+
+get_group_statuses(LServer, LUser, ConvRes, Roster) ->
+  {LocalReqs, ExternalReqs} =
+    lists:foldl(
+      fun collect_group_status_request/2,
+      {#{}, #{}},
+      ConvRes),
+  LocalReqList = maps:values(LocalReqs),
+  ExternalReqList = maps:values(ExternalReqs),
+  LocalStatusMap = sync_local_groups:statuses(
+    LServer, LUser, LocalReqList),
+  ExternalStatusMap = batch_get_external_group_statuses(
+    LServer, LUser, ExternalReqList, Roster),
+  maps:merge(LocalStatusMap, ExternalStatusMap).
+
+collect_group_status_request(
+    {_Conversation, _Retract, _Type, _Thread,
+    _Read, _ReadTS, _Delivered, _Display, _UpdateAt, deleted, _Encrypted,
+    _Pinned, _Mute}, Acc) ->
+  Acc;
+collect_group_status_request(
+    {Conversation, _Retract, Type, _Thread,
+    _Read, _ReadTS, _Delivered, _Display, _UpdateAt, _ConversationStatus,
+    _Encrypted, _Pinned, _Mute}, Acc) ->
+  {PUser, PServer,_} = jid:tolower(jid:from_string(Conversation)),
+  case Type of
+    ?NS_GROUPS ->
+      case is_local(PServer) of
+        true ->
+          Chat = jid:to_string(jid:make(PUser,PServer)),
+          {LocalReqs, ExternalReqs} = Acc,
+          {maps:put(Chat, Chat, LocalReqs), ExternalReqs};
+        _ ->
+          Chat = jid:to_string(jid:make(PUser,PServer)),
+          {LocalReqs, ExternalReqs} = Acc,
+          {LocalReqs,
+            maps:put(Chat, {Chat, jid:from_string(Conversation)},
+              ExternalReqs)}
+      end;
+    _ ->
+      Acc
+  end.
+
+batch_get_external_group_statuses(_LServer, _LUser, [], _Roster) ->
+  #{};
+batch_get_external_group_statuses(_LServer, _LUser, Reqs, Roster) ->
+  RosterStatusMap = roster_status_map(Roster),
+  maps:from_list(
+    [{{status, external_group, Chat},
+      maps:get(jid:tolower(jid:remove_resource(JID)), RosterStatusMap, none)}
+     || {Chat, JID} <- Reqs]).
+
+roster_status_map(Roster) ->
+  maps:from_list(
+    [{jid:remove_resource(JID), Subscription}
+      || #roster{jid = JID, subscription = Subscription} <- Roster]).
+
+get_unread_counts(LServer, LUser, ConvRes, StatusMap) ->
+  {ChatReqs, GroupReqs, ExternalReqs, CountMap0} =
+    lists:foldl(
+      fun(El, Acc) ->
+        collect_unread_count_request(LServer, LUser, El, StatusMap, Acc)
+      end,
+      {#{}, #{}, #{}, #{}},
+      ConvRes),
+  ChatReqList = maps:values(ChatReqs),
+  GroupReqList = maps:values(GroupReqs),
+  ExternalReqList = maps:values(ExternalReqs),
+  ChatCountMap = sync_archive_reader:counts(LServer, LUser, ChatReqList),
+  GroupCountMap = sync_local_groups:counts(
+    jid:to_string(jid:make(LUser,LServer)), GroupReqList),
+  ExternalCountMap = sync_external_groups:batch_counts(
+    LServer, ExternalReqList),
+  maps:merge(
+    maps:merge(maps:merge(CountMap0, ChatCountMap), GroupCountMap),
+    ExternalCountMap).
+
+collect_unread_count_request(_LServer, _LUser,
+    {_Conversation, _Retract, _Type, _Thread,
+    _Read, _ReadTS, _Delivered, _Display, _UpdateAt, deleted, _Encrypted,
+    _Pinned, _Mute}, _StatusMap, Acc) ->
+  Acc;
+collect_unread_count_request(_LServer, _LUser,
+    {Conversation, _Retract, Type, _Thread,
+    Read, ReadTS, _Delivered, _Display, _UpdateAt, _ConversationStatus,
+    Encrypted, _Pinned, _Mute}, StatusMap,
+    {ChatReqs, GroupReqs, ExternalReqs, CountMap}) ->
+  {PUser, PServer,_} = jid:tolower(jid:from_string(Conversation)),
+  IsLocal = is_local(PServer),
+  case Type of
+    ?NS_GROUPS when IsLocal == true ->
+      Chat = jid:to_string(jid:make(PUser,PServer)),
+      Status = local_group_status(Chat, StatusMap),
+      collect_local_group_unread_count_request(
+        Chat, PUser, PServer, Read, Status,
+        {ChatReqs, GroupReqs, ExternalReqs, CountMap});
+    ?NS_GROUPS ->
+      Chat = jid:to_string(jid:make(PUser,PServer)),
+      Status = external_group_status(Chat, StatusMap),
+      collect_external_group_unread_count_request(
+        Chat, PUser, PServer, ReadTS, Status,
+        {ChatReqs, GroupReqs, ExternalReqs, CountMap});
+    _ when Encrypted == true ->
+      Key = {chat, Conversation, Type},
+      {maps:put(Key, {Key, Conversation, Read, Type}, ChatReqs),
+        GroupReqs, ExternalReqs, CountMap};
+    _ ->
+      Key = {chat, Conversation, ?NS_XABBER_CHAT},
+      {maps:put(Key, {Key, Conversation, Read, ?NS_XABBER_CHAT}, ChatReqs),
+        GroupReqs, ExternalReqs, CountMap}
+  end.
+
+collect_local_group_unread_count_request(Chat, GUser, GServer, Read,
+    <<"both">>, {ChatReqs, GroupReqs, ExternalReqs, CountMap}) ->
+  Key = {local_group, Chat},
+  ReqKey = {GServer, Chat},
+  {ChatReqs,
+    maps:put(ReqKey, {Key, Chat, GUser, GServer, Read}, GroupReqs),
+    ExternalReqs, CountMap};
+collect_local_group_unread_count_request(Chat, _GUser, _GServer, _Read,
+    _Status, {ChatReqs, GroupReqs, ExternalReqs, CountMap}) ->
+  {ChatReqs, GroupReqs, ExternalReqs,
+    maps:put({local_group, Chat}, 0, CountMap)}.
+
+collect_external_group_unread_count_request(Chat, GUser, GServer, ReadTS,
+    both, {ChatReqs, GroupReqs, ExternalReqs, CountMap}) ->
+  Key = {external_group, Chat},
+  ReqKey = {GServer, Chat},
+  {ChatReqs, GroupReqs,
+    maps:put(ReqKey, {Key, Chat, GUser, GServer, ReadTS}, ExternalReqs),
+    CountMap};
+collect_external_group_unread_count_request(Chat, _GUser, _GServer, _ReadTS,
+    _Status, {ChatReqs, GroupReqs, ExternalReqs, CountMap}) ->
+  {ChatReqs, GroupReqs, ExternalReqs,
+    maps:put({external_group, Chat}, 0, CountMap)}.
+
+get_last_messages(LServer, LUser, ConvRes, StatusMap) ->
+  {ChatReqs, EncryptedReqs, GroupReqs, ExternalReqs} =
+    lists:foldl(
+      fun(El, Acc) ->
+        collect_last_message_request(LServer, LUser, El, StatusMap, Acc)
+      end,
+      {#{}, #{}, #{}, #{}},
+      ConvRes),
+  ChatReqList = maps:values(ChatReqs),
+  EncryptedReqList = maps:values(EncryptedReqs),
+  GroupReqList = maps:values(GroupReqs),
+  ExternalReqList = maps:values(ExternalReqs),
+  ChatLastMap = sync_archive_reader:last_informative_messages(
+    LServer, LUser, ChatReqList),
+  EncryptedLastMap =
+    sync_archive_reader:last_encrypted_messages(
+      LServer, LUser, EncryptedReqList),
+  GroupLastMap = batch_get_local_group_last_messages(
+    LServer, LUser, GroupReqList),
+  ExternalLastMap =
+    batch_get_external_group_last_messages(LServer, LUser, ExternalReqList),
+  maps:merge(
+    maps:merge(maps:merge(ChatLastMap, EncryptedLastMap), GroupLastMap),
+    ExternalLastMap).
+
+collect_last_message_request(_LServer, _LUser,
+    {_Conversation, _Retract, _Type, _Thread,
+    _Read, _ReadTS, _Delivered, _Display, _UpdateAt, deleted, _Encrypted,
+    _Pinned, _Mute}, _StatusMap, Acc) ->
+  Acc;
+collect_last_message_request(_LServer, _LUser,
+    {Conversation, _Retract, Type, _Thread,
+    _Read, _ReadTS, _Delivered, _Display, _UpdateAt, _ConversationStatus,
+    Encrypted, _Pinned, _Mute}, StatusMap,
+    {ChatReqs, EncryptedReqs, GroupReqs, ExternalReqs}) ->
+  {PUser, PServer,_} = jid:tolower(jid:from_string(Conversation)),
+  IsLocal = is_local(PServer),
+  case Type of
+    ?NS_GROUPS when IsLocal == true ->
+      Chat = jid:to_string(jid:make(PUser,PServer)),
+      Status = local_group_status(Chat, StatusMap),
+      collect_local_group_last_message_request(
+        Chat, PUser, PServer, Status,
+        {ChatReqs, EncryptedReqs, GroupReqs, ExternalReqs});
+    ?NS_GROUPS ->
+      Chat = jid:to_string(jid:make(PUser,PServer)),
+      Status = external_group_status(Chat, StatusMap),
+      collect_external_group_last_message_request(
+        Chat, PUser, PServer, Status,
+        {ChatReqs, EncryptedReqs, GroupReqs, ExternalReqs});
+    _ when Encrypted == true ->
+      Key = {last, chat, Conversation, Type},
+      {ChatReqs,
+        maps:put(Key, {Key, Conversation, Type}, EncryptedReqs),
+        GroupReqs, ExternalReqs};
+    _ ->
+      Key = {last, chat, Conversation, ?NS_XABBER_CHAT},
+      {maps:put(Key, {Key, Conversation}, ChatReqs),
+        EncryptedReqs, GroupReqs, ExternalReqs}
+  end.
+
+collect_local_group_last_message_request(Chat, GUser, GServer, Status,
+    {ChatReqs, EncryptedReqs, GroupReqs, ExternalReqs}) ->
+  Key = {last, local_group, Chat},
+  ReqKey = {GServer, Chat},
+  {ChatReqs, EncryptedReqs,
+    maps:put(ReqKey, {Key, Chat, GUser, GServer, Status}, GroupReqs),
+    ExternalReqs}.
+
+collect_external_group_last_message_request(Chat, GUser, GServer, Status,
+    {ChatReqs, EncryptedReqs, GroupReqs, ExternalReqs}) ->
+  Key = {last, external_group, Chat},
+  {ChatReqs, EncryptedReqs, GroupReqs,
+    maps:put(Chat, {Key, Chat, GUser, GServer, Status}, ExternalReqs)}.
+
+batch_get_local_group_last_messages(_LServer, _LUser, []) ->
+  #{};
+batch_get_local_group_last_messages(LServer, LUser, Reqs) ->
+  {ArchiveReqs, InviteReqs} =
+    lists:partition(fun({_Key, _Chat, _GUser, _GServer, <<"both">>}) ->
+      true;
+      (_) ->
+        false
+    end, Reqs),
+  maps:merge(
+    sync_local_groups:archive_last_messages(ArchiveReqs),
+    batch_get_local_group_invites(LServer, LUser, InviteReqs)).
+
+batch_get_local_group_invites(_LServer, _LUser, []) ->
+  #{};
+batch_get_local_group_invites(LServer, LUser, Reqs) ->
+  maps:from_list(
+    [{Key, get_invite(LServer, LUser, GUser, GServer)}
+      || {Key, _Chat, GUser, GServer, _Status} <- Reqs]).
+
+batch_get_external_group_last_messages(_LServer, _LUser, []) ->
+  #{};
+batch_get_external_group_last_messages(LServer, LUser, Reqs) ->
+  maps:from_list(
+    [{Key, external_group_last_message(LUser, LServer, GUser, GServer, Status)}
+      || {Key, _Chat, GUser, GServer, Status} <- Reqs]).
+
+external_group_last_message(LUser, LServer, GUser, GServer, both) ->
+  sync_external_groups:last_message(
+    LUser, LServer, GUser, GServer, both);
+external_group_last_message(LUser, LServer, GUser, GServer, _Status) ->
+  get_invite(LServer, LUser, GUser, GServer).
+
+get_pending_subscriptions(LUser, LServer, Roster) ->
   BareJID = jid:make(LUser, LServer),
-  Result = mod_roster:get_roster(LUser, LServer),
   lists:filtermap(
     fun(#roster{ask = Ask} = R) when Ask == in; Ask == both ->
       Message = R#roster.askmessage,
@@ -816,76 +1079,7 @@ get_pending_subscriptions(LUser, LServer) ->
         status = xmpp:mk_text(Status)}};
       (_) ->
         false
-    end, Result).
-
-%% Get the last informative chat message
-get_last_message(LServer,LUser,Conversation) ->
-  get_last_informative_message(LServer, LUser,
-    Conversation, os:system_time(microsecond)).
-
-get_last_informative_message(LServer, LUser, Conversation, TS) ->
-  ConvType = ?NS_XABBER_CHAT,
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
-    " from archive where username=%(LUser)s and bare_peer=%(Conversation)s "
-    " and %(LServer)H and timestamp < %(TS)d and conversation_type=%(ConvType)s "
-    " order by timestamp desc limit 10")) of
-    {selected,[]} ->
-      [];
-    {selected,List} ->
-      case find_informative_message(LUser, LServer, List) of
-        [] ->
-          {TS1, _, _, _, _} = lists:last(List),
-          get_last_informative_message(LServer, LUser, Conversation, TS1);
-        M -> M
-      end;
-    _ ->
-      []
-  end.
-
-find_informative_message(_LUser, _LServer, [])-> [];
-find_informative_message(LUser, LServer, List)->
-  [{TS, XML, Peer, Kind, Nick}| Tail] = List,
-  case mod_mam_sql:make_archive_el(integer_to_binary(TS), XML, Peer,
-    Kind, Nick, chat, jid:make(LUser,LServer), jid:make(LUser,LServer)) of
-    {ok, ArchiveElement} ->
-      #forwarded{sub_els = [Message]} = ArchiveElement,
-      case xmpp:get_text(Message#message.body) of
-        <<>> ->
-          case xmpp:has_subtag(Message, #jingle_reject{}) of
-            true ->
-              [#sync_last{sub_els = [Message]}];
-            _ ->
-              find_informative_message(LUser, LServer, Tail)
-          end;
-        _ ->
-          case xmpp:has_subtag(Message, #groups_invite{}) of
-            true ->
-              find_informative_message(LUser, LServer, Tail);
-            _ ->
-              [#sync_last{sub_els = [Message]}]
-          end
-      end;
-    _ ->
-      find_informative_message(LUser, LServer, Tail)
-  end.
-
-%% Get the last encrypted informative chat message
-get_last_encrypted_message(LServer,LUser,Conversation, ConvType) ->
-  case ejabberd_sql:sql_query(
-    LServer,
-    ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
-    " from archive where username=%(LUser)s and bare_peer=%(Conversation)s "
-    " and %(LServer)H and txt notnull and txt !='' "
-    " and conversation_type = %(ConvType)s order by timestamp desc limit 1")) of
-    {selected,[<<>>]} ->
-      [];
-    {selected,[{TS, XML, Peer, Kind, Nick}]} ->
-      convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer);
-    _ ->
-      []
-  end.
+    end, Roster).
 
 store_last_call(Pkt, Peer, LUser, LServer, ID) ->
 
@@ -929,315 +1123,41 @@ get_actual_last_call(LUser, LServer, PUser, PServer) ->
     _ -> []
   end.
 
-%% Get last message in the external group if ID matches
-eg_is_last_message(Group, ID) when is_integer(ID) ->
-  eg_is_last_message(Group, integer_to_binary(ID));
-eg_is_last_message(Group, ID) ->
-  FN = fun()->
-    mnesia:match_object(external_group_last_msg,
-      {external_group_last_msg, Group, ID, '_', '_', '_'},
-      read)
-       end,
-  case mnesia:transaction(FN) of
-    {atomic, [#external_group_last_msg{}]} ->
-      true;
-    _ -> false
-  end.
+%% External group cache helpers. The async boundary stays in mod_sync;
+%% storage, deduplication and counter queries live in sync_external_groups.
+store_external_group_message(LServer, Group, StanzaID, Packet, TS) ->
+  send_cast(LServer,
+    {external_group, save_message, Group, StanzaID, Packet, TS}).
 
-%% Save the message of the external group
-eg_store_message(LServer, LastMessage, TS) when is_integer(TS) ->
-  eg_store_message(LServer, LastMessage, integer_to_binary(TS));
-eg_store_message(LServer, LastMessage, TS) ->
-  send_cast(LServer, {eg_save_message, LastMessage, TS}).
+migrate_external_group_message_meta(Server) ->
+  sync_external_groups:migrate_message_meta(Server).
 
-eg_store_message1(Group_SID, UserID, TS) ->
-  case {mnesia:table_info(external_group_msgs, disc_only_copies),
-    mnesia:table_info(external_group_msgs, memory)} of
-    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
-      ?ERROR_MSG("external_group_msgs too large, won't store ~p",[Group_SID]),
-      {error, overflow};
-    _ ->
-      F1 = fun() ->
-        mnesia:write(
-          #external_group_msgs{
-            group_sid = Group_SID,
-            uid = UserID,
-            ts = TS
-          })
-           end,
-      case mnesia:transaction(F1) of
-        {atomic, ok} ->
-          ?DEBUG("Save external group message ~p~n",[Group_SID]),
-          ok;
-        {aborted, Err1} ->
-          ?DEBUG("Cannot save external group message ~p: ~s",
-            [Group_SID, Err1]),
-          Err1
-      end
-  end.
-
-%% Save the last message of the external group
-eg_store_last_msg(Record1) ->
-  #external_group_last_msg{packet = Pkt} = Record1,
-  XML = fxml:element_to_binary(xmpp:encode(Pkt)),
-  Record = Record1#external_group_last_msg{packet = XML},
-  case {mnesia:table_info(external_group_last_msg, disc_only_copies),
-    mnesia:table_info(external_group_last_msg, memory)} of
-    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
-      ?ERROR_MSG("external_group_last_msg too large,
-       won't store ~p",[Record]),
-      {error, overflow};
-    _ ->
-      F1 = fun() -> mnesia:write(Record) end,
-      case mnesia:transaction(F1) of
-        {atomic, ok} ->
-          ?DEBUG("Save last message ~p ~p",
-            [Record#external_group_last_msg.group,
-              Record#external_group_last_msg.id]),
-          ok;
-        {aborted, Err1} ->
-          ?DEBUG("Cannot save last msg for ~p ~p: ~s",
-            [Record#external_group_last_msg.group,
-              Record#external_group_last_msg.id, Err1]),
-          Err1
-      end
-  end.
-
-eg_select_last_msg(Group) ->
-  case mnesia:dirty_read(external_group_last_msg, Group) of
-    [#external_group_last_msg{packet = XML} = Record] ->
-      case fxml_stream:parse_element(XML) of
-        #xmlel{} = El ->
-          try xmpp:decode(El, ?NS_CLIENT, []) of
-            Pkt ->
-              Record#external_group_last_msg{packet = Pkt}
-          catch _:{xmpp_codec, Why} ->
-            ?ERROR_MSG("Failed to decode raw element ~p from "
-            "external_group_last_msg of group ~p: ~s",
-              [El, Group, xmpp:format_error(Why)]),
-            {error, invalid_xml}
-          end;
-        {error, {_, Reason}} ->
-          ?ERROR_MSG("Malformed 'xml' field with value '~s' detected "
-          "for group ~p in table 'external_group_last_msg': ~s",
-            [XML, Group, Reason]),
-          {error, invalid_xml}
-      end;
-    _ ->
-      {error, not_found}
-  end.
-
-
-%% Maybe change last message in the external group
-eg_maybe_change_last_msg(LServer, ConversationJID, Replace) ->
+maybe_change_external_group_last_message(LServer, ConversationJID, Replace) ->
   {PUser, PServer, _} = jid:tolower(ConversationJID),
-  send_cast(LServer, {eg_change_last_message, {PUser, PServer}, Replace}).
-
-eg_change_last_msg(Replace, LastMsg) ->
-  Ver = integer_to_binary(Replace#replace.version),
-  #replace{ replace_message = XabberReplaceMessage} = Replace,
-  #replace_message{body = Text, sub_els = NewEls} = XabberReplaceMessage,
-  MD = xmpp:decode(LastMsg#external_group_last_msg.packet),
-  Sub = MD#message.sub_els,
-  Body = MD#message.body,
-  OldText = xmpp:get_text(Body),
-  Sub1 = lists:filter(fun(El) ->
-    case xmpp:get_ns(El) of
-      ?NS_REFERENCES -> false;
-      ?NS_GROUPS -> false;
-      _ -> true
-    end end, Sub),
-  Els1 = Sub1 ++ NewEls,
-  NewBody = [#text{lang = <<>>,data = Text}],
-  R = #replaced{stamp = erlang:timestamp(), body = OldText},
-  Els2 = [R|Els1],
-  NewMsg = MD#message{sub_els = Els2, body = NewBody},
-  NewLastMsg = LastMsg#external_group_last_msg{packet=NewMsg, retract_version=Ver},
-  eg_store_last_msg(NewLastMsg).
-
-get_user_id(Pkt) ->
-  case xmpp:get_subtag(Pkt, #groups_x{}) of
-    #groups_x{author = #groups_user{id = ID}} ->
-      ID;
-    _ -> false
-  end.
-
-
-%%eg_store_message(PUser, PServer, UserID, StanzaID, false) ->
-%%  case {mnesia:table_info(external_group_msgs, disc_only_copies),
-%%    mnesia:table_info(external_group_msgs, memory)} of
-%%    {[_|_], TableSize} when TableSize > ?TABLE_SIZE_LIMIT ->
-%%      ?ERROR_MSG("Unread counter too large, won't store message id for ~s@~s",
-%%        [PUser, PServer]),
-%%      {error, overflow};
-%%    _ ->
-%%      F1 = fun() ->
-%%        mnesia:write(
-%%          #external_group_msgs{
-%%            group_sid = {{PUser, PServer}, StanzaID},
-%%            uid = UserID,
-%%            ts = integer_to_binary(time_now())
-%%          })
-%%           end,
-%%      case mnesia:transaction(F1) of
-%%        {atomic, ok} ->
-%%          ?DEBUG("Save external group msg for ~p@~p~n",[PUser, PServer]),
-%%          ok;
-%%        {aborted, Err1} ->
-%%          ?DEBUG("Cannot save external group msg for ~s@~s: ~s",
-%%            [PUser, PServer, Err1]),
-%%          Err1
-%%      end
-%%  end;
-%%eg_store_message(_Peer, _UserID, _TS, _OriginID, _IsService) ->
-%%  ok.
-
-eg_get_unread_msgs_count(Group, ReadTS, Subscription) when is_integer(ReadTS) ->
-  eg_get_unread_msgs_count(Group, integer_to_binary(ReadTS), Subscription);
-eg_get_unread_msgs_count(Group, ReadTS, both) ->
-  FN = fun()->
-    MatchHead = #external_group_msgs{group_sid='$1', ts = '$2', deleted = false, _ = '_'},
-    Guards = [{'=:=', {const, Group}, {element, 1, '$1'}},{'>', '$2', ReadTS}],
-    Result = {size,'$1'}, %% just to minimize memory usage
-    length(mnesia:select(external_group_msgs,[{MatchHead, Guards, [Result]}]))
-      end,
-   case mnesia:transaction(FN) of
-     {atomic,Count} when is_integer(Count) -> Count;
-     _ -> 0
-   end;
-eg_get_unread_msgs_count(_, _, _) -> 0.
-
-eg_remove_message(Acc, Group, StanzaID, UserID, RVer) ->
-  AID = if
-         StanzaID == all, UserID == all -> RVer;
-         StanzaID /= <<>> -> StanzaID;
-         UserID /= <<>> -> UserID
-       end,
-  case lists:member({Group, AID, RVer}, Acc) of
-    true -> Acc;
-    _ ->
-      eg_do_remove_msg(Group, StanzaID, UserID),
-      save_last_action(Acc, {Group, AID, RVer})
-  end.
-
-%% Delete all external group messages
-eg_do_remove_msg(Group, all, all) ->
-  mnesia:dirty_delete(external_group_last_msg, Group),
-  FN = fun()->
-    MatchHead = #external_group_msgs{group_sid='$1', _ = '_'},
-    Guards = [{'=:=', {const, Group}, {element, 1, '$1'}}],
-    Msgs = mnesia:select(external_group_msgs,[{MatchHead, Guards, ['$_']}]),
-    lists:foreach(fun(O) -> mnesia:delete_object(O) end, Msgs)
-       end,
-  mnesia:transaction(FN);
-%% Mark the message of the external group as deleted by the stanza ID
-eg_do_remove_msg(Group, ID, <<>>) when ID /= <<>> ->
-  case eg_is_last_message(Group, ID) of
-    false -> ok;
-    _ ->
-      mnesia:dirty_delete(external_group_last_msg, Group)
-  end,
-  FN = fun() ->
-    case mnesia:read(external_group_msgs, {Group, ID}) of
-      [Msg] -> mnesia:write(Msg#external_group_msgs{deleted = true});
-      _ -> ok
-    end end,
-  mnesia:transaction(FN);
-%% Mark the message of the external group as deleted by the user ID
-eg_do_remove_msg(Group, <<>>, UserID) when UserID /= <<>> ->
-  case eg_select_last_msg(Group) of
-    #external_group_last_msg{user_id = UserID} = LMsg ->
-      mnesia:dirty_delete_object(LMsg);
-    _ -> ok
-  end,
-  FN = fun()->
-    MatchHead = #external_group_msgs{group_sid='$1', uid='$2', _ = '_'},
-    Guards = [{'=:=', {const, Group}, {element, 1, '$1'}},{'=:=', UserID,'$2'}],
-    Msgs = mnesia:select(external_group_msgs,[{MatchHead, Guards, ['$_']}]),
-    lists:foreach(fun(O) -> mnesia:delete_object(O) end, Msgs)
-       end,
-  mnesia:transaction(FN);
-eg_do_remove_msg(_, _, _) ->
-  ok.
-
-%% Get last message in the external group
-eg_get_last_message(LUser, LServer, GUser, GServer, both) ->
-  case eg_select_last_msg({GUser, GServer}) of
-    #external_group_last_msg{packet = Msg} ->
-      [#sync_last{sub_els = [xmpp:set_to(Msg, jid:make(LUser, LServer))]}];
-    _->
-      []
-  end;
-eg_get_last_message(LUser, LServer, GUser, GServer, _Sub) ->
-  get_invite(LServer,LUser,GUser, GServer).
+  send_cast(LServer,
+    {external_group, change_last_message, {PUser, PServer}, Replace}).
 
 %% Get the last non-system message ID in the external group
-eg_get_last_message_id_ts(GUser, GServer) ->
-  FN = fun(R, {ID, TS}) ->
-    case R of
-      #external_group_msgs{
-        ts = TS1,
-        group_sid = {{GUser, GServer} , ID1}
-      } when TS1 > TS ->
-        {ID1, TS1};
-      _ -> {ID, TS}
+get_external_group_last_message_id_ts(LServer, GUser, GServer) ->
+  sync_external_groups:last_message_id_ts(LServer, GUser, GServer).
 
-    end
-    end,
-  Result = mnesia:transaction(fun() ->
-    mnesia:foldl(FN, {0, time_now()}, external_group_msgs) end),
-  case Result of
-    {atomic, {ID, TS}} -> {ID,TS};
-    _ -> undefined
-  end.
-
-eg_get_message_ts(GUser, GServer, StanzaID) ->
-  case mnesia:dirty_read(external_group_msgs,
-    {{GUser, GServer}, StanzaID}) of
-    [#external_group_msgs{ts=TS}] -> TS;
-    _ -> time_now()
-  end.
+get_external_group_message_ts(LServer, GUser, GServer, StanzaID) ->
+  sync_external_groups:message_ts(LServer, GUser, GServer, StanzaID).
 
 %% Delete last message in the external group by stanza ID
-eg_delete_one_msg(LServer, PUser, PServer, StanzaID, Version) ->
-  send_cast(LServer, {eg_delete_msg, {PUser, PServer}, StanzaID, <<>>, Version}).
+delete_external_group_message(LServer, PUser, PServer, StanzaID, Version) ->
+  send_cast(LServer,
+    {external_group, delete_message, {PUser, PServer}, StanzaID, <<>>, Version}).
 
 %% Delete last message in the external group by user ID
-eg_delete_user_messages(LServer, PUser, PServer, UserID, Version) ->
-  send_cast(LServer, {eg_delete_msg, {PUser, PServer}, <<>>, UserID, Version}).
+delete_external_group_user_messages(LServer, PUser, PServer, UserID, Version) ->
+  send_cast(LServer,
+    {external_group, delete_message, {PUser, PServer}, <<>>, UserID, Version}).
 
 %% Delete all message in the external group.
-eg_delete_all_msgs(LServer, PUser, PServer, Version) ->
-  send_cast(LServer, {eg_delete_msg, {PUser, PServer}, all, all, Version}).
-
-%% Delete messages that all group members have read
-eg_delete_read_messages(LServer) ->
-  Type = ?NS_GROUPS,
-  Like = <<"%@",LServer/binary>>,
-  IDsList = case ejabberd_sql:sql_query(LServer,
-    ?SQL("select @(conversation)s, @(min(read_until))s from conversation_metadata "
-    " where type = %(Type)s  and read_until !='0'"
-    " and conversation not like %(Like)s and %(LServer)H "
-    " group by conversation")) of
-              {selected, L} -> L;
-              R -> R
-            end,
-  FN = fun()->
-    TSsList = lists:filtermap(fun({GroupS, Read}) ->
-      {GUser, GServer, _} = jid:tolower(jid:from_string(GroupS)),
-      case mnesia:read(external_group_msgs, {{GUser, GServer}, Read}) of
-        [#external_group_msgs{ts = TS}] -> {true,{{GUser, GServer}, TS}};
-        _ -> false
-      end end, IDsList),
-    lists:foreach(fun({Group, TS}) ->
-      MatchHead = #external_group_msgs{group_sid='$1', ts = '$2', _ = '_'},
-      Guards = [{'=:=', {const, Group}, {element, 1, '$1'}},{'<', '$2', TS}],
-      Result = '$_',
-      Msgs = mnesia:select(external_group_msgs,[{MatchHead, Guards, [Result]}]),
-      lists:foreach(fun(M) -> mnesia:delete_object(M) end, Msgs)
-                  end, TSsList) end,
-
-  mnesia:transaction(FN).
+delete_all_external_group_messages(LServer, PUser, PServer, Version) ->
+  send_cast(LServer,
+    {external_group, delete_message, {PUser, PServer}, all, all, Version}).
 
 get_stanza_id(Pkt,BareJID) ->
   case xmpp:get_subtag(Pkt, #stanza_id{}) of
@@ -1264,13 +1184,13 @@ get_stanza_id(Pkt,BareJID,LServer,OriginID) ->
       StanzaID
   end.
 
-get_group_last_message_id_ts(GUser, GServer)->
+get_group_last_message_id_ts(LServer, GUser, GServer)->
   case is_local(GServer) of
     true ->
-      R = lg_get_last_message_id(GUser, GServer),
+      R = sync_local_groups:last_message_id(GUser, GServer),
       {R, R};
     _ ->
-      eg_get_last_message_id_ts(GUser, GServer)
+      get_external_group_last_message_id_ts(LServer, GUser, GServer)
   end.
 
 update_metainfo(LServer, LUser, Conv, Type) ->
@@ -1471,7 +1391,27 @@ get_conversation_type(LServer,LUser,Conversation) ->
     _ -> error
   end.
 
+get_preferred_conversation_type(LServer, LUser, Conversation) ->
+  case get_conversation_type(LServer, LUser, Conversation) of
+    Types when is_list(Types) ->
+      case lists:member(?NS_GROUPS, Types) of
+        true -> ?NS_GROUPS;
+        false ->
+          case Types of
+            [Type] -> Type;
+            _ -> undefined
+          end
+      end;
+    _ ->
+      undefined
+  end.
 
+
+%% Retract version in sync metadata is a client-side optimization hint.
+%% Authoritative rewrite/retract state lives in retract archives. For p2p
+%% chats the archive version is per user, while group chats have their own
+%% archive versions, so this watermark is stored on each conversation row
+%% returned by sync.
 update_retract(LServer, LUser, Conv, Ver, CType, TS) ->
   case ejabberd_sql:sql_query(LServer,
     ?SQL("update conversation_metadata SET "
@@ -1497,58 +1437,6 @@ get_last_stamp(LServer, LUser) ->
       Version
   end.
 
-get_count_messages(LServer,LUser,Peer,TS, ConvType) ->
-  case ejabberd_sql:sql_query(LServer,
-    ?SQL("select @(count(*))d from archive "
-    " where username=%(LUser)s and bare_peer=%(Peer)s and txt notnull and txt !='' "
-    " and timestamp > %(TS)d and (not ARRAY['invite','voip'] && tags or tags is null) "
-    " and conversation_type = %(ConvType)s and %(LServer)H")) of
-    {selected,[{Count}]} ->
-      Count;
-    _ ->
-      0
-  end.
-
-%% Get the last non-system message ID in the local group
-lg_get_last_message_id(GUser, GServer) ->
-  case ejabberd_sql:sql_query(GServer,
-    ?SQL("select @(timestamp)s from archive"
-    " where username=%(GUser)s  and txt notnull and txt !='' and %(GServer)H "
-    " order by timestamp desc limit 1")) of
-    {selected,[{TS}]} -> TS;
-    _ -> undefined
-  end.
-
-lg_get_last_message(_LUser, _LServer, GUser, GServer, <<"both">>) ->
-  case ejabberd_sql:sql_query(
-    GServer,
-    ?SQL("select @(timestamp)d, @(xml)s, @(peer)s, @(kind)s, @(nick)s "
-    " from archive where username=%(GUser)s  and txt notnull and txt !='' "
-    " and %(GServer)H order by timestamp desc limit 1")) of
-    {selected,[{TS, XML, Peer, Kind, Nick}]} ->
-      convert_message(TS, XML, Peer, Kind, Nick, GUser, GServer);
-    _ ->
-      []
-  end;
-lg_get_last_message(LUser, LServer, GUser, GServer, _) ->
-  get_invite(LServer,LUser,GUser, GServer).
-
-lg_get_count_messages(BareUser, Group, TS, <<"both">>) ->
-  {GroupUser, GroupServer, _ } = jid:tolower(jid:from_string(Group)),
-  case ejabberd_sql:sql_query(
-    GroupServer,
-    ?SQL("select @(count(*))d from archive "
-    " where username=%(GroupUser)s and txt notnull and txt !='' "
-    " and bare_peer!=%(BareUser)s and timestamp > %(TS)d "
-    " and %(GroupServer)H")) of
-    {selected,[{Count}]} ->
-      Count;
-    _ ->
-      0
-  end;
-lg_get_count_messages(_LServer,_LUser,_TS,_Status) ->
-  0.
-
 convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer) ->
   case mod_mam_sql:make_archive_el(integer_to_binary(TS), XML, Peer,
     Kind, Nick, chat, jid:make(LUser,LServer), jid:make(LUser,LServer)) of
@@ -1561,18 +1449,63 @@ convert_message(TS, XML, Peer, Kind, Nick, LUser, LServer) ->
 
 
 %%%===================================================================
-%%% Handle sub_els
+%%% Handle control messages
 %%%===================================================================
 
-handle_sub_els(chat, #mark_displayed{id = OriginID} = Displayed, From, To) ->
+handle_control_message(Direction, Type, From, To,
+    #message{sub_els = SubEls} = Pkt) ->
+  case handle_call_message(Direction, Pkt) of
+    handled ->
+      ok;
+    pass ->
+      handle_control_sub_els(Type, SubEls, From, To)
+  end.
+
+handle_control_sub_els(Type, SubEls, From, To) ->
+  lists:foreach(fun(El)->
+    try xmpp:decode(El) of
+      SubEl -> handle_control_sub_el(Type, SubEl, From, To)
+    catch _:_ -> ok
+    end end, SubEls).
+
+handle_control_sub_el(chat, #mark_displayed{id = OriginID} = Displayed,
+    From, To) ->
+  handle_displayed_control(Displayed, OriginID, From, To);
+handle_control_sub_el(chat, #mark_received{id = OriginID} = Delivered,
+    From, To) ->
+  handle_delivered_control(Delivered, OriginID, From, To);
+handle_control_sub_el(headline, #retract_message{} = Rewrite, _From, To) ->
+  handle_rewrite_control(Rewrite, To);
+handle_control_sub_el(headline, #retract_user{} = Rewrite, _From, To) ->
+  handle_rewrite_control(Rewrite, To);
+handle_control_sub_el(headline, #retract_all{} = Rewrite, _From, To) ->
+  handle_rewrite_control(Rewrite, To);
+handle_control_sub_el(headline, #replace{} = Rewrite, _From, To) ->
+  handle_rewrite_control(Rewrite, To);
+handle_control_sub_el(headline, #groups_x{} = GroupX, From, To) ->
+  handle_group_forwarded_control(GroupX, From, To);
+handle_control_sub_el(_Type, _SubEl, _From, _To) ->
+  ok.
+
+handle_group_forwarded_control(GroupX, From, To) ->
+  case xmpp:get_subtag(GroupX, #forwarded{}) of
+    #forwarded{sub_els = [Message]} ->
+      MessageD = xmpp:decode(Message),
+      %% Bad server or client may send an error message
+      if
+        MessageD#message.type == chat ->
+          process_delivery_msg(MessageD, From, To);
+        true -> ok
+      end;
+    _ -> ok
+  end.
+
+handle_displayed_control(Displayed, OriginID, From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
   BareJID = jid:make(LUser,LServer),
-  Type = case get_conversation_type(LServer,LUser,Conversation) of
-           [T] -> T;
-           _ -> undefined
-         end,
+  Type = get_preferred_conversation_type(LServer, LUser, Conversation),
   PeerJID = jid:make(PUser,PServer),
   {Type1, StanzaID, TS} =
     if
@@ -1581,7 +1514,7 @@ handle_sub_els(chat, #mark_displayed{id = OriginID} = Displayed, From, To) ->
         SID = get_stanza_id(Displayed2,PeerJID,LServer,OriginID),
         TS1 = case is_local(PServer) of
                true -> SID;
-               _ -> eg_get_message_ts(PUser, PServer, SID)
+               _ -> get_external_group_message_ts(LServer, PUser, PServer, SID)
              end,
         {Type, SID, TS1};
       Type =/= undefined ->
@@ -1596,8 +1529,9 @@ handle_sub_els(chat, #mark_displayed{id = OriginID} = Displayed, From, To) ->
           _-> {?NS_XABBER_CHAT, SID, SID}
         end
     end,
-  update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type1,TS);
-handle_sub_els(chat, #mark_received{id = OriginID} = Delivered, From, To) ->
+  update_metainfo(displayed, LServer,LUser,Conversation,StanzaID,Type1,TS).
+
+handle_delivered_control(Delivered, OriginID, From, To) ->
   {PUser, PServer, _} = jid:tolower(From),
   Conversation = jid:to_string(jid:make(PUser,PServer)),
   {LUser,LServer,_} = jid:tolower(To),
@@ -1610,45 +1544,52 @@ handle_sub_els(chat, #mark_received{id = OriginID} = Delivered, From, To) ->
       update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,NS,StanzaID1);
     _ ->
       update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,?NS_XABBER_CHAT,StanzaID1)
-  end;
-handle_sub_els(headline, #retract_message{version = _Version, id = undefined,
-  conversation = _Conv}, _From, _To) ->
+  end.
+
+handle_rewrite_control(#retract_message{version = _Version,
+  id = undefined, conversation = _Conv}, _To) ->
   ok;
-handle_sub_els(headline, #retract_message{version = _Version,  id = _ID,
-  conversation = undefined}, _From, _To) ->
+handle_rewrite_control(#retract_message{version = _Version,
+  id = _ID, conversation = undefined}, _To) ->
   ok;
-handle_sub_els(headline, #retract_message{version =  undefined, id = _ID,
-  conversation = _Conv}, _From, _To) ->
+handle_rewrite_control(#retract_message{version =  undefined,
+  id = _ID, conversation = _Conv}, _To) ->
   ok;
-handle_sub_els(headline, #retract_message{type = Type, version = Version, id = StanzaID,
-  conversation = ConversationJID}, _From, To) ->
+handle_rewrite_control(#retract_message{type = Type, version = Version,
+  id = StanzaID, conversation = ConversationJID}, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
     false ->
-      eg_delete_one_msg(LServer, PUser, PServer, StanzaID, Version);
+      delete_external_group_message(
+        LServer, PUser, PServer, StanzaID, Version);
     _ -> ok
   end,
   Conversation = jid:to_string(ConversationJID),
   TS = time_now(),
   update_retract(LServer,LUser,Conversation,Version,Type, TS),
   ok;
-handle_sub_els(headline, #retract_user{version = Version, id = UserID,
-  conversation = ConversationJID}, _From, To) ->
+handle_rewrite_control(#retract_user{version = Version, id = UserID,
+  conversation = ConversationJID, type = Type0}, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
     false ->
-      eg_delete_user_messages(LServer, PUser, PServer, UserID, Version);
+      delete_external_group_user_messages(
+        LServer, PUser, PServer, UserID, Version);
     _ -> ok
   end,
   Conversation = jid:to_string(ConversationJID),
   TS = time_now(),
-  update_retract(LServer,LUser,Conversation,Version,<<>>,TS),
+  Type = case Type0 of
+           <<>> -> ?NS_GROUPS;
+           undefined -> ?NS_GROUPS;
+           _ -> Type0
+         end,
+  update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_sub_els(headline,
-  #retract_all{type = Type, version = Version,
-  conversation = ConversationJID}, _From, To)
+handle_rewrite_control(#retract_all{type = Type, version = Version,
+  conversation = ConversationJID}, To)
   when ConversationJID =/= undefined andalso Version =/= undefined ->
   #jid{luser = LUser, lserver = LServer} = To,
   #jid{luser = PUser, lserver = PServer} = ConversationJID,
@@ -1656,35 +1597,23 @@ handle_sub_els(headline,
   TS = time_now(),
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
     false ->
-      eg_delete_all_msgs(LServer, PUser, PServer, Version);
+      delete_all_external_group_messages(LServer, PUser, PServer, Version);
     _ -> ok
   end,
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_sub_els(headline, #replace{version = undefined, conversation = _ConversationJID} = _Retract,
-    _From, _To) ->
+handle_rewrite_control(#replace{version = undefined,
+  conversation = _ConversationJID} = _Retract, _To) ->
   ok;
-handle_sub_els(headline, #replace{type = Type, version = Version, conversation = ConversationJID} = Replace,
-    _From, To) ->
+handle_rewrite_control(#replace{type = Type, version = Version,
+  conversation = ConversationJID} = Replace, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
   Conversation = jid:to_string(ConversationJID),
-  eg_maybe_change_last_msg(LServer, ConversationJID, Replace),
+  maybe_change_external_group_last_message(LServer, ConversationJID, Replace),
   TS = time_now(),
   update_retract(LServer,LUser,Conversation,Version,Type,TS),
   ok;
-handle_sub_els(headline, #groups_x{} = GroupX, From, To) ->
-  case xmpp:get_subtag(GroupX, #forwarded{}) of
-    #forwarded{sub_els = [Message]} ->
-      MessageD = xmpp:decode(Message),
-      %% Bad server or client may send an error message
-      if
-        MessageD#message.type == chat ->
-          process_delivery_msg(MessageD, From, To);
-        true -> ok
-      end;
-    _ -> ok
-  end;
-handle_sub_els(_Type, _SubEl, _From, _To) ->
+handle_rewrite_control(_Rewrite, _To) ->
   ok.
 
 process_delivery_msg(MessageD, From, To) ->
@@ -1700,11 +1629,9 @@ process_delivery_msg(MessageD, From, To) ->
       MsgTS = case is_local(PServer) of
                 false ->
                   Time = get_unique_time(MessageD, BarePeer),
-                  LastMsg = #external_group_last_msg{
-                    group = {PUser, PServer}, id = StanzaID,
-                    user_id =get_user_id(MessageD),
-                    packet = xmpp:set_from(MessageD, From)},
-                  eg_store_message(LServer, LastMsg, Time),
+                  store_external_group_message(
+                    LServer, {PUser, PServer}, StanzaID,
+                    xmpp:set_from(MessageD, From), Time),
                   Time;
                 _ ->
                   StanzaID
@@ -1714,9 +1641,9 @@ process_delivery_msg(MessageD, From, To) ->
   end.
 
 %%%===================================================================
-%%% Check VoIP message
+%%% Handle call messages
 %%%===================================================================
-check_voip_msg(Direction, #message{type = chat,
+handle_call_message(Direction, #message{type = chat,
   from = From, to = To, meta = #{stanza_id := StanzaID}} = Pkt)->
   Propose = xmpp:has_subtag(Pkt, #jingle_propose{}),
   Accept = xmpp:get_subtag(Pkt, #jingle_accept{}),
@@ -1731,27 +1658,27 @@ check_voip_msg(Direction, #message{type = chat,
     Propose andalso Direction == in ->
       maybe_push_notification(LUser,LServer,<<"call">>,Pkt),
       store_last_call(Pkt, Peer, LUser, LServer, StanzaID),
-      true;
+      handled;
     Propose ->
       %% Direction is out
-      true;
+      handled;
     Accept /= false ->
       maybe_push_notification(LUser,LServer,<<"data">>,Accept),
       update_metainfo(call, LServer,LUser,Conversation,
         StanzaID,?NS_XABBER_CHAT, StanzaID),
       delete_last_call(Peer, LUser, LServer),
-      true;
+      handled;
     Reject /= false ->
       maybe_push_notification(LUser,LServer,<<"data">>,Reject),
       update_metainfo(call, LServer,LUser,Conversation,
         StanzaID,?NS_XABBER_CHAT, StanzaID),
       delete_last_call(Peer, LUser, LServer),
-      true;
+      handled;
     true ->
-      false
+      pass
   end;
-check_voip_msg(_, _) ->
-  false.
+handle_call_message(_, _) ->
+  pass.
 
 %%%===================================================================
 %%% Internal functions
@@ -2016,6 +1943,7 @@ deactivate_conversation(LServer,LUser,#sync_conversation{type = Type, jid = JID}
     {updated,0} ->
       {error,xmpp:err_item_not_found()};
     {updated,_N} ->
+      maybe_delete_unused_external_group_cache(LServer, Type, Conversation),
       make_sync_push(LServer,LUser,Conversation,TS,Type,false),
       ok;
     _ ->
@@ -2026,10 +1954,41 @@ deactivate_conversation(_,_,_) ->
 
 %% Delete all user conversations
 delete_conversations(LUser, LServer) ->
+  ExternalGroups = get_user_external_group_conversations(LServer, LUser),
   ejabberd_sql:sql_query(
     LServer,
     ?SQL("delete from conversation_metadata "
     " where username = %(LUser)s and %(LServer)H")),
+  lists:foreach(
+    fun(Conversation) ->
+      maybe_delete_unused_external_group_cache(LServer, ?NS_GROUPS, Conversation)
+    end, ExternalGroups),
+  ok.
+
+get_user_external_group_conversations(LServer, LUser) ->
+  Type = ?NS_GROUPS,
+  case ejabberd_sql:sql_query(
+    LServer,
+    ?SQL("select @(conversation)s from conversation_metadata "
+    "where username = %(LUser)s and type = %(Type)s "
+    "and status != 'deleted' and %(LServer)H")) of
+    {selected, Rows} ->
+      lists:usort([Conversation || {Conversation} <- Rows]);
+    _ ->
+      []
+  end.
+
+maybe_delete_unused_external_group_cache(LServer, ?NS_GROUPS, Conversation) ->
+  {GUser, GServer, _} = jid:tolower(jid:from_string(Conversation)),
+  case is_local(GServer) of
+    true ->
+      ok;
+    false ->
+      send_cast(
+        LServer,
+        {external_group, cleanup_cache, Conversation, {GUser, GServer}})
+  end;
+maybe_delete_unused_external_group_cache(_, _, _) ->
   ok.
 
 is_muted(LUser, LServer, Conversation) ->
@@ -2228,7 +2187,7 @@ make_sync_push(LServer,LUser,Conversation, TS, Type, WithPresence) ->
                        jid:from_string(Conversation)) of
                        {_, Ask ,_} when Ask == in; Ask == both ->
                          P = #presence{from = jid:from_string(Conversation),
-                           type = subcribe},
+                           type = subscribe},
                          SubEls = [P | xmpp_codec:get_els(CnElem)],
                          xmpp_codec:set_els(CnElem, SubEls);
                        _ -> CnElem
@@ -2258,7 +2217,7 @@ create_conversation(LServer, LUser, Conversation,
       update_mam_prefs(add,jid:make(LUser,LServer),GroupJID),
       {GUser, GServer, _} = jid:tolower(GroupJID),
       %% Set "read_until" for correct unread count.
-      {LastMsgID, TS} = case get_group_last_message_id_ts(GUser,GServer) of
+      {LastMsgID, TS} = case get_group_last_message_id_ts(LServer, GUser, GServer) of
                           undefined ->  {0,time_now()};
                           V -> V
                         end,
@@ -2274,6 +2233,17 @@ conversation_sql_upsert(LServer, LUser, Conversation , Options) ->
   Status = proplists:get_value('status', Options, <<"active">>),
   Read = proplists:get_value(read, Options, 0),
   TS = time_now(),
+  case proplists:is_defined(read, Options) of
+    true ->
+      conversation_sql_upsert(LServer, LUser, Conversation,
+        Type, Thread, Encrypted, Status, Read, TS);
+    false ->
+      conversation_sql_upsert_keep_read(LServer, LUser, Conversation,
+        Type, Thread, Encrypted, Status, Read, TS)
+  end.
+
+conversation_sql_upsert(LServer, LUser, Conversation,
+    Type, Thread, Encrypted, Status, Read, TS) ->
   ?SQL_UPSERT_T(
     "conversation_metadata",
     ["!username=%(LUser)s",
@@ -2282,6 +2252,22 @@ conversation_sql_upsert(LServer, LUser, Conversation , Options) ->
       "updated_at=%(TS)d",
       "read_until = %(Read)s",
       "read_until_ts = %(Read)d",
+      "conversation_thread=%(Thread)s",
+      "metadata_updated_at=%(TS)d",
+      "status=%(Status)s",
+      "encrypted=%(Encrypted)b",
+      "server_host=%(LServer)s"]).
+
+conversation_sql_upsert_keep_read(LServer, LUser, Conversation,
+    Type, Thread, Encrypted, Status, Read, TS) ->
+  ?SQL_UPSERT_T(
+    "conversation_metadata",
+    ["!username=%(LUser)s",
+      "!conversation=%(Conversation)s",
+      "!type=%(Type)s",
+      "updated_at=%(TS)d",
+      "-read_until = %(Read)s",
+      "-read_until_ts = %(Read)d",
       "conversation_thread=%(Thread)s",
       "metadata_updated_at=%(TS)d",
       "status=%(Status)s",
@@ -2361,11 +2347,5 @@ send_cast(LServer, Message) ->
   Proc = gen_mod:get_module_proc(LServer, ?MODULE),
   gen_server:cast(Proc, Message).
 
-save_last_action(Acc, Message) ->
-  lists:sublist([Message | Acc],50).
-
 is_local(Host) ->
   lists:member(Host,ejabberd_config:get_myhosts()).
-
-migrate() ->
-  ok.

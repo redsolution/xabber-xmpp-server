@@ -283,7 +283,7 @@ change_pinned_query(Server, Group, User, PinnedMsg) ->
   end.
 
 change_pinned(Server, Group, PinnedMsg) ->
-  change_pinned(Server, Group, umdefined, PinnedMsg).
+  change_pinned(Server, Group, undefined, PinnedMsg).
 
 change_pinned(Server, Group, User, PinnedMsg) ->
   [Pinned]= get_info(Group, [messages]),
@@ -305,7 +305,7 @@ delete_all_pinned(Server, Group) ->
   sql_update_pinned(Server, Group, Pinned),
   groups_sm:update_group_session_info(Group, #{messages => Pinned}),
   ejabberd_hooks:run(groups_pinned_changed,
-    Server, [Server, Group, umdefined, Pinned]),
+    Server, [Server, Group, undefined, Pinned]),
   ok.
 
 
@@ -632,6 +632,8 @@ update_group_info(Server, Group, GroupInfo) ->
   ejabberd_hooks:run(groups_group_changed, Server, [Server, Group, State]),
   Result.
 
+change_group_avatar(Server, Group, #groups_avatar{info = undefined}, Iq) ->
+  groups_avatars:delete_group_avatar(Server, Group, Iq);
 change_group_avatar(Server, Group, NewAvatar, Iq) ->
   #groups_avatar{info = NewInfo, data = Data} = NewAvatar,
   CurAvatar = groups_avatars:get_group_avatar(Group),

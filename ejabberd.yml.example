@@ -201,10 +201,10 @@ listen:
       "/ws": ejabberd_http_ws
       "/iq": mod_http_iq
     ##web_admin: true
-    custom_headers:
-      "Access-Control-Allow-Methods": "GET,HEAD,PUT,OPTIONS"
-      "Access-Control-Allow-Headers": "Content-Type"
-      "Access-Control-Allow-Origin": "*"
+    ## custom_headers:
+    ##  "Access-Control-Allow-Methods": "GET,HEAD,PUT,OPTIONS"
+    ##  "Access-Control-Allow-Headers": "Content-Type"
+    ##  "Access-Control-Allow-Origin": "*"
 
   -
     port: 5280
@@ -217,10 +217,10 @@ listen:
     ## web_admin: true
     ## register: true
     ## captcha: true
-    custom_headers:
-      "Access-Control-Allow-Methods": "GET,HEAD,PUT,OPTIONS"
-      "Access-Control-Allow-Headers": "Content-Type"
-      "Access-Control-Allow-Origin": "*"
+    ## custom_headers:
+    ##  "Access-Control-Allow-Methods": "GET,HEAD,PUT,OPTIONS"
+    ##  "Access-Control-Allow-Headers": "Content-Type"
+    ##  "Access-Control-Allow-Origin": "*"
 
   ##
   ## ejabberd_service: Interact with external components (transports, ...)
@@ -751,6 +751,10 @@ modules:
   mod_http_upload:
     docroot: "@HOME@/upload"
     put_url: "https://@HOST@:5443/upload"
+    custom_headers:
+      "Access-Control-Allow-Methods": "GET,HEAD,PUT,OPTIONS"
+      "Access-Control-Allow-Headers": "Content-Type"
+      "Access-Control-Allow-Origin": "*"
   ##   thumbnail: false # otherwise needs ejabberd to be compiled with libgd support
   ## mod_http_upload_quota:
   ##   max_days: 30

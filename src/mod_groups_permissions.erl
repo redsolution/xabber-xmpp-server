@@ -464,6 +464,10 @@ perms_delete(GroupJID, UserJID, PermsType) ->
 perms_delete(Server, Group, Requester, Member) ->
   case verify_users(Server, Group, Requester, Member) of
     {true, _, _} ->
+      lists:foreach(fun(N)->
+        del_fast_perm(Group, Member,
+          #perms_permission{name = N})
+                    end, fast_permissions()),
       sql_delete_perms(Server, Group, Member),
       ok;
     _ ->

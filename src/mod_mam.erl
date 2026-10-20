@@ -85,7 +85,7 @@ start(Host, Opts) ->
     ejabberd_hooks:add(sm_receive_packet, Host, ?MODULE,
 		       sm_receive_packet, 50),
     ejabberd_hooks:add(user_receive_packet, Host, ?MODULE,
-		       user_receive_packet, 88),
+		       user_receive_packet, 80),
     ejabberd_hooks:add(user_send_packet, Host, ?MODULE,
 		       user_send_packet, 88),
     case gen_mod:get_opt(strip_outgoing_stanza_id, Opts) of
@@ -155,7 +155,7 @@ stop(Host) ->
     ejabberd_hooks:delete(sm_receive_packet, Host, ?MODULE,
 			  sm_receive_packet, 50),
     ejabberd_hooks:delete(user_receive_packet, Host, ?MODULE,
-			  user_receive_packet, 88),
+			  user_receive_packet, 80),
     ejabberd_hooks:delete(user_send_packet, Host, ?MODULE,
 			  user_send_packet, 88),
     case gen_mod:get_module_opt(Host, ?MODULE, strip_outgoing_stanza_id) of

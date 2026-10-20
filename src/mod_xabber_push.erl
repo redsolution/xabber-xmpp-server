@@ -50,6 +50,8 @@
 -include("xmpp.hrl").
 
 -define(PUSH_CACHE, push_cache).
+-define(CIPHER_AES_256_CBC, <<"urn:xmpp:ciphers:aes-256-cbc">>).
+-define(CIPHER_BLOWFISH_CBC, <<"urn:xmpp:ciphers:blowfish-cbc">>).
 
 -type c2s_state() :: ejabberd_c2s:state().
 -type timestamp() :: erlang:timestamp().
@@ -266,11 +268,10 @@ process_iq(#iq{from = #jid{lserver = LServer}, to = #jid{lserver = LServer},
   #xpush_encryption{algorithm = Cipher,
     key = #xpush_encryption_key{data = Key}} = Encryption,
   Result = enable(JID, DeviceID, PushJID, Node, XData, Cipher, Key, Mode),
-  ?INFO_MSG("Push with encryption enabled for ~p",[jid:to_string(JID)]),
   case Result of
-    {ok, _TS, DeviceID, _EKey} ->
-      El = make_http_iq_enable_result(LServer, JID, DeviceID),
-      xmpp:make_iq_result(IQ, El);
+    ok ->
+      ?INFO_MSG("Push with encryption enabled for ~p",[jid:to_string(JID)]),
+      xmpp:make_iq_result(IQ);
     {error, not_allowed} ->
       xmpp:make_error(IQ, xmpp:err_not_allowed());
     {error, bad_request} ->
@@ -304,23 +305,28 @@ enable(_JID, undefined, _PushSrv, _Node, _XData, _Alg, _EKey, _Mode) ->
   {error, not_allowed};
 enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
     DeviceID, PushJID, Node, XData, Cipher, EncryptionKey, Mode) ->
-  case ejabberd_sm:get_session_sid(LUser, LServer, LResource) of
-    {TS, PID} ->
-      case store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, DeviceID, Mode) of
-        {ok, _} ->
-          ?INFO_MSG("Enabling push notifications for ~s",
+  case cipher_mode(Cipher) of
+    {ok, _} ->
+      case ejabberd_sm:get_session_sid(LUser, LServer, LResource) of
+        {TS, PID} ->
+          case store_session(LUser, LServer, TS, PushJID, Node, XData, Cipher, EncryptionKey, DeviceID, Mode) of
+            {ok, _} ->
+              ?INFO_MSG("Enabling push notifications for ~s",
+                [jid:encode(JID)]),
+              ejabberd_c2s:cast(PID, push_enable),
+              ok;
+            {error, _} = Err ->
+              ?ERROR_MSG("Cannot enable push for ~s: database error",
+                [jid:encode(JID)]),
+              Err
+          end;
+        none ->
+          ?WARNING_MSG("Cannot enable push for ~s: session not found",
             [jid:encode(JID)]),
-          ejabberd_c2s:cast(PID, push_enable),
-          {ok, TS, DeviceID, EncryptionKey};
-        {error, _} = Err ->
-          ?ERROR_MSG("Cannot enable push for ~s: database error",
-            [jid:encode(JID)]),
-          Err
+          {error, notfound}
       end;
-    none ->
-      ?WARNING_MSG("Cannot enable push for ~s: session not found",
-        [jid:encode(JID)]),
-      {error, notfound}
+    {error, unsupported_cipher} ->
+      {error, bad_request}
   end.
 
 -spec disable(jid()) -> ok | {error, err_reason()}.
@@ -361,7 +367,7 @@ revoke_devices(LUser, LServer, DevIDList) ->
 	      From =  jid:from_string(LServer),
 	      Message = #message{type = headline, from = From,
 	        sub_els = [#devices_revoke{devices = Devices}]},
-	      do_notify(<<"message">>, LServer, PushLJID, Node, XData, [Message], Callback, Cipher, Key, Mode)
+	      do_notify(<<"message">>, LServer, PushLJID, Node, XData, Message, Callback, Cipher, Key, Mode)
 	    end, Sessions),
 	LookupFun = fun() -> LookupResult end,
 	delete_sessions(LUser, LServer, LookupFun, Mod).
@@ -409,7 +415,7 @@ c2s_handle_cast(#{push_enabled := true, mgmt_state := pending, jid := JID} = Sta
   {LUser, LServer, _} =jid:tolower(JID),
 	  {TS, PushLJID, Node, XData, Cipher, Key, Mode} = Device,
 	  Callback = iq_callback(LUser, LServer, TS),
-	  do_notify(PType, LServer, PushLJID, Node, XData, [Payload], Callback, Cipher, Key, Mode),
+	  do_notify(PType, LServer, PushLJID, Node, XData, Payload, Callback, Cipher, Key, Mode),
   {stop, State};
 c2s_handle_cast(State, {send_push, _}) ->
   {stop, State};
@@ -435,25 +441,28 @@ get_device_id(#jid{} = JID) ->
       undefined
   end.
 
-do_notify(PushType, LServer, PushLJID, Node, XData, PayloadList,
-    Callback, Cipher, Key, _Mode) ->
+do_notify(<<"outgoing">>, _LServer, _PushLJID, _Node, _XData, _Payload,
+    _Callback, _Cipher, _Key, _Mode) ->
+  false;
+do_notify(PushType, LServer, PushLJID, Node, XData, Payload,
+    Callback, Cipher, Key, Mode) ->
   From = jid:make(LServer),
-  SubEls = if
-             PayloadList == [undefined] orelse PayloadList == [] -> [];
-             Cipher == <<>> orelse Key == <<>> -> [];
-             true ->
-               [make_encryption(PayloadList, Cipher, Key),
-                 make_new_form(PushType)]
-           end,
-  Item = #ps_item{sub_els = [#xpush_notification{sub_els = SubEls}]},
-  PubSub = #pubsub{publish = #ps_publish{node = Node, items = [Item]},
-    publish_options = XData},
-  IQ = #iq{type = set,
-    from = From,
-    to = jid:make(PushLJID),
-    id = randoms:get_string(),
-    sub_els = [PubSub]},
-  ejabberd_router:route_iq(IQ, Callback),true.
+  case make_notification(PushType, Payload, Cipher, Key, Mode) of
+    {ok, Notification} ->
+      Item = #ps_item{sub_els = [Notification]},
+      PubSub = #pubsub{publish = #ps_publish{node = Node, items = [Item]},
+        publish_options = XData},
+      IQ = #iq{type = set,
+        from = From,
+        to = jid:make(PushLJID),
+        id = randoms:get_string(),
+        sub_els = [PubSub]},
+      ejabberd_router:route_iq(IQ, Callback),
+      true;
+    {error, Reason} ->
+      ?WARNING_MSG("Skipping ~s push notification: ~p", [PushType, Reason]),
+      false
+  end.
 
 -spec store_session(binary(), binary(), timestamp(), jid(), binary(), xdata(), binary(), binary(), any(), push_mode())
 			-> {ok, xabber_push_session()} | {error, err_reason()}.
@@ -614,16 +623,144 @@ cache_nodes(Mod, Host) ->
 	false -> ejabberd_cluster:get_nodes()
     end.
 
+make_notification(_PushType, undefined, _Payload, _Key, _Mode) ->
+  {error, no_payload};
+make_notification(_PushType, _Payload, <<>>, _Key, _Mode) ->
+  {error, no_encryption};
+make_notification(_PushType, _Payload, _Cipher, <<>>, _Mode) ->
+  {error, no_encryption};
+make_notification(PushType, Payload, Cipher, Key, Mode) ->
+  case push_payload(PushType, Mode, Payload) of
+    {ok, Values} ->
+      case make_encryption(Values, Cipher, Key) of
+        {ok, Encrypted} ->
+          {ok, #xpush_notification{
+            sub_els = [Encrypted, make_new_form(PushType)]}};
+        {error, _} = Err ->
+          Err
+      end;
+    {error, _} = Err ->
+      Err
+  end.
+
+push_payload(_PushType, full, Payload) ->
+  payload_values(Payload);
+push_payload(PushType, summary, Payload) ->
+  summary_payload(PushType, Payload).
+
+payload_values(undefined) ->
+  {error, no_payload};
+payload_values([]) ->
+  {error, no_payload};
+payload_values(Payload) when is_list(Payload) ->
+  {ok, Payload};
+payload_values(Payload) ->
+  {ok, [Payload]}.
+
+summary_payload(<<"message">>, Payload) ->
+  message_summary_payload(incoming, Payload);
+summary_payload(<<"displayed">>, Payload) ->
+  displayed_summary_payload(Payload);
+summary_payload(<<"call">>, Payload) ->
+  payload_values(Payload);
+summary_payload(<<"subscribe">>, Payload) ->
+  payload_values(Payload);
+summary_payload(<<"data">>, Payload) ->
+  payload_values(Payload);
+summary_payload(_PushType, _Payload) ->
+  {error, unsupported_summary_type}.
+
+message_summary_payload(Direction, #message{} = Message) ->
+  case message_stanza_id(Direction, Message) of
+    #stanza_id{} = StanzaID ->
+      {ok, [StanzaID]};
+    false ->
+      ?INFO_MSG("MISSING STANZA ID ~p ~p",[Direction, Message]),
+      {error, missing_stanza_id}
+  end;
+message_summary_payload(_Direction, _Payload) ->
+  {error, bad_message_payload}.
+
+displayed_summary_payload(#message{} = Message) ->
+  case xmpp:get_subtag(Message, #mark_displayed{}) of
+    #mark_displayed{} = Displayed ->
+      {ok, [Displayed]};
+    false ->
+      {error, missing_displayed_marker}
+  end;
+displayed_summary_payload(#mark_displayed{} = Displayed) ->
+  {ok, [Displayed]};
+displayed_summary_payload(_Payload) ->
+  {error, bad_displayed_payload}.
+
+message_stanza_id(incoming, #message{from = From, to = To} = Message) ->
+  By = case is_groups_message(Message) of
+         true -> bare_jid(From);
+         false -> bare_jid(To)
+       end,
+  stanza_id_by(Message, By).
+
+is_groups_message(#message{} = Message) ->
+  case xmpp:get_meta(Message, conversation_type, undefined) of
+    ?NS_GROUPS ->
+      true;
+    _ ->
+      xmpp:has_subtag(Message, #groups_x{})
+  end.
+
+stanza_id_by(_Message, undefined) ->
+  false;
+stanza_id_by(#message{} = Message, By) ->
+  find_stanza_id_by(xmpp:get_els(Message), By).
+
+find_stanza_id_by([El | Els], By) ->
+  case decode_stanza_id(El) of
+    #stanza_id{by = By} = StanzaID ->
+      StanzaID;
+    _ ->
+      find_stanza_id_by(Els, By)
+  end;
+find_stanza_id_by([], _By) ->
+  false.
+
+decode_stanza_id(#stanza_id{} = StanzaID) ->
+  StanzaID;
+decode_stanza_id(El) ->
+  case {xmpp:get_name(El), xmpp:get_ns(El)} of
+    {<<"stanza-id">>, ?NS_SID_0} ->
+      try xmpp:decode(El) of
+        #stanza_id{} = StanzaID ->
+          StanzaID;
+        _ ->
+          false
+      catch _:_ ->
+        false
+      end;
+    _ ->
+      false
+  end.
+
+bare_jid(undefined) ->
+  undefined;
+bare_jid(JID) ->
+  jid:remove_resource(JID).
+
 make_encryption(Values, Cipher, KeyBase) ->
   Key = base64:decode(KeyBase),
-  {Length, Encrypted} =
-    case Cipher of
-      <<"urn:xmpp:ciphers:blowfish-cbc">> ->
-        encrypt(blowfish_cbc, Key, make_string(Values));
-      _ ->
-        encrypt(aes_cbc256, Key, make_string(Values))
-    end,
-  #xpush_encrypted{'iv-length' = Length, data = Encrypted}.
+  case cipher_mode(Cipher) of
+    {ok, CipherMode} ->
+      {Length, Encrypted} = encrypt(CipherMode, Key, make_string(Values)),
+      {ok, #xpush_encrypted{'iv-length' = Length, data = Encrypted}};
+    {error, _} = Err ->
+      Err
+  end.
+
+cipher_mode(?CIPHER_AES_256_CBC) ->
+  {ok, aes_cbc256};
+cipher_mode(?CIPHER_BLOWFISH_CBC) ->
+  {ok, blowfish_cbc};
+cipher_mode(_) ->
+  {error, unsupported_cipher}.
 
 encrypt(Mode, Key, Value) ->
   Length = case Mode of
@@ -649,8 +786,10 @@ xabber_push_notification(<<"call">> , LUser, LServer, Payload) ->
   lists:foreach(
     fun({TS, PushLJID, Node, XData, Cipher, Key, Mode}) ->
       Callback = iq_callback(LUser, LServer, TS),
-      do_notify(<<"call">>, LServer, PushLJID, Node, XData, [Payload], Callback, Cipher, Key, Mode)
+      do_notify(<<"call">>, LServer, PushLJID, Node, XData, Payload, Callback, Cipher, Key, Mode)
     end, Devices);
+xabber_push_notification(<<"outgoing">>, _LUser, _LServer, _Payload) ->
+  ok;
 xabber_push_notification(PType, LUser, LServer, Payload) ->
   {ok,  Devices} = lookup_sessions(LUser, LServer),
   SesSIDs = ejabberd_sm:get_session_sids(LUser, LServer),
@@ -667,7 +806,7 @@ xabber_push_notification(PType, LUser, LServer, Payload) ->
   lists:foreach(
     fun({TS, PushLJID, Node, XData, Cipher, Key, Mode}) ->
       Callback = iq_callback(LUser, LServer, TS),
-      do_notify(PType, LServer, PushLJID, Node, XData, [Payload], Callback, Cipher, Key, Mode)
+      do_notify(PType, LServer, PushLJID, Node, XData, Payload, Callback, Cipher, Key, Mode)
     end, OfflineDevices).
 
 iq_callback(LUser, LServer, TS) ->
@@ -682,24 +821,10 @@ iq_callback(LUser, LServer, TS) ->
     (timeout) -> ok % Hmm.
   end.
 
-make_new_form(<<"outgoing">>) ->
-  ExtraFields = [#xdata_field{var = <<"outgoing">>, values = [<<"true">>]}],
-  make_new_form(<<"message">>, ExtraFields);
 make_new_form(PType) ->
-  make_new_form(PType, []).
-
-make_new_form(PType, ExtraFields) ->
   Fields = [
     #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_XABBER_PUSH_INFO]},
     #xdata_field{var = <<"type">>, values = [PType]}
-    ] ++ ExtraFields,
-  #xdata{type = result, fields = Fields}.
-
-make_enable_result(URL, JWT) ->
-  Fields = [
-    #xdata_field{var = <<"FORM_TYPE">>, type = hidden, values = [?NS_XABBER_PUSH]},
-    #xdata_field{var = <<"url">>, values = [URL]},
-    #xdata_field{var = <<"jwt">>, values = [JWT]}
     ],
   #xdata{type = result, fields = Fields}.
 
@@ -730,17 +855,4 @@ format_stanza_error(#stanza_error{reason = Reason, text = Txt}) ->
       Slogan;
     Data ->
       <<Data/binary, " (", Slogan/binary, ")">>
-  end.
-
-make_http_iq_enable_result(LServer, JID, DeviceID) ->
-  case mod_http_iq:get_url(LServer) of
-    undefined ->
-      undefined;
-    URL ->
-      case mod_http_iq:make_jwt(LServer, JID, DeviceID) of
-        {ok, JWT} ->
-          make_enable_result(URL, JWT);
-        _ ->
-          undefined
-      end
   end.

@@ -96,10 +96,12 @@ init([State, Opts]) ->
 		    ({protocol_options, _}) -> true;
 		    (_) -> false
 		 end, Opts),
+	TLSOpts2 = add_certfile(TLSOpts1,
+				 proplists:get_value(cert_domain, Opts)),
     TLSOpts = case proplists:get_bool(tls_compression, Opts) of
-		  false -> [compression_none | TLSOpts1];
-		  true -> TLSOpts1
-	      end,
+		  false -> [compression_none | TLSOpts2];
+		  true -> TLSOpts2
+		  end,
     GlobalRoutes = proplists:get_value(global_routes, Opts, true),
     Timeout = ejabberd_config:negotiation_timeout(),
     State1 = xmpp_stream_in:change_shaper(State, Shaper),
@@ -114,6 +116,19 @@ init([State, Opts]) ->
 		     global_routes => GlobalRoutes,
 		     check_from => CheckFrom},
     ejabberd_hooks:run_fold(component_init, {ok, State3}, [Opts]).
+
+add_certfile(TLSOpts, CertDomain) ->
+    case {proplists:is_defined(certfile, TLSOpts), CertDomain} of
+	{true, _} ->
+	    TLSOpts;
+	{false, undefined} ->
+	    TLSOpts;
+	{false, _} ->
+	    case ejabberd_pkix:get_certfile(CertDomain) of
+		{ok, CertFile} -> [{certfile, CertFile} | TLSOpts];
+		error -> TLSOpts
+	    end
+    end.
 
 handle_stream_start(_StreamStart,
 		    #{remote_server := RemoteServer,
@@ -285,6 +300,7 @@ transform_listen_option(Opt, Opts) ->
 -spec listen_opt_type(access) -> fun((any()) -> any());
 		     (shaper_rule) -> fun((any()) -> any());
 		     (certfile) -> fun((binary()) -> binary());
+		     (cert_domain) -> fun((binary()) -> binary());
 		     (ciphers) -> fun((binary()) -> binary());
 		     (dhfile) -> fun((binary()) -> binary());
 		     (cafile) -> fun((binary()) -> binary());
@@ -308,6 +324,7 @@ listen_opt_type(certfile) ->
 	    ejabberd_pkix:add_certfile(S),
 	    iolist_to_binary(S)
     end;
+listen_opt_type(cert_domain) -> fun iolist_to_binary/1;
 listen_opt_type(ciphers) -> fun iolist_to_binary/1;
 listen_opt_type(dhfile) -> fun misc:try_read_file/1;
 listen_opt_type(cafile) -> fun misc:try_read_file/1;
@@ -342,6 +359,6 @@ listen_opt_type(inet6) -> fun(B) when is_boolean(B) -> B end;
 listen_opt_type(backlog) ->
     fun(I) when is_integer(I), I>0 -> I end;
 listen_opt_type(_) ->
-    [access, shaper_rule, certfile, ciphers, dhfile, cafile, tls,
+    [access, shaper_rule, certfile, cert_domain, ciphers, dhfile, cafile, tls,
      protocol_options, tls_compression, password, hosts, check_from,
      max_fsm_queue, global_routes, backlog, inet, inet6].

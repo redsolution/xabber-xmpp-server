@@ -95,6 +95,7 @@ CREATE TABLE archive (
     foreign_id text,
     tags text[],
     conversation_type text DEFAULT 'urn:xabber:chat',
+    direction text,
     created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 

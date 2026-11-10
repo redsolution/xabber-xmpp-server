@@ -36,6 +36,7 @@ counts(LServer, LUser, Reqs) ->
   <<" and a.bare_peer=c.peer "
   "and a.txt is not null and a.txt != '' "
   "and a.timestamp > c.read_ts "
+  "and (a.direction = 'recv' or a.direction is null) "
   "and (not ARRAY['invite','voip'] && a.tags or a.tags is null) "
   "and a.conversation_type = c.conv_type">>, ServerClause,
   <<" group by a.username, a.bare_peer, a.conversation_type">>,

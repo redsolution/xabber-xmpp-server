@@ -113,7 +113,7 @@ get_user_and_bare_peer({LUser, LHost}, Type, Peer) ->
 		   jid:remove_resource(Peer))),
     {SUser, BarePeer}.
 
-store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS,
+store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, Dir, TS,
     ConvType, OriginID, ForeignID) ->
     {SUser, BarePeer} = get_user_and_bare_peer(
             {LUser, LHost}, Type, Peer),
@@ -123,6 +123,7 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS,
     XML = fxml:element_to_binary(Pkt),
     Body = fxml:get_subtag_cdata(Pkt, <<"body">>),
     SType = misc:atom_to_binary(Type),
+    SDir = misc:atom_to_binary(Dir),
     case ejabberd_sql:sql_query(
            LServer,
            ?SQL_INSERT(
@@ -135,6 +136,7 @@ store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS,
                "xml=%(XML)s",
                "txt=%(Body)s",
                "kind=%(SType)s",
+               "direction=%(SDir)s",
                "conversation_type=%(ConvType)s",
                "tags=%(Tags)as",
                "nick=%(Nick)s",

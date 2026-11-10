@@ -544,7 +544,7 @@ get_encrypted_type(Els) ->
     end
                   end, undefined, Els),
   case R of
-    false -> get_encrypted_type_fallback(Els);
+    undefined -> get_encrypted_type_fallback(Els);
     _ -> R
   end.
 

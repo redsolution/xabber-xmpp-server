@@ -46,8 +46,10 @@
   terminate/2, code_change/3]).
 
 %% hooks
--export([c2s_stream_features/2, sm_receive_packet/1, user_send_packet/1,
-  process_messages/0, remove_user/2, roster_in_subscription/2]).
+-export([c2s_stream_features/2, sm_receive_packet/1,
+  user_send_packet/1, user_receive_packet/1, offline_message/1,
+  process_messages/0, remove_user/2,
+  roster_in_subscription/2]).
 
 %% iq
 -export([process_iq/1]).
@@ -223,6 +225,10 @@ register_hooks(Host) ->
     user_send_packet, 101),
   ejabberd_hooks:add(sm_receive_packet, Host, ?MODULE,
     sm_receive_packet, 55),
+  ejabberd_hooks:add(user_receive_packet, Host, ?MODULE,
+    user_receive_packet, 85),
+  ejabberd_hooks:add(offline_message_hook, Host, ?MODULE,
+    offline_message, 55),
   ejabberd_hooks:add(roster_in_subscription, Host, ?MODULE,
     roster_in_subscription, 60),
   ejabberd_hooks:add(c2s_post_auth_features, Host, ?MODULE,
@@ -235,6 +241,10 @@ unregister_hooks(Host) ->
     user_send_packet, 101),
   ejabberd_hooks:delete(sm_receive_packet, Host, ?MODULE,
     sm_receive_packet, 55),
+  ejabberd_hooks:delete(user_receive_packet, Host, ?MODULE,
+    user_receive_packet, 85),
+  ejabberd_hooks:delete(offline_message_hook, Host, ?MODULE,
+    offline_message, 55),
   ejabberd_hooks:delete(roster_in_subscription, Host, ?MODULE,
     roster_in_subscription, 60),
   ejabberd_hooks:delete(c2s_post_auth_features, Host, ?MODULE,
@@ -251,10 +261,10 @@ c2s_stream_features(Acc, Host) ->
   end.
 
 -spec sm_receive_packet(stanza()) -> stanza().
-sm_receive_packet(#message{to = #jid{luser = LUser, lserver = LServer}} = Pkt) ->
-  Proc = get_subprocess(LUser,LServer),
-  Proc ! {in, Pkt},
-  Pkt;
+%%sm_receive_packet(#message{to = #jid{luser = LUser, lserver = LServer}} = Pkt) ->
+%%  Proc = get_subprocess(LUser,LServer),
+%%  Proc ! {in, Pkt},
+%%  Pkt;
 %% Incoming subscribe is handled via roster_in_subscription so online and
 %% offline requests update sync conversations through the same roster state.
 sm_receive_packet(#presence{type = subscribe} = Pkt) ->
@@ -263,6 +273,22 @@ sm_receive_packet(#presence{to = #jid{lserver = LServer}} = Pkt) ->
   send_cast(LServer, {sm,Pkt}),
   Pkt;
 sm_receive_packet(Acc) ->
+  Acc.
+
+-spec user_receive_packet({stanza(), c2s_state()}) -> {stanza(), c2s_state()}.
+user_receive_packet({#message{meta = #{sm_copy := true}}, _} =  Acc) ->
+  Acc;
+user_receive_packet({#message{to = JID} = Pkt, C2SState}) ->
+  Proc = get_subprocess(JID#jid.luser, JID#jid.lserver),
+  Proc ! {in, Pkt},
+  {Pkt, C2SState};
+user_receive_packet(Acc) ->
+  Acc.
+
+-spec offline_message({any(), message()}) -> {any(), message()}.
+offline_message({_Action, #message{to = To} = Pkt} = Acc) ->
+  Proc = get_subprocess(To#jid.luser, To#jid.lserver),
+  Proc ! {in, Pkt},
   Acc.
 
 -spec roster_in_subscription(boolean(), presence()) -> boolean().
@@ -282,7 +308,7 @@ process_subscription_request(#presence{from = From,
           false ->
             maybe_push_notification(LUser, LServer,
               jid:to_string(jid:remove_resource(From)), ?NS_XABBER_CHAT,
-              <<"subscribe">>, #presence{type = subscribe, from = From}),
+              <<"subscribe">>, Presence),
             ?NS_XABBER_CHAT;
           _ ->
             ?NS_GROUPS
@@ -438,7 +464,7 @@ handle_incoming_chat_message(Peer, To, TS, Pkt) ->
   if
     Invite  =/= false ->
       handle_incoming_group_invite(
-        LServer, LUser, To, Conversation, Invite, TS);
+        LServer, LUser, To, Conversation, Invite, TS, Pkt);
     Type == ?NS_GROUPS ->
       handle_incoming_group_message(
         LServer, LUser, PUser, PServer, Peer, Conversation, IsLocal, Pkt);
@@ -447,15 +473,14 @@ handle_incoming_chat_message(Peer, To, TS, Pkt) ->
         LServer, LUser, To, Conversation, Type, TS, Pkt)
   end.
 
-handle_incoming_domain_message(LServer, LUser, PDomain, Body, TS, Pkt) ->
+handle_incoming_domain_message(LServer, LUser, PDomain, Body, _TS, Pkt) ->
   ShouldArchive = (xmpp:has_subtag(Pkt, #hint{type = 'store'}) orelse
   xmpp:get_text(Body) /= <<>>),
   if
     ShouldArchive ->
       CType = packet_conversation_type(Pkt, not_encrypted),
       maybe_push_notification(LUser, LServer, PDomain, CType,
-        <<"message">>, #stanza_id{id = integer_to_binary(TS),
-          by = jid:make(LUser, LServer)}),
+        <<"message">>, Pkt),
       update_metainfo(LServer, LUser, PDomain, CType);
     true ->
       ok
@@ -464,8 +489,6 @@ handle_incoming_domain_message(LServer, LUser, PDomain, Body, TS, Pkt) ->
 handle_outgoing_domain_message(LServer, LUser, PDomain, StanzaID, Pkt) ->
   CType = packet_conversation_type(Pkt, not_encrypted),
   update_metainfo(LServer, LUser, PDomain, CType, [{read, StanzaID}]),
-  maybe_push_notification(LUser,LServer,<<"outgoing">>,
-    #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LUser, LServer)}),
   ok.
 
 handle_outgoing_archived_message(LServer, LUser, To, StanzaID, Pkt) ->
@@ -477,9 +500,7 @@ handle_outgoing_archived_message(LServer, LUser, To, StanzaID, Pkt) ->
     pass ->
       Conversation = jid:to_string(jid:remove_resource(To)),
       Type = packet_conversation_type(Pkt, not_encrypted),
-      update_metainfo(LServer, LUser, Conversation, Type, [{read, StanzaID}]),
-      maybe_push_notification(LUser,LServer,<<"outgoing">>,
-        #stanza_id{id = integer_to_binary(StanzaID), by = jid:make(LUser, LServer)})
+      update_metainfo(LServer, LUser, Conversation, Type, [{read, StanzaID}])
   end.
 
 handle_outgoing_chat_control_message(LServer, LUser, PUser, PServer, Pkt) ->
@@ -493,17 +514,17 @@ handle_outgoing_chat_control_message(LServer, LUser, PUser, PServer, Pkt) ->
       case Displayed of
         #mark_displayed{id = _OriginID} when Type == ?NS_GROUPS ->
           handle_outgoing_group_displayed_marker(
-            LServer, LUser, PUser, PServer, Conversation, Displayed);
+            LServer, LUser, PUser, PServer, Conversation, Displayed, Pkt);
         #mark_displayed{id = OriginID} ->
           handle_outgoing_chat_displayed_marker(
-            LServer, LUser, Conversation, Type, Displayed, OriginID);
+            LServer, LUser, Conversation, Type, Displayed, OriginID, Pkt);
         _ ->
           ok
       end
   end.
 
 handle_outgoing_group_displayed_marker(LServer, LUser, PUser, PServer,
-    Conversation, Displayed) ->
+    Conversation, Displayed, Pkt) ->
   FilPacket = filter_packet(Displayed,jid:make(PUser,PServer)),
   StanzaID = case xmpp:get_subtag(FilPacket, #stanza_id{}) of
                #stanza_id{id = SID} -> SID;
@@ -523,10 +544,10 @@ handle_outgoing_group_displayed_marker(LServer, LUser, PUser, PServer,
       update_metainfo(read, LServer,LUser,Conversation,
         StanzaID,?NS_GROUPS,MsgTS)
   end,
-  maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed).
+  maybe_push_notification(LUser,LServer,<<"displayed">>,Pkt).
 
 handle_outgoing_chat_displayed_marker(LServer, LUser, Conversation, Type,
-    Displayed, OriginID) ->
+    Displayed, OriginID, Pkt) ->
   BareJID = jid:make(LUser,LServer),
   Displayed2 = filter_packet(Displayed,BareJID),
   StanzaID = get_stanza_id(Displayed2,BareJID,LServer,OriginID),
@@ -540,10 +561,10 @@ handle_outgoing_chat_displayed_marker(LServer, LUser, Conversation, Type,
           end,
   update_metainfo(read, LServer,LUser,Conversation,
     StanzaID,Type1,StanzaID),
-  maybe_push_notification(LUser,LServer,<<"displayed">>,Displayed).
+  maybe_push_notification(LUser,LServer,<<"displayed">>,Pkt).
 
-handle_incoming_group_invite(LServer, LUser, To, Conversation,
-    #groups_invite{jid = GroupJID}, TS) ->
+handle_incoming_group_invite(LServer, LUser, _To, Conversation,
+    #groups_invite{jid = GroupJID}, TS, Pkt) ->
   case GroupJID of
     undefined ->
       %% Bad invite
@@ -553,8 +574,7 @@ handle_incoming_group_invite(LServer, LUser, To, Conversation,
       store_invite(LUser, LServer, GroupJID, integer_to_binary(TS)),
       create_conversation(LServer,LUser, Group, <<>>, false, ?NS_GROUPS),
       maybe_push_notification(LUser ,LServer, Conversation, ?NS_XABBER_CHAT,
-        <<"message">>, #stanza_id{id = integer_to_binary(TS),
-          by = jid:remove_resource(To)})
+        <<"message">>, Pkt)
   end.
 
 handle_incoming_group_message(LServer, LUser, PUser, PServer, Peer,
@@ -577,16 +597,15 @@ handle_incoming_group_message(LServer, LUser, PUser, PServer, Peer,
       end,
       update_metainfo(LServer,LUser,Conversation, ?NS_GROUPS),
       maybe_push_notification(LUser, LServer, Conversation,
-        ?NS_GROUPS, <<"message">>, StanzaID)
+        ?NS_GROUPS, <<"message">>, Pkt)
   end.
 
-handle_incoming_regular_message(LServer, LUser, To, Conversation, Type, TS,
+handle_incoming_regular_message(LServer, LUser, _To, Conversation, Type, _TS,
     Pkt) ->
   case handle_call_message(in, Pkt) of
     pass ->
       maybe_push_notification(LUser, LServer, Conversation, Type,
-        <<"message">>,#stanza_id{id = integer_to_binary(TS),
-          by = jid:remove_resource(To)}),
+        <<"message">>, Pkt),
       update_metainfo(LServer, LUser, Conversation, Type);
     handled ->
       ok
@@ -1663,13 +1682,13 @@ handle_call_message(Direction, #message{type = chat,
       %% Direction is out
       handled;
     Accept /= false ->
-      maybe_push_notification(LUser,LServer,<<"data">>,Accept),
+      maybe_push_notification(LUser,LServer,<<"data">>,Pkt),
       update_metainfo(call, LServer,LUser,Conversation,
         StanzaID,?NS_XABBER_CHAT, StanzaID),
       delete_last_call(Peer, LUser, LServer),
       handled;
     Reject /= false ->
-      maybe_push_notification(LUser,LServer,<<"data">>,Reject),
+      maybe_push_notification(LUser,LServer,<<"data">>,Pkt),
       update_metainfo(call, LServer,LUser,Conversation,
         StanzaID,?NS_XABBER_CHAT, StanzaID),
       delete_last_call(Peer, LUser, LServer),

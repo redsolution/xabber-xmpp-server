@@ -49,6 +49,12 @@
 %% ejabberd_http callback.
 -export([process/2]).
 
+%% gen_iq_handler callback.
+-export([process_iq/1]).
+
+%% Hook callbacks.
+-export([disco_sm_features/5]).
+
 %% api
 -export([get_url/1, make_jwt/3]).
 
@@ -70,11 +76,15 @@
     <<"Content-Type, Authorization">>}).
 -define(AC_MAX_AGE,
   {<<"Access-Control-Max-Age">>, <<"86400">>}).
+-define(CT_XML,
+  {<<"Content-Type">>, <<"text/xml; charset=utf-8">>}).
+-define(CT_PLAIN,
+  {<<"Content-Type">>, <<"text/plain">>}).
 -define(OPTIONS_HEADER,
-  [?AC_ALLOW_ORIGIN, ?AC_ALLOW_METHODS,
+  [?CT_PLAIN, ?AC_ALLOW_ORIGIN, ?AC_ALLOW_METHODS,
     ?AC_ALLOW_HEADERS, ?AC_MAX_AGE]).
--define(HEADER,
-  [?AC_ALLOW_ORIGIN, ?AC_ALLOW_HEADERS]).
+-define(HEADER(CType),
+  [CType, ?AC_ALLOW_ORIGIN, ?AC_ALLOW_HEADERS]).
 -define(TOKEN_CACHE, http_iq_token_cache).
 
 %%--------------------------------------------------------------------
@@ -82,9 +92,13 @@
 %%--------------------------------------------------------------------
 start(Host, Opts) ->
   init_cache(Host, Opts),
+  register_hooks(Host),
+  register_iq_handlers(Host),
   gen_mod:start_child(?MODULE, Host, Opts).
 
 stop(Host) ->
+  unregister_iq_handlers(Host),
+  unregister_hooks(Host),
   case gen_mod:is_loaded_elsewhere(Host, ?MODULE) of
     true -> ok;
     false -> ets_cache:delete(?TOKEN_CACHE)
@@ -120,6 +134,171 @@ mod_options(Host) ->
 
 depends(_Host, _Opts) ->
   [].
+
+%%%===================================================================
+%%% Hooks and IQ handlers
+%%%===================================================================
+
+register_hooks(Host) ->
+  ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
+    disco_sm_features, 50).
+
+unregister_hooks(Host) ->
+  ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
+    disco_sm_features, 50).
+
+register_iq_handlers(Host) ->
+  gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_HTTPIQ,
+    ?MODULE, process_iq).
+
+unregister_iq_handlers(Host) ->
+  gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_HTTPIQ).
+
+disco_sm_features(empty, From, To, Node, Lang) ->
+  disco_sm_features({result, []}, From, To, Node, Lang);
+disco_sm_features({result, Features},
+    #jid{luser = LUser, lserver = LServer},
+    #jid{luser = LUser, lserver = LServer}, <<"">>, _Lang) ->
+  case get_url(LServer) of
+    undefined -> {result, Features};
+    _ -> {result, [?NS_HTTPIQ | Features]}
+  end;
+disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
+  Acc.
+
+process_iq(#iq{from = #jid{luser = LUser, lserver = LServer},
+  to = #jid{luser = LUser, lserver = LServer}} = IQ)  when LUser =/= <<>> ->
+  case get_url(LServer) of
+    undefined ->
+      ?ERROR_MSG("~s is enabled on ~s but URL is not configured",
+        [?MODULE, LServer]),
+      xmpp:make_error(IQ, xmpp:err_service_unavailable());
+    _ ->
+      process_user_iq(IQ)
+  end;
+process_iq(IQ) ->
+  xmpp:make_error(IQ, xmpp:err_forbidden()).
+
+process_user_iq(#iq{type = set, lang = Lang} = IQ) ->
+  Text = <<"Only IQ requests of type 'set' are allowed">>,
+  xmpp:make_error(IQ, xmpp:err_not_allowed(Text, Lang));
+process_user_iq(#iq{type = get, sub_els = [#httpiq_endpoints{}]} = IQ) ->
+  make_endpoints_result(IQ);
+process_user_iq(#iq{type = get, from = From, lang = Lang,
+    sub_els = [#httpiq_token{} = Token]} = IQ) ->
+  case validate_token_payload(Token, Lang) of
+    {ok, Scopes} ->
+      make_token_result(IQ, From, Token#httpiq_token{scopes = Scopes});
+    {error, Error} ->
+      xmpp:make_error(IQ, Error)
+  end;
+process_user_iq(IQ) ->
+  xmpp:make_error(IQ, xmpp:err_not_allowed()).
+
+make_endpoints_result(#iq{to = #jid{lserver = LServer}} = IQ) ->
+  BaseURL = get_url(LServer),
+  xmpp:make_iq_result(IQ, #httpiq_endpoints{
+    protocols = httpiq_protocols(BaseURL)}).
+
+make_token_result(#iq{to = #jid{lserver = LServer}, lang = Lang} = IQ,
+    From, #httpiq_token{scopes = Scopes, ttl = RequestedTTL}) ->
+  case get_device_id(From) of
+    undefined ->
+      xmpp:make_error(IQ, xmpp:err_not_allowed());
+    DeviceID ->
+      TTL = effective_ttl(LServer, RequestedTTL),
+      case make_jwt(LServer, From, DeviceID, Scopes, TTL) of
+        {ok, JWT, Exp} ->
+          xmpp:make_iq_result(IQ, #httpiq_token{
+            scopes = Scopes,
+            ttl = TTL,
+            expires = seconds_to_timestamp(Exp),
+            value = JWT});
+        {error, _} ->
+          Text = <<"HTTP IQ token generation failed">>,
+          xmpp:make_error(IQ, xmpp:err_internal_server_error(Text, Lang))
+      end
+  end.
+
+httpiq_protocols(BaseURL) ->
+  [#httpiq_protocol{
+    var = Var,
+    endpoints = httpiq_endpoints(BaseURL, Endpoints)}
+    || #{var := Var, endpoints := Endpoints} <- httpiq_protocol_specs()].
+
+httpiq_endpoints(BaseURL, EndpointSpecs) ->
+  [#httpiq_endpoint{
+    name = Name,
+    url = endpoint_url(BaseURL, Path)}
+    || #{name := Name, path := Path} <- EndpointSpecs].
+
+httpiq_protocol_specs() ->
+  [
+    #{
+      var => ?NS_MAM_2,
+      endpoints => [
+        #{
+          name => <<"by-id">>,
+          path => <<"archive/by-id/">>
+        }
+      ]
+    }
+  ].
+
+endpoint_url(BaseURL, Path) ->
+  Base = case binary:last(BaseURL) of
+           47 -> BaseURL;
+           _ -> <<BaseURL/binary, "/">>
+         end,
+  <<Base/binary, Path/binary>>.
+
+validate_token_payload(#httpiq_token{scopes = Scopes}, Lang) ->
+  validate_scopes(Scopes, Lang).
+
+validate_scopes([], Lang) ->
+  bad_request(Lang, <<"HTTP IQ token request must contain at least one scope">>);
+validate_scopes(Scopes, Lang) ->
+  Normalized = [str:strip(Scope) || Scope <- Scopes],
+  case lists:member(<<>>, Normalized) of
+    true ->
+      bad_request(Lang, <<"HTTP IQ token scope must not be empty">>);
+    false ->
+      validate_supported_scopes(Normalized, Lang)
+  end.
+
+validate_supported_scopes(Scopes, Lang) ->
+  Unknown = [Scope || Scope <- Scopes,
+    not lists:member(Scope, supported_scopes())],
+  case Unknown of
+    [] ->
+      {ok, Scopes};
+    _ ->
+      Txt = <<"Unsupported HTTP IQ token scope">>,
+      {error, xmpp:err_feature_not_implemented(Txt, Lang)}
+  end.
+
+supported_scopes() ->
+  [Var || #{var := Var} <- httpiq_protocol_specs()].
+
+effective_ttl(LServer, undefined) ->
+  gen_mod:get_module_opt(LServer, ?MODULE, jwt_ttl);
+effective_ttl(LServer, RequestedTTL) ->
+  min(RequestedTTL, gen_mod:get_module_opt(LServer, ?MODULE, jwt_ttl)).
+
+seconds_to_timestamp(Secs) ->
+  {Secs div 1000000, Secs rem 1000000, 0}.
+
+get_device_id(#jid{} = JID) ->
+  {LUser, LServer, LResource} = jid:tolower(JID),
+  case ejabberd_sm:get_user_info(LUser, LServer, LResource) of
+    [_H | Info] ->
+      proplists:get_value(device_id, Info, undefined);
+    _ ->
+      undefined
+  end.
+
+bad_request(Lang, Txt) ->
+  {error, xmpp:err_bad_request(Txt, Lang)}.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -228,37 +407,43 @@ process(Path, #request{method = 'GET', data = Data, q = Q, headers = Headers} = 
   ?DEBUG("Request: ~p ~p ~p ~p~n",[Path,Data,Headers,Q]),
   case extract_auth(Req) of
     {error, Reason} ->
-      {401, ?HEADER, [atom_to_binary(Reason, latin1)]};
+      {401, ?HEADER(?CT_PLAIN), [atom_to_binary(Reason, latin1)]};
     Auth when is_map(Auth) ->
       {User, Server, <<"">>} = maps:get(usr, Auth),
+      Scopes = maps:get(scopes, Auth, []),
       case check_host(Server) of
         true ->
-          handle_reuest(Path, Req, User, Server);
+          handle_reuest(Path, Req, User, Server, Scopes);
         _ ->
-          {400, ?HEADER,[<<"unknown host">>]}
+          {400, ?HEADER(?CT_PLAIN), [<<"unknown host">>]}
       end;
     _ ->
-      {500, ?HEADER, [<<"internal error">>]}
+      {500, ?HEADER(?CT_PLAIN), [<<"internal error">>]}
   end;
 process(_, #request{method = 'OPTIONS', data = <<>>}) ->
   {204, ?OPTIONS_HEADER, []};
 process(_Path, Request) ->
   ?DEBUG("Bad Request: no handler ~p~n~p", [_Path,Request]),
-  {400, ?HEADER, [<<"no handler">>]}.
+  {400, ?HEADER(?CT_PLAIN), [<<"no handler">>]}.
 
-handle_reuest([<<"archive">>], #request{q = Q}, User, Server) ->
-  To = proplists:get_value(<<"by">>, Q),
-  StanzaID = proplists:get_value(<<"id">>, Q),
-  handle_archive(Server, User, StanzaID, To);
-handle_reuest([<<"vcard">>], #request{q = Q}, User, Server) ->
+handle_reuest([<<"archive">>, <<"by-id">>], #request{q = Q}, User, Server, Scopes) ->
+  case lists:member(?NS_MAM_2, Scopes) of
+    true ->
+      To = proplists:get_value(<<"by">>, Q),
+      StanzaID = proplists:get_value(<<"id">>, Q),
+      handle_archive(Server, User, StanzaID, To);
+    false ->
+      {403, ?HEADER(?CT_PLAIN), [<<"forbidden">>]}
+  end;
+handle_reuest([<<"vcard">>], #request{q = Q}, User, Server, _Scopes) ->
   Target = proplists:get_value(<<"jid">>, Q, error),
   handle_vcard(Server, User, Target);
-handle_reuest(Path, _Req, _User, _Server) ->
+handle_reuest(Path, _Req, _User, _Server, _Scopes) ->
   ?DEBUG("path no found: ~p~n", [Path]),
-  {404, ?HEADER, [<<"path no found">>]}.
+  {404, ?HEADER(?CT_PLAIN), [<<"path no found">>]}.
 
 handle_vcard(_Server, _User, error) ->
-  {400, ?HEADER, [<<"bad jid">>]};
+  {400, ?HEADER(?CT_PLAIN), [<<"bad jid">>]};
 handle_vcard(Server, User, Target) when is_binary(Target) ->
   JID = jid:from_string(Target),
   handle_vcard(Server, User, JID);
@@ -268,7 +453,7 @@ handle_vcard(Server, User, JID) ->
   loop(Server, ReqID).
 
 handle_archive(_LServer, _LUser, undefined, _To) ->
-  {400, ?HEADER, [<<"no stanza id">>]};
+  {400, ?HEADER(?CT_PLAIN), [<<"no stanza id">>]};
 handle_archive(LServer, LUser, StanzaID, To) ->
   ReqID = randoms:get_string(),
   do_cast(LServer, {mam_request,LServer,LUser,ReqID,StanzaID,To, self()}),
@@ -285,7 +470,9 @@ extract_auth(#request{auth = HTTPAuth}) ->
         #jid{luser = User, lserver = Server} ->
           case ejabberd_auth:check_password(User, <<"">>, Server, Pass) of
             true->
-              #{usr => {User, Server, <<"">>}, caller_server => Server};
+              #{usr => {User, Server, <<"">>},
+                caller_server => Server,
+                scopes => supported_scopes()};
             _ ->
               {error, invalid_auth}
           end
@@ -315,32 +502,47 @@ check_jwt(Token) ->
       UserDevID = proplists:get_value(<<"sub">>, Payload),
       Exp =  proplists:get_value(<<"exp">>, Payload),
       Now = erlang:system_time(second),
-      try jid:decode(UserDevID) of
-        #jid{luser = LUser, lserver = LServer, lresource = DevID} ->
-          check_jwt(LUser, LServer, DevID, Token, Exp, Now)
-      catch _:_ ->
-        {error, invalid_auth}
+      case jwt_scopes(proplists:get_value(<<"scope">>, Payload, [])) of
+        {ok, Scopes} ->
+          try jid:decode(UserDevID) of
+            #jid{luser = LUser, lserver = LServer, lresource = DevID} ->
+              check_jwt(LUser, LServer, DevID, Token, Exp, Scopes, Now)
+          catch _:_ ->
+            {error, invalid_auth}
+          end;
+        error ->
+          {error, invalid_auth}
       end;
     _ ->
       {error, invalid_auth}
   end.
 
-check_jwt(_LUser, _LServer, _DevID, _Token, Exp, _Now) when not is_integer(Exp) ->
-  {error, invalid_auth};
-check_jwt(_LUser, _LServer, _DevID, _Token, Exp, Now) when Exp < Now ->
-  {error, invalid_auth};
-check_jwt(LUser, LServer, DevID, Token, _, _) ->
-  check_jwt(LUser, LServer, DevID, Token).
+jwt_scopes(Scopes) when is_list(Scopes) ->
+  case lists:all(fun erlang:is_binary/1, Scopes) of
+    true -> {ok, Scopes};
+    false -> error
+  end;
+jwt_scopes(_) ->
+  error.
 
-check_jwt(LUser, LServer, DevID, Token) ->
+check_jwt(_LUser, _LServer, _DevID, _Token, Exp, _Scopes, _Now)
+    when not is_integer(Exp) ->
+  {error, invalid_auth};
+check_jwt(_LUser, _LServer, _DevID, _Token, Exp, _Scopes, Now)
+    when Exp < Now ->
+  {error, invalid_auth};
+check_jwt(LUser, LServer, DevID, Token, _, Scopes, _) ->
+  check_jwt(LUser, LServer, DevID, Token, Scopes).
+
+check_jwt(LUser, LServer, DevID, Token, Scopes) ->
   TokenHash = token_hash(Token),
   Key = token_cache_key(LUser, LServer, DevID),
   Now = erlang:system_time(second),
   case lookup_cached_auth(Key, TokenHash, Now) of
     {ok, Auth} ->
-      Auth;
+      Auth#{scopes => Scopes};
     miss ->
-      verify_jwt_from_storage(LUser, LServer, DevID, Token, TokenHash, Now);
+      verify_jwt_from_storage(LUser, LServer, DevID, Token, TokenHash, Scopes, Now);
     stale ->
       {error, invalid_auth}
   end.
@@ -375,10 +577,10 @@ loop(LServer, ReqID, Acc) ->
       loop(LServer, ReqID, Acc ++ [Pkt]);
     {request_result, ReqID, #iq{} = Pkt} ->
       do_cast(LServer, {delete_session, ReqID}),
-      {200, ?HEADER, [make_string(Acc ++ [Pkt])]}
+      {200, ?HEADER(?CT_XML), [make_string(Acc ++ [Pkt])]}
   after ?TIMEOUT ->
     do_cast(LServer, {delete_session, ReqID}),
-    {408, ?HEADER, [<<"Request Timeout">>]}
+    {408, ?HEADER(?CT_PLAIN), [<<"Request Timeout">>]}
 end.
 
 process_messages(LServer, Packet) ->
@@ -460,9 +662,17 @@ get_url(Host)->
   end.
 
 make_jwt(LServer, JID, DeviceID) ->
+  TTL = gen_mod:get_module_opt(LServer, ?MODULE, jwt_ttl),
+  case make_jwt(LServer, JID, DeviceID, [?NS_MAM_2], TTL) of
+    {ok, Compact, _Exp} ->
+      {ok, Compact};
+    Err ->
+      Err
+  end.
+
+make_jwt(LServer, JID, DeviceID, Scopes, TTL) ->
   {LUser, LServer, _} = jid:tolower(JID),
   Now = erlang:system_time(second),
-  TTL = gen_mod:get_module_opt(LServer, ?MODULE, jwt_ttl),
   Exp = Now + TTL,
   case get_or_create_jwk(LUser, LServer, DeviceID) of
     {ok, JWK} ->
@@ -470,17 +680,17 @@ make_jwt(LServer, JID, DeviceID) ->
       JWS = #{<<"alg">> => <<"HS256">>},
       JWT = #{<<"iss">> => LServer,
         <<"sub">> => Sub,
-        <<"scope">> => [?NS_MAM_2],
+        <<"scope">> => Scopes,
         <<"iat">> => Now,
         <<"exp">> => Exp},
       Signed = jose_jwt:sign(JWK, JWS, JWT),
       {_, Compact} = jose_jws:compact(Signed),
       case store_token_marker(LUser, LServer, DeviceID, JWK, Compact, Exp, Now) of
         ok ->
-          Auth = auth_map(LUser, LServer),
+          Auth = auth_map(LUser, LServer, Scopes),
           Key = token_cache_key(LUser, LServer, DeviceID),
           cache_auth(LServer, Key, token_hash(Compact), Exp, Auth),
-          {ok, Compact};
+          {ok, Compact, Exp};
         Err -> Err
       end;
     Err ->
@@ -512,12 +722,12 @@ lookup_token_marker(LUser, LServer, DeviceID) ->
       Other
   end.
 
-verify_jwt_from_storage(LUser, LServer, DeviceID, Token, TokenHash, Now) ->
+verify_jwt_from_storage(LUser, LServer, DeviceID, Token, TokenHash, Scopes, Now) ->
   case lookup_token_marker(LUser, LServer, DeviceID) of
     {ok, #{jwk := JWK, token_hash := TokenHash, exp := StoredExp}} when StoredExp > Now ->
       case jose_jwt:verify(JWK, Token) of
         {true, _, _} ->
-          Auth = auth_map(LUser, LServer),
+          Auth = auth_map(LUser, LServer, Scopes),
           Key = token_cache_key(LUser, LServer, DeviceID),
           cache_auth(LServer, Key, TokenHash, StoredExp, Auth),
           Auth;
@@ -528,8 +738,10 @@ verify_jwt_from_storage(LUser, LServer, DeviceID, Token, TokenHash, Now) ->
       {error, invalid_auth}
   end.
 
-auth_map(LUser, LServer) ->
-  #{usr => {LUser, LServer, <<"">>}, caller_server => LServer}.
+auth_map(LUser, LServer, Scopes) ->
+  #{usr => {LUser, LServer, <<"">>},
+    caller_server => LServer,
+    scopes => Scopes}.
 
 sql_select_token_marker(LUser, LServer, DeviceID) ->
   case ejabberd_sql:sql_query(

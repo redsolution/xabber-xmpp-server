@@ -622,6 +622,7 @@ CREATE TABLE xabber_push_session (
     cipher text NOT NULL,
     key text NOT NULL,
     device_id text NOT NULL,
+    mode text NOT NULL,
     PRIMARY KEY (server_host, username, timestamp)
 );
 CREATE UNIQUE INDEX i_xabber_push_session_susn ON xabber_push_session USING btree (server_host, username, service, node);

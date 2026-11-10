@@ -69,7 +69,7 @@ start(Host, Opts) ->
     ejabberd_hooks:add(unset_presence_hook,Host, ?MODULE, remove_connection, 10),
     %% why priority 89: to define clearly that we must run BEFORE mod_logdb hook (90)
     ejabberd_hooks:add(user_send_packet,Host, ?MODULE, user_send_packet, 89),
-    ejabberd_hooks:add(user_receive_packet,Host, ?MODULE, user_receive_packet, 89),
+    ejabberd_hooks:add(user_receive_packet,Host, ?MODULE, user_receive_packet, 90),
     gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_CARBONS_2, ?MODULE, iq_handler).
 
 stop(Host) ->
@@ -77,7 +77,7 @@ stop(Host) ->
     ejabberd_hooks:delete(disco_local_features, Host, ?MODULE, disco_features, 50),
     %% why priority 89: to define clearly that we must run BEFORE mod_logdb hook (90)
     ejabberd_hooks:delete(user_send_packet,Host, ?MODULE, user_send_packet, 89),
-    ejabberd_hooks:delete(user_receive_packet,Host, ?MODULE, user_receive_packet, 89),
+    ejabberd_hooks:delete(user_receive_packet,Host, ?MODULE, user_receive_packet, 90),
     ejabberd_hooks:delete(unset_presence_hook,Host, ?MODULE, remove_connection, 10).
 
 reload(Host, NewOpts, OldOpts) ->

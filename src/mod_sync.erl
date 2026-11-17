@@ -48,7 +48,8 @@
 %% hooks
 -export([c2s_stream_features/2, sm_receive_packet/1,
   user_send_packet/1, user_receive_packet/1, offline_message/1,
-  process_messages/0, remove_user/2,
+  process_messages/0, remove_user/2, retract_message/4, replace_message/4,
+  retract_all_messages/3, retract_archive/3,
   roster_in_subscription/2]).
 
 %% iq
@@ -233,6 +234,14 @@ register_hooks(Host) ->
     roster_in_subscription, 60),
   ejabberd_hooks:add(c2s_post_auth_features, Host, ?MODULE,
     c2s_stream_features, 50),
+  ejabberd_hooks:add(retract_message, Host, ?MODULE,
+    retract_message, 50),
+  ejabberd_hooks:add(replace_message, Host, ?MODULE,
+    replace_message, 50),
+  ejabberd_hooks:add(retract_all_messages, Host, ?MODULE,
+    retract_all_messages, 50),
+  ejabberd_hooks:add(retract_archive, Host, ?MODULE,
+    retract_archive, 50),
   ejabberd_hooks:add(remove_user, Host, ?MODULE,
     remove_user, 60).
 
@@ -249,6 +258,14 @@ unregister_hooks(Host) ->
     roster_in_subscription, 60),
   ejabberd_hooks:delete(c2s_post_auth_features, Host, ?MODULE,
     c2s_stream_features, 50),
+  ejabberd_hooks:delete(retract_message, Host, ?MODULE,
+    retract_message, 50),
+  ejabberd_hooks:delete(replace_message, Host, ?MODULE,
+    replace_message, 50),
+  ejabberd_hooks:delete(retract_all_messages, Host, ?MODULE,
+    retract_all_messages, 50),
+  ejabberd_hooks:delete(retract_archive, Host, ?MODULE,
+    retract_archive, 50),
   ejabberd_hooks:delete(remove_user, Host, ?MODULE,
     remove_user, 60).
 
@@ -774,7 +791,7 @@ make_synchronization_metadata(LUser, LServer, Conversation,
       XabberDisplayed = #sync_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
       [#sync_metadata{node = ?NS_XABBER_REWRITE,
-        sub_els = [#sync_retract{version = Retract}]},
+        sub_els = [#rewrite_query{version = Retract}]},
         #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}];
     ?NS_GROUPS ->
       Chat = jid:to_string(jid:make(PUser,PServer)),
@@ -785,7 +802,7 @@ make_synchronization_metadata(LUser, LServer, Conversation,
       XabberDisplayed = #sync_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
       [#sync_metadata{node = ?NS_XABBER_REWRITE,
-        sub_els = [#sync_retract{version = Retract}]},
+        sub_els = [#rewrite_query{version = Retract}]},
         #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}];
     _ when Encrypted == true ->
       Count = unread_count({chat, Conversation, Type}, MetadataMap),
@@ -795,7 +812,7 @@ make_synchronization_metadata(LUser, LServer, Conversation,
       XabberDisplayed = #sync_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
       [#sync_metadata{node = ?NS_XABBER_REWRITE,
-        sub_els = [#sync_retract{version = Retract}]},
+        sub_els = [#rewrite_query{version = Retract}]},
         #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION, sub_els = SubEls}];
     _ ->
       Count = unread_count({chat, Conversation, ?NS_XABBER_CHAT}, MetadataMap),
@@ -812,7 +829,7 @@ make_synchronization_metadata(LUser, LServer, Conversation,
       XabberDisplayed = #sync_displayed{id = Display},
       SubEls = [Unread, XabberDisplayed, XabberDelivered] ++ LastMessage,
       [#sync_metadata{node = ?NS_XABBER_REWRITE,
-        sub_els = [#sync_retract{version = Retract}]},
+        sub_els = [#rewrite_query{version = Retract}]},
         #sync_metadata{node = ?NS_XABBER_SYNCHRONIZATION,
           sub_els = SubEls}] ++ LastCall
   end.
@@ -1426,6 +1443,33 @@ get_preferred_conversation_type(LServer, LUser, Conversation) ->
   end.
 
 
+retract_message(User, Server, Type,
+    #retract_message{conversation = Peer, version = Version}) ->
+  Conversation = jid:encode(jid:tolower(Peer)),
+  update_retract(Server, User, Conversation, Version, Type, time_now()).
+
+replace_message(User, Server, Type,
+    #replace{conversation = Peer, version = Version}) ->
+  Conversation = jid:encode(jid:tolower(Peer)),
+  update_retract(Server, User, Conversation, Version, Type, time_now()).
+
+retract_all_messages(User, Server,
+    #retract_all{conversation = Peer, version = Version, type = Type}) ->
+  Conversation = jid:encode(jid:tolower(Peer)),
+  TS = time_now(),
+  case Type of
+    <<>> -> update_retract(Server, User, Conversation, Version, ?NS_XABBER_CHAT, TS);
+    _ -> update_retract(Server, User, Conversation, Version, Type, TS)
+  end.
+
+retract_archive(User, Server, #retract_archive{version = Version}) ->
+  GroupType = ?NS_GROUPS,
+  ejabberd_sql:sql_query(Server,
+    ?SQL("update conversation_metadata set retract=%(Version)d "
+      "where username=%(User)s and %(Server)H and type != %(GroupType)s "
+      "and retract < %(Version)d")),
+  ok.
+
 %% Retract version in sync metadata is a client-side optimization hint.
 %% Authoritative rewrite/retract state lives in retract archives. For p2p
 %% chats the archive version is per user, while group chats have their own
@@ -1493,14 +1537,16 @@ handle_control_sub_el(chat, #mark_displayed{id = OriginID} = Displayed,
 handle_control_sub_el(chat, #mark_received{id = OriginID} = Delivered,
     From, To) ->
   handle_delivered_control(Delivered, OriginID, From, To);
-handle_control_sub_el(headline, #retract_message{} = Rewrite, _From, To) ->
-  handle_rewrite_control(Rewrite, To);
-handle_control_sub_el(headline, #retract_user{} = Rewrite, _From, To) ->
-  handle_rewrite_control(Rewrite, To);
-handle_control_sub_el(headline, #retract_all{} = Rewrite, _From, To) ->
-  handle_rewrite_control(Rewrite, To);
-handle_control_sub_el(headline, #replace{} = Rewrite, _From, To) ->
-  handle_rewrite_control(Rewrite, To);
+handle_control_sub_el(headline, #retract_message{} = Rewrite, From, To) ->
+  handle_rewrite_control(Rewrite, From, To);
+%%handle_control_sub_el(headline, #retract_user{} = Rewrite, From, To) ->
+%%  handle_rewrite_control(Rewrite, From, To);
+handle_control_sub_el(headline, #retract_all{} = Rewrite, From, To) ->
+  handle_rewrite_control(Rewrite, From, To);
+handle_control_sub_el(headline, #retract_archive{} = Rewrite, From, To) ->
+  handle_rewrite_control(Rewrite, From, To);
+handle_control_sub_el(headline, #replace{} = Rewrite, From, To) ->
+  handle_rewrite_control(Rewrite, From, To);
 handle_control_sub_el(headline, #groups_x{} = GroupX, From, To) ->
   handle_group_forwarded_control(GroupX, From, To);
 handle_control_sub_el(_Type, _SubEl, _From, _To) ->
@@ -1565,74 +1611,84 @@ handle_delivered_control(Delivered, OriginID, From, To) ->
       update_metainfo(delivered, LServer,LUser,Conversation,StanzaID1,?NS_XABBER_CHAT,StanzaID1)
   end.
 
-handle_rewrite_control(#retract_message{version = _Version,
-  id = undefined, conversation = _Conv}, _To) ->
+handle_rewrite_control(#retract_message{sid = undefined}, _, _) ->
   ok;
-handle_rewrite_control(#retract_message{version = _Version,
-  id = _ID, conversation = undefined}, _To) ->
+handle_rewrite_control(#retract_message{conversation = undefined}, _, _) ->
   ok;
-handle_rewrite_control(#retract_message{version =  undefined,
-  id = _ID, conversation = _Conv}, _To) ->
+handle_rewrite_control(#retract_message{version =  undefined}, _, _) ->
   ok;
-handle_rewrite_control(#retract_message{type = Type, version = Version,
-  id = StanzaID, conversation = ConversationJID}, To) ->
+handle_rewrite_control(#retract_message{},
+    #jid{luser = U, lserver = S}, #jid{luser = U, lserver = S}) ->
+  ok;
+handle_rewrite_control(#retract_all{conversation = C, version = V},
+    _,_) when C =:= undefined orelse V =:= undefined ->
+  ok;
+handle_rewrite_control(#retract_all{},
+    #jid{luser = U, lserver = S}, #jid{luser = U, lserver = S}) ->
+  ok;
+handle_rewrite_control(#retract_archive{version = undefined}, _, _) ->
+  ok;
+handle_rewrite_control(#retract_archive{},
+    #jid{luser = U, lserver = S}, #jid{luser = U, lserver = S}) ->
+  ok;
+handle_rewrite_control(#retract_archive{version = Version},
+    #jid{luser = PUser, lserver = PServer},
+    #jid{luser = LUser, lserver = LServer}) ->
+  case lists:member(PServer, ejabberd_config:get_myhosts()) of
+    false -> delete_all_external_group_messages(LServer, PUser, PServer, Version);
+    _ -> ok
+  end,
+  Conversation = jid:to_string(jid:make(PUser, PServer)),
+  update_retract(LServer, LUser, Conversation, Version, ?NS_GROUPS, time_now()),
+  ok;
+handle_rewrite_control(#retract_message{version = Version,
+  sid = #stanza_id{id = StanzaID},
+  conversation = #jid{luser = PUser, lserver = PServer}},
+    #jid{luser = PUser, lserver = PServer}, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
-  #jid{luser = PUser, lserver = PServer} = ConversationJID,
-  case lists:member(PServer,ejabberd_config:get_myhosts()) of
+  case lists:member(PServer, ejabberd_config:get_myhosts()) of
     false ->
       delete_external_group_message(
         LServer, PUser, PServer, StanzaID, Version);
     _ -> ok
   end,
-  Conversation = jid:to_string(ConversationJID),
+  Conversation = jid:to_string(jid:make(PUser, PServer)),
   TS = time_now(),
-  update_retract(LServer,LUser,Conversation,Version,Type, TS),
+  update_retract(LServer, LUser, Conversation, Version, ?NS_GROUPS, TS),
   ok;
-handle_rewrite_control(#retract_user{version = Version, id = UserID,
-  conversation = ConversationJID, type = Type0}, To) ->
+handle_rewrite_control(#retract_all{type = ?NS_GROUPS, sender = UserID,
+  version = Ver, conversation = #jid{luser = PUser, lserver = PServer}},
+    #jid{luser = PUser, lserver = PServer}, To) when UserID =/= <<>> ->
   #jid{luser = LUser, lserver = LServer} = To,
-  #jid{luser = PUser, lserver = PServer} = ConversationJID,
   case lists:member(PServer,ejabberd_config:get_myhosts()) of
     false ->
       delete_external_group_user_messages(
-        LServer, PUser, PServer, UserID, Version);
+        LServer, PUser, PServer, UserID, Ver);
     _ -> ok
   end,
-  Conversation = jid:to_string(ConversationJID),
+  Conversation = jid:to_string(jid:make(PUser, PServer)),
   TS = time_now(),
-  Type = case Type0 of
-           <<>> -> ?NS_GROUPS;
-           undefined -> ?NS_GROUPS;
-           _ -> Type0
-         end,
-  update_retract(LServer,LUser,Conversation,Version,Type,TS),
+  update_retract(LServer, LUser, Conversation, Ver, ?NS_GROUPS, TS),
   ok;
-handle_rewrite_control(#retract_all{type = Type, version = Version,
-  conversation = ConversationJID}, To)
-  when ConversationJID =/= undefined andalso Version =/= undefined ->
+handle_rewrite_control(#replace{version = undefined}, _From, _To) ->
+  ok;
+handle_rewrite_control(#replace{},
+    #jid{luser = U, lserver = S}, #jid{luser = U, lserver = S}) ->
+  ok;
+handle_rewrite_control(#replace{version = Version,
+  conversation = #jid{luser = PUser, lserver = PServer}} = Replace,
+    #jid{luser = PUser, lserver = PServer}, To) ->
   #jid{luser = LUser, lserver = LServer} = To,
-  #jid{luser = PUser, lserver = PServer} = ConversationJID,
-  Conversation = jid:to_string(ConversationJID),
-  TS = time_now(),
-  case lists:member(PServer,ejabberd_config:get_myhosts()) of
-    false ->
-      delete_all_external_group_messages(LServer, PUser, PServer, Version);
+  CJID = jid:make(PUser, PServer),
+  Conversation = jid:to_string(CJID),
+  case lists:member(PServer, ejabberd_config:get_myhosts()) of
+    false -> maybe_change_external_group_last_message(LServer, CJID, Replace);
     _ -> ok
   end,
-  update_retract(LServer,LUser,Conversation,Version,Type,TS),
-  ok;
-handle_rewrite_control(#replace{version = undefined,
-  conversation = _ConversationJID} = _Retract, _To) ->
-  ok;
-handle_rewrite_control(#replace{type = Type, version = Version,
-  conversation = ConversationJID} = Replace, To) ->
-  #jid{luser = LUser, lserver = LServer} = To,
-  Conversation = jid:to_string(ConversationJID),
-  maybe_change_external_group_last_message(LServer, ConversationJID, Replace),
   TS = time_now(),
-  update_retract(LServer,LUser,Conversation,Version,Type,TS),
+  update_retract(LServer, LUser, Conversation, Version, ?NS_GROUPS, TS),
   ok;
-handle_rewrite_control(_Rewrite, _To) ->
+handle_rewrite_control(_Rewrite, _From, _To) ->
   ok.
 
 process_delivery_msg(MessageD, From, To) ->
@@ -2120,7 +2176,7 @@ store_invite(LUser, LServer,GroupJID,StanzaID) ->
   %% delete the previous invitation, if it exists
   case Data#sync_data.invite of
     undefined -> ok;
-    ID -> mod_retract:delete_message(LServer, LUser, ID)
+    ID -> mod_rewrite:delete_message(LServer, LUser, ID)
   end,
   NewData = Data#sync_data{
     invite = StanzaID
@@ -2184,7 +2240,7 @@ delete_invite(LUser,LServer,PUser,PServer) ->
   case Data#sync_data.invite of
     undefined -> ok;
     ID ->
-      mod_retract:delete_message(LServer, LUser, ID),
+      mod_rewrite:delete_message(LServer, LUser, ID),
       NewData = Data#sync_data{invite = undefined},
       store_sync_data(NewData)
   end.

@@ -32,7 +32,7 @@
 -export([init/2, remove_user/2, remove_room/3, delete_old_messages/3,
 	 get_columns_and_from/0, get_user_and_bare_peer/3, is_encrypted/2,
 	 extended_fields/0, store/11, write_prefs/4, get_prefs/2, select/6, export/1,
-   remove_from_archive/3, make_archive_el/8]).
+   remove_from_archive/3, make_archive_el/8, get_message_tags/1]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
 -include("xmpp.hrl").

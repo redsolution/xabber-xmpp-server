@@ -450,7 +450,8 @@ CREATE TABLE groupchat_block (
 CREATE TABLE groupchat_retract(
     chatgroup text,
     xml text,
-    version integer,
+    version bigint,
+    event_type text NOT NULL DEFAULT 'retract-message',
     CONSTRAINT uc_groupchat_versions UNIQUE (chatgroup,xml,version),
     FOREIGN KEY (chatgroup) REFERENCES groupchats(jid) ON DELETE CASCADE
     );
@@ -490,15 +491,16 @@ ALTER TABLE archive ADD CONSTRAINT unique_timestamp UNIQUE (timestamp, server_ho
 --    FOREIGN KEY (server_host, id) REFERENCES archive (server_host, timestamp) ON DELETE CASCADE
 --);
 
-CREATE TABLE message_retract(
+CREATE TABLE message_rewrite(
     username text,
     server_host text NOT NULL,
     xml text,
     version bigint,
     conversation text not null,
     type text not null default 'urn:xabber:chat',
+    event_type text NOT NULL DEFAULT 'retract-message',
     created bigint not null default ((date_part('epoch'::text, now()) * (1000000)::double precision))::bigint,
-    CONSTRAINT uc_retract_message_versions UNIQUE (username,server_host,version)
+    CONSTRAINT uc_rewrite_message_versions UNIQUE (username,server_host,version)
     );
 
 

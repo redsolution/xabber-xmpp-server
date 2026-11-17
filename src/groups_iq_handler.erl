@@ -336,44 +336,67 @@ make_action(#iq{type = Type, from = From, sub_els = Els} = Iq) ->
       xmpp:make_error(Iq, xmpp:err_not_allowed())
   end.
 
-make_action(get, [#retract_query{version = undefined, 'less-than' = undefined}],
+make_action(get, [#rewrite_query{version = undefined}],
     Server, Group, _User, _UserJID) ->
   groups_retract:get_version_reply(Server, Group);
-make_action(get, [#retract_query{version = Version, 'less-than' = Less}],
+make_action(get, [#rewrite_query{version = Version, max = Max}],
     Server, Group, _User, UserJID) ->
-  CurrentVer =  groups_retract:send_rewrite_archive(Server, UserJID,
-    Group, Version, Less),
-  #retract_query{version=CurrentVer};
-make_action(set, [#retract_message{symmetric = true, id = ID}],
-    Server, Group, User, _) ->
-  case groups_retract:retract_message(Server, Group, User, ID) of
-    ok -> ok;
-    {error, not_found} ->
-      {error, xmpp:err_item_not_found()};
-    {error, not_allowed} ->
-      {error, xmpp:err_not_allowed()};
-    _ ->
-      {error, xmpp:err_internal_server_error()}
+  case groups_retract:send_rewrite_archive(Server, UserJID, Group, Version, Max) of
+    {ok, CurrentVer} -> #rewrite_query{version = CurrentVer};
+    {error, _} -> {error, xmpp:err_internal_server_error()}
   end;
-make_action(set, [#retract_user{symmetric = true, id =ID}],
+make_action(set, [#retract_message{conversation = Conversation,
+    sid = #stanza_id{by = By, id = ID}}],
     Server, Group, User, _) ->
-  case groups_retract:retract_user_messages(
-    Server, Group, User, ID) of
-    ok -> ok;
-    _ -> {error, xmpp:err_not_allowed()}
+  GroupJID = jid:tolower(jid:from_string(Group)),
+  case jid:tolower(Conversation) =:= GroupJID andalso
+      jid:tolower(By) =:= GroupJID of
+    true ->
+      case groups_retract:retract_message(Server, Group, User, ID) of
+        ok -> ok;
+        {error, bad_request} -> {error, xmpp:err_bad_request()};
+        {error, not_found} -> {error, xmpp:err_item_not_found()};
+        {error, not_allowed} -> {error, xmpp:err_not_allowed()};
+        _ -> {error, xmpp:err_internal_server_error()}
+      end;
+    false -> {error, xmpp:err_bad_request()}
   end;
-make_action(set, [#retract_all{symmetric = true}],
+make_action(set, [#retract_all{sender = ID,
+    conversation = Conversation}],
+    Server, Group, User, _) when ID =/= <<>> ->
+  GroupJID = jid:tolower(jid:from_string(Group)),
+  case jid:tolower(Conversation) =:= GroupJID of
+    true ->
+      case groups_retract:retract_user_messages(Server, Group, User, ID) of
+        ok -> ok;
+        {error, not_allowed} -> {error, xmpp:err_not_allowed()};
+        {error, not_found} -> {error, xmpp:err_item_not_found()};
+        _ -> {error, xmpp:err_internal_server_error()}
+      end;
+    false -> {error, xmpp:err_bad_request()}
+  end;
+make_action(set, [#retract_archive{}],
     Server, Group, User, _) ->
   case groups_retract:retract_all_messages(
     Server, Group, User) of
     ok -> ok;
-    _ -> {error, xmpp:err_not_allowed()}
+    {error, not_allowed} -> {error, xmpp:err_not_allowed()};
+    _ -> {error, xmpp:err_internal_server_error()}
   end;
-make_action(set, [#replace{} = Replace], Server, Group, User, _) ->
-  case groups_retract:rewrite_message(
-    Server, Group, User, Replace) of
-    ok -> ok;
-    _ -> {error, xmpp:err_not_allowed()}
+make_action(set, [#replace{conversation = Conversation,
+    sid = #stanza_id{by = By}} = Replace], Server, Group, User, _) ->
+  GroupJID = jid:tolower(jid:from_string(Group)),
+  case jid:tolower(Conversation) =:= GroupJID andalso
+      jid:tolower(By) =:= GroupJID of
+    true ->
+      case groups_retract:rewrite_message(Server, Group, User, Replace) of
+        ok -> ok;
+        {error, bad_request} -> {error, xmpp:err_bad_request()};
+        {error, not_found} -> {error, xmpp:err_item_not_found()};
+        {error, not_allowed} -> {error, xmpp:err_not_allowed()};
+        _ -> {error, xmpp:err_internal_server_error()}
+      end;
+    false -> {error, xmpp:err_bad_request()}
   end;
 make_action(Type, SubEls, _, Group, _, _) ->
   ?WARNING_MSG("Unknown IQ. Group: ~p, Type: ~p, Query: ~p",

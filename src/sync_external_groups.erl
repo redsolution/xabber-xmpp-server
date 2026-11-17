@@ -66,9 +66,9 @@ store_message(LServer, {GUser, GServer} = Group, StanzaID, Packet, TS) ->
         author_id(UserID), TS1, false)
   end.
 
-change_last_message(Group, Replace) ->
-  ID = Replace#replace.id,
-  Ver = integer_to_binary(Replace#replace.version),
+change_last_message(Group, #replace{sid = #stanza_id{id = ID},
+    version = Version, replacement = #replacement_message{message = #message{} = Message}}) ->
+  Ver = integer_to_binary(Version),
   case remember_action(Group, retracts, {message, ID, Ver}) of
     duplicate ->
       ok;
@@ -77,11 +77,15 @@ change_last_message(Group, Replace) ->
         #external_group_last_msg{retract_version = Ver, id = ID} ->
           ok;
         #external_group_last_msg{id = ID} = Record ->
-          do_change_last_message(Replace, Record);
+          NewRecord = Record#external_group_last_msg{
+            packet = Message, retract_version = Ver},
+          store_last_msg(NewRecord);
         _ ->
           ok
       end
-  end.
+  end;
+change_last_message(_Group, _Replace) ->
+  ok.
 
 delete_message(_LServer, _Group, <<>>, <<>>, _Version) ->
   ok;
@@ -327,30 +331,6 @@ select_last_msg(Group) ->
     _ ->
       {error, not_found}
   end.
-
-do_change_last_message(Replace, LastMsg) ->
-  Ver = integer_to_binary(Replace#replace.version),
-  #replace{replace_message = XabberReplaceMessage} = Replace,
-  #replace_message{body = Text, sub_els = NewEls} = XabberReplaceMessage,
-  MD = xmpp:decode(LastMsg#external_group_last_msg.packet),
-  Sub = MD#message.sub_els,
-  Body = MD#message.body,
-  OldText = xmpp:get_text(Body),
-  Sub1 = lists:filter(fun(El) ->
-    case xmpp:get_ns(El) of
-      ?NS_REFERENCES -> false;
-      ?NS_GROUPS -> false;
-      _ -> true
-    end end, Sub),
-  Els1 = Sub1 ++ NewEls,
-  NewBody = [#text{lang = <<>>, data = Text}],
-  R = #replaced{stamp = erlang:timestamp(), body = OldText},
-  Els2 = [R|Els1],
-  NewMsg = MD#message{sub_els = Els2, body = NewBody},
-  NewLastMsg = LastMsg#external_group_last_msg{
-    packet = NewMsg,
-    retract_version = Ver},
-  store_last_msg(NewLastMsg).
 
 retract_dedup_key(all, all, Version) ->
   {all, Version};

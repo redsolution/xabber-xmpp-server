@@ -313,7 +313,7 @@ select_last_msg(Group) ->
     [#external_group_last_msg{packet = XML} = Record] ->
       case fxml_stream:parse_element(XML) of
         #xmlel{} = El ->
-          try xmpp:decode(El, ?NS_CLIENT, []) of
+          try xmpp:decode(El, ?NS_CLIENT, [ignore_els]) of
             Pkt ->
               Record#external_group_last_msg{packet = Pkt}
           catch _:{xmpp_codec, Why} ->

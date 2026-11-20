@@ -421,8 +421,13 @@ get_subprocess(User,Server)->
   case whereis(ProcName) of
     undefined ->
       PID = spawn(?MODULE,process_messages,[]),
-      register(ProcName, PID),
-      PID;
+      try register(ProcName, PID) of
+        true -> PID
+      catch
+        error:badarg ->
+          PID ! stop,
+          get_subprocess(User, Server)
+      end;
     PID ->
       PID
   end.
@@ -676,8 +681,15 @@ async_make_result(#iq{from = UserJID, sub_els = [
            end,
   fun() ->
     {LUser, LServer, _} = jid:tolower(UserJID),
-    Sync = make_result(LUser, LServer, Stamp1, RSM, []),
-    ejabberd_router:route(xmpp:make_iq_result(IQ, Sync))
+    Reply = try make_result(LUser, LServer, Stamp1, RSM, []) of
+      Sync -> xmpp:make_iq_result(IQ, Sync)
+    catch
+      Class:Reason:Stacktrace ->
+        ?ERROR_MSG("Failed to build sync result for ~s@~s: ~p:~p~n~p",
+          [LUser, LServer, Class, Reason, Stacktrace]),
+        xmpp:make_error(IQ, xmpp:err_internal_server_error())
+    end,
+    ejabberd_router:route(Reply)
   end.
 
 make_result(User, Server, Stamp, RSM, Form) ->

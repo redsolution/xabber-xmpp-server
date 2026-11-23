@@ -3625,6 +3625,9 @@ tree_action(Host, Function, Args) ->
 	    case ejabberd_sql:sql_bloc(ServerHost, Fun) of
 		{atomic, Result} ->
 		    Result;
+		{error, Reason} ->
+		    ?ERROR_MSG("database failure: ~p", [Reason]),
+		    {error, xmpp:err_internal_server_error(<<"Database failure">>, ?MYLANG)};
 		{aborted, Reason} ->
 		    ?ERROR_MSG("transaction return internal error: ~p~n", [{aborted, Reason}]),
 		    ErrTxt = <<"Database failure">>,
@@ -3691,7 +3694,11 @@ do_transaction(ServerHost, Fun, Trans, DBType) ->
 		transaction -> sql_transaction;
 		_ -> sql_bloc
 	    end,
-	    ejabberd_sql:SqlFun(ServerHost, Fun);
+	    case ejabberd_sql:SqlFun(ServerHost, Fun) of
+		{error, SqlReason} ->
+		    {aborted, SqlReason};
+		SqlResult -> SqlResult
+	    end;
 	_ ->
 	    Fun()
     end,

@@ -112,6 +112,7 @@
 
 %% default value for the maximum number of user connections
 -define(MAX_USER_SESSIONS, infinity).
+-define(STALE_SESSION_CHECK_INTERVAL, 300000).
 
 %%====================================================================
 %% API
@@ -465,6 +466,7 @@ init([]) ->
     ejabberd_hooks:add(config_reloaded, ?MODULE, config_reloaded, 50),
     lists:foreach(fun host_up/1, ?MYHOSTS),
     ejabberd_commands:register_commands(get_commands_spec()),
+    erlang:send_after(?STALE_SESSION_CHECK_INTERVAL, self(), check_stale_sessions),
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
@@ -483,6 +485,10 @@ handle_cast(_Msg, State) -> {noreply, State}.
 
 handle_info({route, Packet}, State) ->
     route(Packet),
+    {noreply, State};
+handle_info(check_stale_sessions, State) ->
+    erlang:send_after(?STALE_SESSION_CHECK_INTERVAL, self(), check_stale_sessions),
+    spawn(fun clean_stale_sessions/0),
     {noreply, State};
 handle_info(Info, State) ->
     ?WARNING_MSG("unexpected info: ~p", [Info]),
@@ -613,6 +619,29 @@ delete_session(Mod, #session{usr = {LUser, LServer, _}} = Session) ->
 			     cache_nodes(Mod, LServer));
 	false ->
 	    ok
+    end.
+
+clean_stale_sessions() ->
+    lists:foreach(fun clean_stale_session/1, dirty_get_my_sessions_list()).
+
+clean_stale_session(#session{sid = {_, Pid} = SID,
+                             usr = {User, Server, Resource}}) ->
+    case is_process_alive(Pid) of
+        true -> ok;
+        false ->
+            Mod = get_sm_backend(Server),
+            case Mod:get_sessions(User, Server) of
+                {ok, Sessions} ->
+                    case lists:keyfind(SID, #session.sid, Sessions) of
+                        #session{usr = {User, Server, Resource}} = Session ->
+                            case is_online(Session) andalso not is_process_alive(Pid) of
+                                true -> delete_session(Mod, Session);
+                                false -> ok
+                            end;
+                        _ -> ok
+                    end;
+                _ -> ok
+            end
     end.
 
 -spec online([#session{}]) -> [#session{}].

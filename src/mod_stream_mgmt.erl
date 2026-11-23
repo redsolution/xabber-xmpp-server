@@ -208,7 +208,9 @@ c2s_handle_send(#{mgmt_state := MgmtState, mod := Mod,
 	_ when IsStanza ->
 	    case need_to_enqueue(State, Pkt) of
 		{true, State1} ->
-		    case mgmt_queue_add(State1, Pkt) of
+		    case valid_queue_stanza(State1, Pkt) of
+			false -> State1;
+			true -> case mgmt_queue_add(State1, Pkt) of
 			#{mgmt_max_queue := exceeded} = State2 ->
 			    State3 = State2#{mgmt_resend => false},
 			    Err = xmpp:serr_policy_violation(
@@ -218,6 +220,7 @@ c2s_handle_send(#{mgmt_state := MgmtState, mod := Mod,
 			    send_rack(State2);
 			State2 ->
 			    State2
+		    end
 		    end;
 		{false, State1} ->
 		    State1
@@ -234,6 +237,17 @@ c2s_handle_send(#{mgmt_state := MgmtState, mod := Mod,
     end;
 c2s_handle_send(State, _Pkt, _Result) ->
     State.
+
+valid_queue_stanza(#{mgmt_state := pending, xmlns := NS, jid := JID}, Pkt) ->
+    try xmpp:encode(Pkt, NS) of
+        _ -> true
+    catch Class:Reason:Stacktrace ->
+        ?ERROR_MSG("Cannot enqueue stanza for ~s: ~p:~p~n~p",
+                   [jid:encode(JID), Class, Reason, Stacktrace]),
+        false
+    end;
+valid_queue_stanza(_State, _Pkt) ->
+    true.
 
 c2s_handle_call(#{sid := {Time, _}, mod := Mod, mgmt_queue := Queue} = State,
 		{resume_session, Time}, From) ->

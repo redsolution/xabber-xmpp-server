@@ -37,7 +37,8 @@
   init/1, handle_call/3, handle_cast/2, terminate/2]).
 
 %% API
--export([process_iq_local/1, process_iq_sm/1, make_action/1]).
+-export([process_iq_local/1, process_iq_sm/1, make_action/1,
+  async_iq_local/1, async_iq_sm/1]).
 
 %% records
 -record(state, {host = <<"">> :: binary()}).
@@ -63,8 +64,8 @@ terminate(_Reason, State) ->
   unregister_iq_handlers(Host).
 
 register_iq_handlers(Host) ->
-  gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_GROUPS, ?MODULE, process_iq_sm),
-  gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_GROUPS, ?MODULE, process_iq_local).
+  gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_GROUPS, ?MODULE, async_iq_sm),
+  gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_GROUPS, ?MODULE, async_iq_local).
 
 unregister_iq_handlers(Host) ->
   gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_GROUPS),
@@ -82,7 +83,7 @@ handle_cast(#iq{type = error}, State) ->
 handle_cast(#iq{type = result, sub_els = [#pubsub{}]} = Iq, State) ->
   process_pubsub(Iq),
   {noreply, State};
-handle_cast(#iq{type = result, sub_els = [#vcard_temp{}]} = Iq, State) ->
+handle_cast(#iq{type = result, sub_els = [#vcard_temp{}]} = _Iq, State) ->
   %% deprecated
 %%  process_vcard(Iq),
   {noreply, State};
@@ -94,6 +95,28 @@ handle_cast(#iq{} = Iq, State) ->
   {noreply, State};
 handle_cast(_Request, State) ->
   {noreply, State}.
+
+async_iq_sm(IQ) ->
+  async_iq(IQ, fun process_iq_sm/1).
+
+async_iq_local(IQ) ->
+  async_iq(IQ, fun process_iq_local/1).
+
+async_iq(IQ, Handler) ->
+  spawn(fun() ->
+    try Handler(IQ) of
+      ignore -> ok;
+      Result -> ejabberd_router:route(Result)
+    catch
+      error:{xmpp_codec, Why} ->
+        Txt = xmpp:io_format_error(Why),
+        ejabberd_router:route(xmpp:make_error(IQ, xmpp:err_bad_request(Txt, IQ#iq.lang)));
+      Class:Reason:Stack ->
+        ?ERROR_MSG("Failed to process group IQ: ~p~nReason: ~p", [IQ, {Class, Reason, Stack}]),
+        ejabberd_router:route_error(IQ, xmpp:err_internal_server_error())
+    end
+  end),
+  ignore.
 
 %%Add owner
 process_iq_sm(#iq{type = get, sub_els = [#groups_owner{}]} = Iq) ->
@@ -323,11 +346,14 @@ process_iq_local(#iq{from = From, to = To, type = set,
 process_iq_local(IQ) ->
   xmpp:make_error(IQ, xmpp:err_bad_request()).
 
-make_action(#iq{type = set, sub_els = [#mam_query{}]} = Iq) ->
+make_action(IQ) ->
+  async_iq(IQ, fun do_make_action/1).
+
+do_make_action(#iq{type = set, sub_els = [#mam_query{}]} = Iq) ->
   process_mam_iq(Iq);
-make_action(#iq{sub_els = [#mam_query{}]} = Iq) ->
+do_make_action(#iq{sub_els = [#mam_query{}]} = Iq) ->
   xmpp:make_error(Iq, xmpp:err_bad_request());
-make_action(#iq{type = Type, from = From, sub_els = Els} = Iq) ->
+do_make_action(#iq{type = Type, from = From, sub_els = Els} = Iq) ->
   case check_from_to(Iq) of
     {Server, Group, User} ->
       R = make_action(Type, Els, Server, Group, User, From),

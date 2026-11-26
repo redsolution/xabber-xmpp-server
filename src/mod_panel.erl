@@ -63,6 +63,12 @@
 -define(PERM_VALUES, [<<"write">>, <<"read">>, <<"forbidden">>]).
 -define(FORBID_ALL,<<"sfufgfvfcf">>).
 
+-define(PERM_SERVER(P),  <<_:8, P:8, _/binary>>).
+-define(PERM_USERS(P),   <<_:24, P:8, _/binary>>).
+-define(PERM_GROUPS(P),  <<_:40, P:8, _/binary>>).
+-define(PERM_VCARD(P),   <<_:56, P:8, _/binary>>).
+-define(PERM_CIRCLES(P), <<_:72, P:8, _/binary>>).
+
 %% Permissions string
 %%     sXuXgXvXcX
 %%     | | | | |
@@ -125,7 +131,7 @@ mod_opt_type(cronjob_token) ->
 
 %%hooks
 remove_admin(User, Server) ->
-  remove_admin([{username,User}, {host, Server}]),
+  remove_admin(#{<<"username">> => User, <<"host">> => Server}),
   ok.
 
 %%%
@@ -189,8 +195,8 @@ process(_Path, #request{method = 'OPTIONS', data = <<>>}) ->
   {200, ?OPTIONS_HEADER, []};
 process(_, #request{method = 'OPTIONS'}) ->
   {400, ?OPTIONS_HEADER, []};
-process(Path, #request{method = Method, data = Data, q = Q, headers = Headers} = Req) ->
-  ?DEBUG("Request: ~p ~p ~p ~p ~p~n",[Method, Path,Data,Headers,Q]),
+process(Path, #request{method = Method, headers = Headers} = Req) ->
+  ?DEBUG("Panel request: ~p ~p ~p", [Method, log_path(Path), log_headers(Headers)]),
   case extract_auth(Req) of
     {error, expired} -> invalid_token_response();
     {error, not_found} -> invalid_token_response();
@@ -225,125 +231,125 @@ handle_request(_,[<<"config">>,<<"reload">>], _, _, _, _) ->
   forbidden_response();
 %% registration keys
 handle_request('GET',[<<"registration">>,<<"keys">>], #request{q = Q}, {true, _}, _User, _Server) ->
-  Args = check_args(Q, [host]),
-  case check_args(Q, [host]) of
+  Args = check_args(Q, [<<"host">>]),
+  case check_args(Q, [<<"host">>]) of
     error ->
       badrequest_response();
     Args ->
       get_reg_keys(Args)
   end;
 handle_request('POST',[<<"registration">>,<<"keys">>], #request{data = Data}, {true, _}, _User, _Server) ->
-  case extract_args(Data, [host, expire, description]) of
+  case extract_args(Data, [<<"host">>, <<"expire">>, <<"description">>]) of
     error -> badrequest_response();
     Args ->
       make_reg_key(Args)
   end;
 handle_request('PUT',[<<"registration">>,<<"keys">>,Key], #request{data = Data}, {true, _}, _User, _Server) ->
-  case extract_args(Data, [host, expire, description]) of
+  case extract_args(Data, [<<"host">>, <<"expire">>, <<"description">>]) of
     error -> badrequest_response();
     Args ->
       update_reg_key(Key,Args)
   end;
 handle_request('DELETE',[<<"registration">>,<<"keys">>,Key], #request{data = Data}, {true, _}, _User, _Server) ->
-  case extract_args(Data, [host]) of
+  case extract_args(Data, [<<"host">>]) of
     error -> badrequest_response();
     Args ->
       remove_reg_key(Key, Args)
   end;
 %% admin management
 handle_request('POST',[<<"permissions">>], #request{data = Data}, {true, _}, _User, _Server) ->
-  case extract_args(Data, [username, host, permissions]) of
+  case extract_args(Data, [<<"username">>, <<"host">>, <<"permissions">>]) of
     error -> badrequest_response();
     Args ->
       set_permissions(Args)
   end;
 handle_request('POST',[<<"admins">>], #request{data = Data}, {true, _}, _User, _Server) ->
-  case extract_args(Data, [username, host]) of
+  case extract_args(Data, [<<"username">>, <<"host">>]) of
     error -> badrequest_response();
     Args ->
       set_admin(Args)
   end;
 handle_request('DELETE',[<<"admins">>], #request{data = Data}, {true, _}, _User, _Server) ->
-  case extract_args(Data, [username, host]) of
+  case extract_args(Data, [<<"username">>, <<"host">>]) of
     error -> badrequest_response();
     Args ->
       remove_admin(Args)
   end;
 %% get vhosts
 handle_request('GET',[<<"vhosts">>], _Req, _Perms, _User, _Server) ->
-  Result = {[{vhosts,  ejabberd_config:get_myhosts()}]},
+  Result = #{vhosts => ejabberd_config:get_myhosts()},
   {200, Result};
 %% user management
 handle_request('POST',[<<"users">>], #request{data = Data},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host, password]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>, <<"password">>]),
   check_and_run(Adm, Server, Args, fun create_user/1);
 handle_request('DELETE',[<<"users">>], #request{data = Data},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>]),
   check_and_run(Adm, Server, Args,fun remove_user/1);
 handle_request('GET',[<<"users">>], #request{q = Q}, {_, <<"cronjob">>}, _, _) ->
-  Args = check_args(Q, [host]),
+  Args = check_args(Q, [<<"host">>]),
   check_and_run(true, <<>>, Args,fun get_users/1);
 handle_request('GET',[<<"users">>], #request{q = Q},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
-  Args = check_args(Q, [host]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $r orelse P == $w ->
+  Args = check_args(Q, [<<"host">>]),
   check_and_run(Adm, Server, Args,fun get_users/1);
 handle_request('GET',[<<"users">>,<<"count">>], #request{q = Q},
-    {Adm, <<_:8,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
-  Args = check_args(Q, [host]),
+    {Adm, ?PERM_SERVER(P)}, _User, Server) when Adm orelse P == $r orelse P == $w ->
+  Args = check_args(Q, [<<"host">>]),
   check_and_run(Adm, Server, Args,fun get_users_count/1);
 handle_request('GET',[<<"users">>,<<"online">>], #request{q = Q},
-    {Adm, <<_:8,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
-  Args = check_args(Q, [host]),
+    {Adm, ?PERM_SERVER(P)}, _User, Server) when Adm orelse P == $r orelse P == $w ->
+  Args = check_args(Q, [<<"host">>]),
   check_and_run(Adm, Server, Args,fun get_online_count/1);
 %% set user password
 handle_request('PUT',[<<"users">>,<<"set_password">>], #request{data = Data},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host, password]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>, <<"password">>]),
   check_and_run(Adm, Server, Args, fun set_password/1);
 %% block user
 handle_request('POST',[<<"users">>,<<"block">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
-  Args = extract_args(Data, [username, host, reason]),
+  Args = extract_args(Data, [<<"username">>, <<"host">>, <<"reason">>]),
   check_and_run(true, <<>>, Args, fun block_user/1);
 handle_request('POST',[<<"users">>,<<"block">>], #request{data = Data},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host, reason]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>, <<"reason">>]),
   check_and_run(Adm, Server, Args, fun block_user/1);
 handle_request('DELETE',[<<"users">>,<<"block">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
-  Args = extract_args(Data, [username, host]),
+  Args = extract_args(Data, [<<"username">>, <<"host">>]),
   check_and_run(true, <<>>, Args, fun unblock_user/1);
 handle_request('DELETE',[<<"users">>,<<"block">>], #request{data = Data},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>]),
   check_and_run(Adm, Server, Args, fun unblock_user/1);
 %% ban user
 handle_request('POST',[<<"users">>,<<"ban">>], #request{data = Data},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>]),
   check_and_run(Adm, Server, Args, fun ban_user/1);
 handle_request('DELETE',[<<"users">>,<<"ban">>], #request{data = Data},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>]),
   check_and_run(Adm, Server, Args, fun unban_user/1);
 %% user settings
 handle_request('GET',[<<"users">>,<<"settings">>], #request{q = Q},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $r orelse true->
-  Args = check_args(Q, [username, host]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $r orelse P == $w ->
+  Args = check_args(Q, [<<"username">>, <<"host">>]),
   check_and_run(Adm, Server, Args, fun get_user_settings/1);
 handle_request('POST',[<<"users">>,<<"settings">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
-  Args = extract_args(Data, [username, host, name, value]),
+  Args = extract_args(Data, [<<"username">>, <<"host">>, <<"name">>, <<"value">>]),
   check_and_run(true, <<>>, Args, fun post_user_settings/1);
 handle_request('POST',[<<"users">>,<<"settings">>], #request{data = Data},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host, name, value]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>, <<"name">>, <<"value">>]),
   check_and_run(Adm, Server, Args, fun post_user_settings/1);
 handle_request('DELETE',[<<"users">>,<<"settings">>], #request{data = Data},{_, <<"cronjob">>}, _, _) ->
-  Args = extract_args(Data, [username, host, name]),
+  Args = extract_args(Data, [<<"username">>, <<"host">>, <<"name">>]),
   check_and_run(true, <<>>, Args, fun delete_user_settings/1);
 handle_request('DELETE',[<<"users">>,<<"settings">>], #request{data = Data},
-    {Adm, <<_:24,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host, name]),
+    {Adm, ?PERM_USERS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>, <<"name">>]),
   check_and_run(Adm, Server, Args, fun delete_user_settings/1);
 handle_request(_,[<<"users">>], _, _, _, _) ->
   forbidden_response();
@@ -351,20 +357,21 @@ handle_request(_,[<<"users">>| _], _, _, _, _) ->
   forbidden_response();
 %% groups
 handle_request('POST',[<<"groups">>], #request{data = Data},
-    {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [localpart, host, owner, name, privacy, index, membership]),
+    {Adm, ?PERM_GROUPS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"localpart">>, <<"host">>, <<"owner">>, <<"name">>,
+                             <<"privacy">>, <<"index">>, <<"membership">>]),
   check_and_run(Adm, Server, Args, fun add_group/1);
 handle_request('DELETE',[<<"groups">>], #request{data = Data},
-    {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [localpart, host]),
+    {Adm, ?PERM_GROUPS(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"localpart">>, <<"host">>]),
   check_and_run(Adm, Server, Args , fun remove_group/1);
 handle_request('GET',[<<"groups">>], #request{q = Q},
-    {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r->
-  Args = check_args(Q, [host]),
+    {Adm, ?PERM_GROUPS(P)}, _User, Server) when Adm orelse P == $r orelse P == $w->
+  Args = check_args(Q, [<<"host">>]),
   check_and_run(Adm, Server, Args , fun get_groups/1);
 handle_request('GET',[<<"groups">>,<<"count">>], #request{q = Q},
-    {Adm, <<_:40,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r->
-  Args = check_args(Q, [host]),
+    {Adm, ?PERM_GROUPS(P)}, _User, Server) when Adm orelse P == $r orelse P == $w->
+  Args = check_args(Q, [<<"host">>]),
   check_and_run(Adm, Server, Args , fun get_groups_count/1);
 handle_request(_,[<<"groups">>], _, _, _, _) ->
   forbidden_response();
@@ -372,53 +379,76 @@ handle_request(_,[<<"groups">>| _], _, _, _, _) ->
   forbidden_response();
 %% vcard
 handle_request('POST',[<<"vcard">>], #request{data = Data},
-    {Adm, <<_:56,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [username, host, vcard]),
+    {Adm, ?PERM_VCARD(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"username">>, <<"host">>, <<"vcard">>]),
   check_and_run(Adm, Server, Args, fun update_vcard/1);
 handle_request('GET',[<<"vcard">>], #request{q = Q},
-    {Adm, <<_:56,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r->
-  Args = check_args(Q, [username, host]),
+    {Adm, ?PERM_VCARD(P)}, _User, Server) when Adm orelse P == $r orelse P == $w->
+  Args = check_args(Q, [<<"username">>, <<"host">>]),
   check_and_run(Adm, Server, Args , fun get_vcard/1);
 handle_request(_,[<<"vcard">>], _, _, _, _) ->
   forbidden_response();
 %% circles
 handle_request('POST',[<<"circles">>], #request{data = Data},
-    {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [circle, host]),
+    {Adm, ?PERM_CIRCLES(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"circle">>, <<"host">>]),
   check_and_run(Adm, Server, Args, fun add_circle/1);
 handle_request('DELETE',[<<"circles">>], #request{data = Data},
-    {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [circle, host]),
+    {Adm, ?PERM_CIRCLES(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"circle">>, <<"host">>]),
   check_and_run(Adm, Server, Args, fun remove_circle/1);
 handle_request('GET',[<<"circles">>], #request{q = Q},
-    {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
-  Args = check_args(Q, [host]),
+    {Adm, ?PERM_CIRCLES(P)}, _User, Server) when Adm orelse P == $r orelse P == $w ->
+  Args = check_args(Q, [<<"host">>]),
   check_and_run(Adm, Server, Args , fun get_circles/1);
 handle_request('GET',[<<"circles">>, <<"info">>], #request{q = Q},
-    {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
-  Args = check_args(Q, [host, circle]),
+    {Adm, ?PERM_CIRCLES(P)}, _User, Server) when Adm orelse P == $r orelse P == $w ->
+  Args = check_args(Q, [<<"host">>, <<"circle">>]),
   check_and_run(Adm, Server, Args , fun get_circle_info/1);
 handle_request('POST',[<<"circles">>, <<"members">>], #request{data = Data},
-    {Adm, <<_:72,P:8,_/binary>>}, _User, Server)  when Adm orelse P == $w ->
-  Args = extract_args(Data, [circle, host, members]),
+    {Adm, ?PERM_CIRCLES(P)}, _User, Server)  when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"circle">>, <<"host">>, <<"members">>]),
   check_and_run(Adm, Server, Args, fun circle_add_members/1);
 handle_request('DELETE',[<<"circles">>, <<"members">>], #request{data = Data},
-    {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P == $w ->
-  Args = extract_args(Data, [circle, host, members]),
+    {Adm, ?PERM_CIRCLES(P)}, _User, Server) when Adm orelse P == $w ->
+  Args = extract_args(Data, [<<"circle">>, <<"host">>, <<"members">>]),
   check_and_run(Adm, Server, Args, fun circle_remove_members/1);
 handle_request('GET',[<<"circles">>, <<"members">>], #request{q = Q},
-    {Adm, <<_:72,P:8,_/binary>>}, _User, Server) when Adm orelse P >= $r ->
-  Args = check_args(Q, [host, circle]),
+    {Adm, ?PERM_CIRCLES(P)}, _User, Server) when Adm orelse P == $r orelse P == $w ->
+  Args = check_args(Q, [<<"host">>, <<"circle">>]),
   check_and_run(Adm, Server, Args , fun get_circle_members/1);
 handle_request(_,[<<"circles">>], _, _, _, _) ->
   forbidden_response();
 handle_request(_,[<<"circles">>| _], _, _, _, _) ->
   forbidden_response();
 handle_request(Method, Path, _Req, _Perms, _User, _Server) ->
-  ?DEBUG("Path not found ~p ~p~n",[Method,Path]),
+  ?DEBUG("Unknown panel request: ~p ~p", [Method, log_path(Path)]),
   {404, [], [<<"path no found">>]}.
 
 %% Internal
+log_path([<<"registration">>, <<"keys">>, _Key | Rest]) ->
+  [<<"registration">>, <<"keys">>, <<"[redacted]">> | Rest];
+log_path(Path) ->
+  Path.
+
+log_headers(Headers) ->
+  [{Name, log_header_value(Name, Value)} || {Name, Value} <- Headers].
+
+log_header_value(Name, Value) ->
+  NameBin = case Name of
+              N when is_atom(N) -> atom_to_binary(N, utf8);
+              N when is_binary(N) -> N
+            end,
+  case string:lowercase(NameBin) of
+    <<"authorization">> -> <<"[redacted]">>;
+    <<"proxy-authorization">> -> <<"[redacted]">>;
+    <<"cookie">> -> <<"[redacted]">>;
+    <<"set-cookie">> -> <<"[redacted]">>;
+    <<"x-api-key">> -> <<"[redacted]">>;
+    <<"x-auth-token">> -> <<"[redacted]">>;
+    _ -> Value
+  end.
+
 extract_auth(#request{auth = HTTPAuth, ip = {IP, _}}) ->
   Info = case HTTPAuth of
            {SJID, Pass} ->
@@ -482,43 +512,32 @@ json_response(Code, Body) when is_integer(Code) ->
 %% message is binary
 json_error(HTTPCode, JSONCode, Message) ->
   {HTTPCode, ?HEADER(?CT_JSON),
-    jiffy:encode({[{<<"status">>, <<"error">>},
-      {<<"code">>, JSONCode},
-      {<<"message">>, Message}]})
+    jiffy:encode(#{status => <<"error">>, code => JSONCode, message => Message})
   }.
 
 decode_json(Data) ->
-  PL = try
-         case jiffy:decode(Data) of
-           List when is_list(List) -> List;
-           {List} when is_list(List) -> List;
-           Other -> [Other]
-         end
-      catch _:_  -> []
-      end,
-  lists:map(fun({K, null}) -> {K, <<>>};
-    (V) -> V end, PL).
-
-check_args(ArgsRaw, RequiredKeys) ->
-  Args = lists:filtermap(
-    fun({_,<<>>}) -> false;
-      ({K, V}) ->
-        {true, {binary_to_atom(K, latin1), V}}
-    end, ArgsRaw),
-  ExistingKeys = lists:filter(
-    fun(Key) ->
-      lists:keymember(Key, 1, Args)
-    end, RequiredKeys),
-  case RequiredKeys of
-    ExistingKeys -> Args;
+  try jiffy:decode(Data, [return_maps]) of
+    Map when is_map(Map) -> Map;
     _ -> error
+  catch _:_ -> error
   end.
+
+check_args(ArgsRaw, RequiredKeys) when is_list(ArgsRaw) ->
+  Args = lists:foldr(fun({Key, Value}, Acc) -> Acc#{Key => Value} end, #{}, ArgsRaw),
+  check_args(Args, RequiredKeys);
+check_args(ArgsRaw, RequiredKeys) when is_map(ArgsRaw) ->
+  Args = maps:filter(fun(_, Value) -> Value =/= <<>> andalso Value =/= null end, ArgsRaw),
+  case lists:all(fun(Key) -> maps:is_key(Key, Args) end, RequiredKeys) of
+    true -> Args;
+    false -> error
+  end;
+check_args(_, _) -> error.
 
 extract_args(<<>>, _Keys) ->
   error;
 extract_args(Data, Keys) ->
   case decode_json(Data) of
-    [] ->
+    error ->
       error;
     Args ->
       check_args(Args, Keys)
@@ -527,7 +546,7 @@ extract_args(Data, Keys) ->
 check_and_run(_IsAdmin, _UserHost, error, _Fun)->
   badrequest_response();
 check_and_run(true, _UserHost, Args, Fun)->
-  case check_host(proplists:get_value(host,Args)) of
+  case check_host(maps:get(<<"host">>, Args, undefined)) of
     {ok, _Host} -> Fun(Args);
     Result -> Result
   end;
@@ -575,15 +594,16 @@ convert_vcard([]) -> [];
 convert_vcard([VCard|_Rest]) ->
   Els = VCard#xmlel.children,
   JSON = xml_to_json(Els),
-  {[{Key, Value} || {Key, Value} <- JSON, Value =/= {[]}]}.
+  maps:from_list([{Key, Value} || {Key, Value} <- JSON, Value =/= #{}]).
 
 xml_to_json(Els) ->
-  lists:filtermap(fun(El) ->
+  lists:filtermap(fun(#xmlel{} = El) ->
     case El#xmlel.children of
       [{xmlcdata, CData}] -> {true, {El#xmlel.name, CData}};
       [] -> false;
-      List -> {true, {El#xmlel.name, {xml_to_json(List)}}}
-    end
+      List -> {true, {El#xmlel.name, maps:from_list(xml_to_json(List))}}
+    end;
+    (_) -> false
                   end, Els).
 
 get_permissions(User, Host) ->
@@ -592,17 +612,21 @@ get_permissions(User, Host) ->
     P -> P
   end.
 
-parse_permissions(Perms) ->
-  PL = lists:map(fun(K) ->
-    Value  = proplists:get_value(K, Perms, <<"forbidden">>),
-    IsValid = lists:member(Value, ?PERM_VALUES),
-    if
-      IsValid ->
-        {binary_part(K,0,1), binary_part(Value,0,1)};
-      true ->
-        error
-    end end, ?PERM_KEYS),
-  lists:foldl(fun({K,V}, Acc) -> <<Acc/binary,K/binary,V/binary>> end, <<>>,PL).
+parse_permissions(Perms) when is_map(Perms) ->
+  lists:foldl(fun
+    (_, error) -> error;
+    (Key, {ok, Acc}) ->
+      Value = maps:get(Key, Perms, <<"forbidden">>),
+      case lists:member(Value, ?PERM_VALUES) of
+        true ->
+          K = binary_part(Key, 0, 1),
+          V = binary_part(Value, 0, 1),
+          {ok, <<Acc/binary, K/binary, V/binary>>};
+        false -> error
+      end
+  end, {ok, <<>>}, ?PERM_KEYS);
+parse_permissions(_) ->
+  error.
 
 make_jwt(User, Host, TTL) ->
   {_, _, Key} = hd(mnesia:dirty_read(panel_opts, jwk)),
@@ -621,7 +645,7 @@ make_jwt(User, Host, TTL) ->
 %% HTTP API
 issue_token(User, Server, TTL) ->
   AccessToken = make_jwt(User, Server, TTL),
-  {201, {[{token, AccessToken},{expires_in, TTL}]}}.
+  {201, #{token => AccessToken, expires_in => TTL}}.
 
 revoke_tokens() ->
   mnesia:dirty_write({panel_opts,
@@ -629,15 +653,18 @@ revoke_tokens() ->
 
 set_permissions(Args) ->
   {Username, Host} = extract_user_host(Args),
-  {PermsPL} = proplists:get_value(permissions,Args,{[]}),
-  Perms = parse_permissions(PermsPL),
-  Result = case Perms of
-             ?FORBID_ALL -> sql_remove_permissions(Username, Host);
-             _ -> sql_set_permissions(Username, Host, false, Perms)
-           end,
-  case Result of
-    ok -> {201, <<>>};
-    _ -> {500, <<>>}
+  PermsMap = maps:get(<<"permissions">>, Args, #{}),
+  case parse_permissions(PermsMap) of
+    error -> badrequest_response();
+    {ok, Perms} ->
+      Result = case Perms of
+                 ?FORBID_ALL -> sql_remove_permissions(Username, Host);
+                 _ -> sql_set_permissions(Username, Host, false, Perms)
+               end,
+      case Result of
+        ok -> {201, <<>>};
+        _ -> {500, <<>>}
+      end
   end.
 
 set_admin(Args) ->
@@ -666,31 +693,31 @@ get_reg_keys(Args) ->
     error ->
       {500, <<>>};
     Keys ->
-      Result = {[{keys,[{[{key,K},{expire,E},{description,D}]} || {K, E, D} <- Keys]}]},
+      Result = #{keys => [#{key => K, expire => E, description => D} || {K, E, D} <- Keys]},
       {200, Result}
   end.
 
 make_reg_key(Args) ->
   Host = extract_host(Args),
-  Expire = case proplists:get_value(expire,Args) of
+  Expire = case maps:get(<<"expire">>, Args, undefined) of
              V when is_integer(V) -> V;
              V -> binary_to_integer(V)
            end,
-  Desc = proplists:get_value(description,Args,<<>>),
+  Desc = maps:get(<<"description">>, Args,<<>>),
   case mod_registration_keys:make_key(Host, Expire, Desc) of
     {K, E, D} ->
-      {201, {[{key,K},{expire,E},{description,D}]}};
+      {201, #{key => K, expire => E, description => D}};
     _ ->
       {500, <<>>}
   end.
 
 update_reg_key(Key, Args) ->
   Host = extract_host(Args),
-  Expire = case proplists:get_value(expire,Args) of
+  Expire = case maps:get(<<"expire">>, Args, undefined) of
              V when is_integer(V) -> V;
              V -> binary_to_integer(V)
            end,
-  Desc = proplists:get_value(description,Args,<<>>),
+  Desc = maps:get(<<"description">>, Args,<<>>),
   case mod_registration_keys:update_key(Host, Key, Expire, Desc) of
     ok ->
       {200, <<>>};
@@ -707,7 +734,7 @@ remove_reg_key(Key, Args) ->
 
 create_user(Args) ->
   {Username, Host} = extract_user_host(Args),
-  Password = proplists:get_value(password, Args),
+  Password = maps:get(<<"password">>, Args, undefined),
   case check_host(Host) of
     {ok, _} ->
       create_user(Username, Host, Password);
@@ -737,7 +764,7 @@ remove_user(Args) ->
 
 set_password(Args) ->
   {Username, Host} = extract_user_host(Args),
-  Password = proplists:get_value(password, Args),
+  Password = maps:get(<<"password">>, Args, undefined),
   case check_user(Username, Host) of
     {ok, _} ->
       case catch ejabberd_auth:set_password(Username, Host, Password) of
@@ -754,7 +781,7 @@ set_password(Args) ->
 
 block_user(Args) ->
   {Username, Host} = extract_user_host(Args),
-  Reason = proplists:get_value(reason, Args),
+  Reason = maps:get(<<"reason">>, Args, undefined),
   case gen_mod:is_loaded(Host, mod_block_users) of
     true ->
       mod_block_users:block_user(Username, Host, Reason),
@@ -765,7 +792,7 @@ block_user(Args) ->
 
 unblock_user(Args) ->
   {Username, Host} = extract_user_host(Args),
-  Reason = proplists:get_value(reason, Args, <<>>),
+  Reason = maps:get(<<"reason">>, Args, <<>>),
   case gen_mod:is_loaded(Host, mod_block_users) of
     true ->
       mod_block_users:unblock_user(Username, Host, Reason),
@@ -802,15 +829,15 @@ ban_user(Action, Args) ->
 
 get_user_settings(Args) ->
   {Username, Host} = extract_user_host(Args),
-  Name = proplists:get_value(name, Args, <<>>),
+  Name = maps:get(<<"name">>, Args, <<>>),
   case get_user_settings(Username, Host, Name) of
     {error, badarg} -> badrequest_response();
     {error, Why} -> {500, misc:atom_to_binary(Why)};
     Result ->
       Settings = lists:map(fun([N, V, E]) ->
-        {[{name, N}, {value, V}, {expires, binary_to_integer(E)}]}
+        #{name => N, value => V, expires => binary_to_integer(E)}
                            end, Result),
-      {200, {[{username, Username}, {host, Host}, {settings, Settings}]}}
+      {200, #{username => Username, host => Host, settings => Settings}}
   end.
 
 get_user_settings(Username, Host, Name) when is_binary(Username) ->
@@ -820,9 +847,9 @@ get_user_settings(_, _, _)->
 
 post_user_settings(Args) ->
   {Username, Host} = extract_user_host(Args),
-  Name = proplists:get_value(name, Args, undefined),
-  Value = proplists:get_value(value, Args, undefined),
-  Expires = proplists:get_value(expires, Args, 0),
+  Name = maps:get(<<"name">>, Args, undefined),
+  Value = maps:get(<<"value">>, Args, undefined),
+  Expires = maps:get(<<"expires">>, Args, 0),
   case store_user_settings(Username, Host, Name, Value, Expires) of
     ok -> {201, <<>>};
     {error, badarg} -> badrequest_response();
@@ -853,7 +880,7 @@ store_user_settings(_, _, _, _,_) ->
 
 delete_user_settings(Args) ->
   {Username, Host} = extract_user_host(Args),
-  Name = proplists:get_value(name, Args, <<>>),
+  Name = maps:get(<<"name">>, Args, <<>>),
   case delete_user_settings(Username, Host, Name) of
     ok -> {200, <<>>};
     _ -> badrequest_response()
@@ -880,13 +907,13 @@ sql_unban_user(Username, Host) ->
 get_users(Args) ->
   Host = extract_host(Args),
   Users1 = lists:sort(get_users(Host, [])),
-  Users2 = [{[{username,U},{backend,B}]} || {U,_S, B} <- Users1],
-  {200, {[{users, Users2}]}}.
+  Users2 = [#{username => U, backend => B} || {U,_S, B} <- Users1],
+  {200, #{users => Users2}}.
 
 get_users_count(Args) ->
   Host = extract_host(Args),
   Count = length(get_users(Host, [])),
-  {200, {[{count, Count}]}}.
+  {200, #{count => Count}}.
 
 get_users(Server, Opts) ->
   case jid:nameprep(Server) of
@@ -919,16 +946,16 @@ get_online_count(Args) ->
   Host = extract_host(Args),
   Count = length(lists:usort(
     [U || {U, _H, _R} <- ejabberd_sm:get_vh_session_list(Host)])),
-  {200, {[{count, Count}]}}.
+  {200, #{count => Count}}.
 
 add_group(Args) ->
-  Owner = proplists:get_value(owner,Args, false),
-  LocalPart = jid:nodeprep(proplists:get_value(localpart,Args, false)),
+  Owner = maps:get(<<"owner">>, Args, false),
+  LocalPart = jid:nodeprep(maps:get(<<"localpart">>, Args, false)),
   GroupHost = extract_host(Args),
-  GroupName = proplists:get_value(name,Args),
-  Privacy = proplists:get_value(privacy,Args),
-  Index = proplists:get_value(index,Args),
-  Membership = proplists:get_value(membership,Args),
+  GroupName = maps:get(<<"name">>, Args, undefined),
+  Privacy = maps:get(<<"privacy">>, Args, undefined),
+  Index = maps:get(<<"index">>, Args, undefined),
+  Membership = maps:get(<<"membership">>, Args, undefined),
   ChPrivacy = lists:member(Privacy,[<<"public">>, <<"incognito">>]),
   ChIndex = lists:member(Index,[<<"none">>, <<"local">>, <<"global">>]),
   ChMembership = lists:member(Membership,[<<"open">>, <<"member-only">>]),
@@ -970,9 +997,9 @@ add_group(GroupHost, OwnerUsername, OwnerDomain, GroupName,
     <<>> ->
       error;
     _ ->
-      Args = [{localpart, LocalPart}, {host, GroupHost},
-        {owner, jid:to_string(OwnerJID)}, {name, GroupName},
-        {privacy, Privacy},{index, Index}, {membership, Membership}],
+      Args = #{<<"localpart">> => LocalPart, <<"host">> => GroupHost,
+        <<"owner">> => jid:to_string(OwnerJID), <<"name">> => GroupName,
+        <<"privacy">> => Privacy, <<"index">> => Index, <<"membership">> => Membership},
       case add_group(Args) of
         {201,_} -> "created";
         {409,_} -> "error: already exist";
@@ -981,7 +1008,7 @@ add_group(GroupHost, OwnerUsername, OwnerDomain, GroupName,
   end.
 
 remove_group(Args) ->
-  LUser = jid:nodeprep(proplists:get_value(localpart,Args)),
+  LUser = jid:nodeprep(maps:get(<<"localpart">>, Args, undefined)),
   LServer = extract_host(Args),
   Group = jid:to_string(jid:make(LUser, LServer)),
   case mod_xabber_entity:is_group(LUser, LServer) of
@@ -994,34 +1021,36 @@ remove_group(Args) ->
 
 get_groups(Args) ->
   Host = extract_host(Args),
-%%  Limit = binary_to_integer(proplists:get_value(limit, Args, <<"250">>)),
-%%  Page = binary_to_integer(proplists:get_value(page, Args, <<"1">>)),
-  Groups = groups_groups:get_all_groups_info(Host),
-  GroupArray = lists:map(fun({{LocalPart, LServer, _}, InfoMap}) ->
-    InfoMap1 = InfoMap#{localpart => LocalPart, host => LServer},
-    {maps:to_list(InfoMap1)} end, Groups),
-  {200, {[{groups,GroupArray}]}}.
+  case sql_get_panel_groups(Host) of
+    {ok, Groups} ->
+      GroupArray = [#{localpart => LocalPart, name => Name, owner => Owner,
+                      user_count => Count} || {LocalPart, Name, Owner, Count} <- Groups],
+      {200, #{groups => GroupArray}};
+    {error, _} -> {500, <<>>}
+  end.
 
 get_groups_count(Args) ->
   Host = extract_host(Args),
-  Count = groups_groups:numbers_of_groups(Host),
-  {200, {[{count, Count}]}}.
+  case sql_get_panel_groups_count(Host) of
+    {ok, Count} -> {200, #{count => Count}};
+    {error, _} -> {500, <<>>}
+  end.
 
 update_vcard(Args) ->
   {Username, Host} = extract_user_host(Args),
-  VCard = proplists:get_value(vcard,Args),
+  VCard = maps:get(<<"vcard">>, Args, undefined),
   update_vcard(Username, Host, <<>>, VCard).
 
 update_vcard(Username, Host, _Ancestor , JSON) when Username == error
-  orelse Host == error  orelse not is_tuple(JSON)->
+  orelse Host == error  orelse not is_map(JSON)->
   badrequest_response();
-update_vcard(Username, Host, Ancestor, {List}) ->
+update_vcard(Username, Host, Ancestor, Map) ->
   lists:foreach(fun({Key, Value}) when is_binary(Value) ->
     case Ancestor of
       <<>> -> mod_admin_extra:set_vcard(Username, Host, Key, Value);
       _ -> mod_admin_extra:set_vcard(Username, Host, Ancestor, Key, Value)
     end;
-    ({Key, Value}) -> update_vcard(Username, Host, Key, Value) end, List),
+    ({Key, Value}) -> update_vcard(Username, Host, Key, Value) end, maps:to_list(Map)),
   {200, <<>>}.
 
 get_vcard(Args) ->
@@ -1029,8 +1058,8 @@ get_vcard(Args) ->
   case check_user(Username, Host) of
     {ok, #jid{luser = LUser, lserver = LServer}} ->
       case convert_vcard(mod_vcard:get_vcard(LUser, LServer)) of
-        [] -> {204, {[]}};
-        VCard -> {200, {[{vcard,VCard}]}}
+        [] -> {204, #{}};
+        VCard -> {200, #{vcard => VCard}}
       end;
     {error, notfound} ->
       {404,<<"Account does not exist">>};
@@ -1039,21 +1068,21 @@ get_vcard(Args) ->
   end.
 
 add_circle(Args)->
-  Circle = jid:nameprep(proplists:get_value(circle,Args)),
-  Host = jid:nameprep(proplists:get_value(host, Args)),
-  OldDisplay = proplists:get_value(display, Args, []),
-  Display = case proplists:get_value(displayed_groups, Args) of
+  Circle = jid:nameprep(maps:get(<<"circle">>, Args, undefined)),
+  Host = jid:nameprep(maps:get(<<"host">>, Args, undefined)),
+  OldDisplay = maps:get(<<"display">>, Args, []),
+  Display = case maps:get(<<"displayed_groups">>, Args, undefined) of
               L when is_list(L) -> L;
               _ -> OldDisplay
             end,
-  AllUsers = case proplists:get_value(all_users, Args, false) of
+  AllUsers = case maps:get(<<"all_users">>, Args, false) of
                true ->
                  [{all_users, true}];
                _ -> []
              end,
   Opts = [
-    {name, proplists:get_value(name, Args, Circle)},
-    {description, proplists:get_value(description, Args, <<>>)},
+    {name, maps:get(<<"name">>, Args, Circle)},
+    {description, maps:get(<<"description">>, Args, <<>>)},
     {displayed_groups, Display}] ++ AllUsers,
   case mod_shared_roster:create_group(Host, Circle, Opts) of
     {atomic, _} -> {200, <<>>};
@@ -1061,7 +1090,7 @@ add_circle(Args)->
   end.
 
 remove_circle(Args) ->
-  Circle = jid:nodeprep(proplists:get_value(circle,Args)),
+  Circle = jid:nodeprep(maps:get(<<"circle">>, Args, undefined)),
   Host = extract_host(Args),
   mod_shared_roster:delete_group(Host, Circle),
   {200, <<>>}.
@@ -1073,9 +1102,9 @@ circle_remove_members(Args)->
   circle_change_members(remove, Args).
 
 circle_change_members(Action, Args)->
-  Circle = jid:nodeprep(proplists:get_value(circle,Args)),
+  Circle = jid:nodeprep(maps:get(<<"circle">>, Args, undefined)),
   Host = extract_host(Args),
-  Members =  proplists:get_value(members,Args),
+  Members =  maps:get(<<"members">>, Args, undefined),
   if
     is_list(Members) ->
       lists:foreach(fun(Member) ->
@@ -1098,23 +1127,23 @@ circle_change_members(Action, Args)->
 get_circles(Args) ->
   Host = extract_host(Args),
   Circles = lists:sort(mod_shared_roster:list_groups(Host)),
-  Result = {[{circles, Circles}]},
+  Result = #{circles => Circles},
   {200, Result}.
 
 get_circle_info(Args) ->
   Host = extract_host(Args),
-  Circle = jid:nodeprep(proplists:get_value(circle,Args)),
+  Circle = jid:nodeprep(maps:get(<<"circle">>, Args, undefined)),
   case mod_shared_roster:get_group_opts(Host,Circle) of
-    Os when is_list(Os) -> {200, {Os}};
+    Os when is_list(Os) -> {200, maps:from_list(Os)};
     error -> {404, [], [<<"circle no found">>]}
   end.
 
 get_circle_members(Args) ->
   Host = extract_host(Args),
-  Circle = jid:nodeprep(proplists:get_value(circle,Args)),
+  Circle = jid:nodeprep(maps:get(<<"circle">>, Args, undefined)),
   Members = mod_shared_roster:get_group_explicit_users(Host,Circle),
   Members2 = [jid:encode(jid:make(MUser, MServer)) || {MUser, MServer} <- Members],
-  Result = {[{members, Members2}]},
+  Result = #{members => Members2},
   {200, Result}.
 
 
@@ -1148,12 +1177,12 @@ check_jwt_payload(_, _, _) ->
   false.
 
 extract_user_host(PropList)->
-  Username = jid:nodeprep(proplists:get_value(username,PropList)),
-  Host = jid:nameprep(proplists:get_value(host,PropList)),
+  Username = jid:nodeprep(maps:get(<<"username">>, PropList, undefined)),
+  Host = jid:nameprep(maps:get(<<"host">>, PropList, undefined)),
   {Username, Host}.
 
 extract_host(PropList) ->
-  jid:nameprep(proplists:get_value(host,PropList)).
+  jid:nameprep(maps:get(<<"host">>, PropList, undefined)).
 
 kick_user_sessions(User, Server) ->
   lists:map(
@@ -1164,6 +1193,25 @@ kick_user_sessions(User, Server) ->
     ejabberd_sm:get_user_resources(User, Server)).
 
 %% SQL functions
+
+sql_get_panel_groups(Server) ->
+  case ejabberd_sql:sql_query(Server, ?SQL(
+    "select @(g.localpart)s, @(g.name)s, @(g.owner)s, "
+    "@((select count(*) from groupchat_users u "
+    "where u.chatgroup=g.jid and u.subscription='both'))d "
+    "from groupchats g where g.server_host=%(Server)s "
+    "and coalesce(nullif(g.parent_chat, ''), '0')='0'")) of
+    {selected, Groups} -> {ok, Groups};
+    Error -> {error, Error}
+  end.
+
+sql_get_panel_groups_count(Server) ->
+  case ejabberd_sql:sql_query(Server, ?SQL(
+    "select @(count(*))d from groupchats "
+    "where %(Server)H and coalesce(nullif(parent_chat, ''), '0')='0'")) of
+    {selected, [{Count}]} -> {ok, Count};
+    Error -> {error, Error}
+  end.
 
 sql_set_permissions(_User, Server, _IsAdmin, _Permissions) ->
   case ?SQL_UPSERT(Server, "panel_permissions",
@@ -1248,3 +1296,28 @@ make_clause(Column, Integer) when is_integer(Integer) ->
   SValue = integer_to_binary(Integer),
   <<" and ",Column/binary,"=",SValue/binary>>;
 make_clause(_,_) -> <<>>.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+permission_patterns_test() ->
+  lists:foreach(fun({Key, Position}) ->
+    {ok, Permissions} = parse_permissions(#{Key => <<"write">>}),
+    ?PERM_SERVER(Server) = Permissions,
+    ?PERM_USERS(Users) = Permissions,
+    ?PERM_GROUPS(Groups) = Permissions,
+    ?PERM_VCARD(VCard) = Permissions,
+    ?PERM_CIRCLES(Circles) = Permissions,
+    Values = [Server, Users, Groups, VCard, Circles],
+    ?assertEqual([$f, $f, $f, $f, $f],
+                 lists:sublist(Values, Position - 1) ++ [$f] ++ lists:nthtail(Position, Values)),
+    ?assertEqual($w, lists:nth(Position, Values))
+  end, [{<<"server">>, 1}, {<<"users">>, 2}, {<<"groups">>, 3},
+        {<<"vcard">>, 4}, {<<"circles">>, 5}]).
+
+permission_short_string_test() ->
+  ?assertMatch(?PERM_USERS($r), <<"srur">>),
+  ?assertNotMatch(?PERM_GROUPS(_), <<"srur">>),
+  ?assertMatch(?PERM_CIRCLES(_), <<"justforcomparison">>).
+
+-endif.

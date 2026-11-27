@@ -353,6 +353,11 @@ do_make_action(#iq{type = set, sub_els = [#mam_query{}]} = Iq) ->
   process_mam_iq(Iq);
 do_make_action(#iq{sub_els = [#mam_query{}]} = Iq) ->
   xmpp:make_error(Iq, xmpp:err_bad_request());
+do_make_action(#iq{type = set, sub_els = [#mam_search_query{}]} = Iq) ->
+  case check_from_to(Iq) of
+    {_, _, _} -> mod_search:process_group_iq(Iq);
+    _ -> xmpp:make_error(Iq, xmpp:err_not_allowed())
+  end;
 do_make_action(#iq{type = Type, from = From, sub_els = Els} = Iq) ->
   case check_from_to(Iq) of
     {Server, Group, User} ->
@@ -481,7 +486,7 @@ process_pubsub(_) -> ok.
 process_disco_info(Iq) ->
   Group = jid:to_string(jid:remove_resource(Iq#iq.to)),
   [Privacy] = groups_groups:get_info(Group, [privacy]),
-  Info = groups_discovery:client_disco_info(Privacy),
+  Info = groups_discovery:client_disco_info(Privacy, Iq#iq.to#jid.lserver),
   Result = xmpp:make_iq_result(Iq, Info),
   ejabberd_router:route(Result).
 

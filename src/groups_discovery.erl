@@ -36,7 +36,7 @@
 -export([start/2, stop/1, reload/3, process_disco_items/1]).
 %% API
 -export([get_local_items/5, get_local_identity/5, get_local_features/5,
-  depends/2, mod_options/1, client_disco_info/1]).
+  depends/2, mod_options/1, client_disco_info/2, update_groups_caps/1]).
 
 
 %%====================================================================
@@ -68,7 +68,7 @@ depends(_Host, _Opts) ->
 
 mod_options(_Host) -> [].
 
-client_disco_info(Privacy) ->
+client_disco_info(Privacy, Server) ->
   Notify = case Privacy of
              public -> [ <<"urn:xmpp:avatar:metadata+notify">>,
                <<"http://jabber.org/protocol/nick+notify">>];
@@ -76,8 +76,12 @@ client_disco_info(Privacy) ->
            end,
   I = #identity{name = <<"Xabber Groups component">>,
     category = <<"client">>, type = <<"console">>},
+  Search = case gen_mod:is_loaded(Server, mod_search) of
+             true -> [?NS_MAM_2_SEARCH];
+             false -> []
+           end,
   FL = [?NS_GROUPS,  ?NS_DISCO_INFO, ?NS_REFERENCES, ?NS_CHATSTATES,
-    <<"urn:xmpp:chat-markers:0">>, ?NS_XABBER_REWRITE] ++ Notify,
+    <<"urn:xmpp:chat-markers:0">>, ?NS_XABBER_REWRITE] ++ Notify ++ Search,
   #disco_info{identities = [I], features = FL}.
 
 get_local_items(Acc, _From, #jid{lserver = LServer} = To,
@@ -231,7 +235,7 @@ get_max_direction_chat(RSM) ->
 update_groups_caps(Server) ->
   Mod = gen_mod:db_mod(Server, mod_caps),
   lists:foreach(fun(Privacy) ->
-    DiscoInfo = client_disco_info(Privacy),
+    DiscoInfo = client_disco_info(Privacy, Server),
     Features = DiscoInfo#disco_info.features,
     Hash = mod_caps:compute_disco_hash(DiscoInfo, sha),
     NodePair = {?NS_GROUPS, Hash},

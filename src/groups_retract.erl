@@ -74,7 +74,7 @@ do_rewrite_message(Server, Group, UserS, ID, Timestamp, Message) ->
   GroupJID = jid:from_string(Group),
   UserJID = jid:from_string(UserS),
   case sql_get_message(Server, GroupJID#jid.luser, Timestamp) of
-    {ok, OldXML} ->
+    {ok, OldXML, Peer} ->
       OldMsg = xmpp:decode(fxml_stream:parse_element(OldXML)),
       SubEls = [El || El <- Message#message.sub_els, not rewrite_protected(El)],
       GrMsg = groups_messages:modify(Message#message{from = UserJID, to = GroupJID,
@@ -97,7 +97,11 @@ do_rewrite_message(Server, Group, UserS, ID, Timestamp, Message) ->
       EventXML = fxml:element_to_binary(xmpp:encode(Notify)),
       case sql_replace_group_message(Server, Group, Timestamp, OldXML,
           XML, Text, Tags, EventXML, Ver) of
-        {atomic, ok} -> send_notifications(Server, Group, Notify), ok;
+        {atomic, ok} ->
+          ejabberd_hooks:run(groups_archive_changed, Server,
+            [Server, Group, {replace, Timestamp, Peer, NewMsg}]),
+          send_notifications(Server, Group, Notify),
+          ok;
         {atomic, not_found} -> {error, not_found};
         {aborted, Reason} ->
           ?ERROR_MSG("Failed to replace group message: ~p", [Reason]),
@@ -123,6 +127,7 @@ retract_all_messages(Server, Group, User) ->
       XML = fxml:element_to_binary(xmpp:encode(Notify)),
       case sql_retract_group_archive(Server, Group, XML, Ver) of
         {atomic, ok} ->
+          ejabberd_hooks:run(groups_archive_changed, Server, [Server, Group, retract_archive]),
           delete_pinned_message(Server, Group, all),
           send_notifications(Server, Group, Notify),
           ok;
@@ -147,6 +152,7 @@ retract_user_messages(Server, Group, User, UserID) ->
       delete_pinned_message(Server, Group, {user, Peer}),
       case sql_retract_user_messages(Server, Group, Peer, XML, Ver) of
         {atomic, ok} ->
+          ejabberd_hooks:run(groups_archive_changed, Server, [Server, Group, {retract_sender, Peer}]),
           send_notifications(Server, Group, Notify),
           ok;
         {aborted, Reason} ->
@@ -183,6 +189,7 @@ retract_message(Server, Group, User, ID, Timestamp) ->
       XML = fxml:element_to_binary(xmpp:encode(Notify)),
       case sql_retract_message(Server, Group, Timestamp, XML, Ver) of
         {atomic, ok} ->
+          ejabberd_hooks:run(groups_archive_changed, Server, [Server, Group, {retract, Timestamp}]),
           delete_pinned_message(Server, Group, ID),
           send_notifications(Server, Group, Notify),
           ok;
@@ -348,9 +355,9 @@ sql_message_exists(Server, Group, ID) ->
 
 sql_get_message(Server, User, ID) ->
   case ejabberd_sql:sql_query(Server, ?SQL(
-    "select @(xml)s from archive where username=%(User)s "
+    "select @(xml)s, @(bare_peer)s from archive where username=%(User)s "
     "and timestamp=%(ID)d and %(Server)H")) of
-    {selected, [{XML}]} -> {ok, XML};
+    {selected, [{XML, Peer}]} -> {ok, XML, Peer};
     {selected, []} -> {error, not_found};
     Error ->
       ?ERROR_MSG("Failed to read group message: ~p", [Error]),

@@ -11,7 +11,8 @@
 -export([status/1, create_index/1, load_index/1, rebuild_index/1, load_status/1]).
 -export([store_mam_message/6]).
 -export([replace_message/4, retract_message/4, retract_all_messages/3, retract_archive/3]).
--export([process_iq/1, disco_sm_features/5]).
+-export([process_iq/1, process_group_iq/1, disco_sm_features/5,
+         groups_archive_changed/3, groups_group_removed/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
@@ -36,8 +37,14 @@ start(Host, Opts) ->
             ejabberd_hooks:add(retract_message, Host, ?MODULE, retract_message, 100),
             ejabberd_hooks:add(retract_all_messages, Host, ?MODULE, retract_all_messages, 100),
             ejabberd_hooks:add(retract_archive, Host, ?MODULE, retract_archive, 100),
+            ejabberd_hooks:add(groups_archive_changed, Host, ?MODULE, groups_archive_changed, 100),
+            ejabberd_hooks:add(groups_group_removed, Host, ?MODULE, groups_group_removed, 100),
             ejabberd_hooks:add(disco_sm_features, Host, ?MODULE, disco_sm_features, 50),
             gen_iq_handler:add_iq_handler(ejabberd_sm, Host, ?NS_MAM_2_SEARCH, ?MODULE, process_iq),
+            case gen_mod:is_loaded(Host, groups_discovery) of
+                true -> groups_discovery:update_groups_caps(Host);
+                false -> ok
+            end,
             Result;
         Error -> Error
     end.
@@ -50,6 +57,8 @@ stop(Host) ->
     ejabberd_hooks:delete(retract_message, Host, ?MODULE, retract_message, 100),
     ejabberd_hooks:delete(retract_all_messages, Host, ?MODULE, retract_all_messages, 100),
     ejabberd_hooks:delete(retract_archive, Host, ?MODULE, retract_archive, 100),
+    ejabberd_hooks:delete(groups_archive_changed, Host, ?MODULE, groups_archive_changed, 100),
+    ejabberd_hooks:delete(groups_group_removed, Host, ?MODULE, groups_group_removed, 100),
     case gen_mod:is_loaded_elsewhere(Host, ?MODULE) of
         false -> ejabberd_commands:unregister_commands(commands());
         true -> ok
@@ -128,36 +137,48 @@ disco_sm_features({result, Features}, #jid{luser = User, lserver = Server},
 disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
     Acc.
 
-process_iq(#iq{type = set, from = #jid{luser = User, lserver = Server},
+process_iq(#iq{to = #jid{luser = User, lserver = Server}} = IQ) ->
+    case mod_xabber_entity:get_entity_type(User, Server) of
+        group -> groups_iq_handler:make_action(IQ);
+        _ -> process_user_iq(IQ)
+    end.
+
+process_user_iq(#iq{type = set, from = #jid{luser = User, lserver = Server},
                to = #jid{luser = User, lserver = Server},
                sub_els = [#mam_search_query{}]} = IQ) ->
-    spawn(fun() -> ejabberd_router:route(process_search_iq(IQ)) end),
+    spawn(fun() -> ejabberd_router:route(process_search_iq(IQ, user)) end),
     ignore;
-process_iq(#iq{lang = Lang} = IQ) ->
+process_user_iq(#iq{lang = Lang} = IQ) ->
     xmpp:make_error(IQ, xmpp:err_bad_request(<<"Invalid search request">>, Lang)).
 
-process_search_iq(#iq{from = #jid{luser = User, lserver = Server} = From,
-                      to = To, lang = Lang,
-                      sub_els = [#mam_search_query{id = QueryID, xdata = XData, rsm = RSM}]} = IQ) ->
-    case parse_search_query(XData, RSM) of
+process_group_iq(IQ) ->
+    process_search_iq(IQ, group).
+
+process_search_iq(#iq{from = From, to = #jid{luser = User, lserver = Server} = To, lang = Lang,
+                      sub_els = [#mam_search_query{id = QueryID, xdata = XData, rsm = RSM}]} = IQ, Mode) ->
+    case parse_search_query(XData, RSM, Mode) of
         unsupported_full_jid ->
             xmpp:make_error(IQ, xmpp:err_feature_not_implemented(<<"Full JID search is not supported">>, Lang));
-        {ok, Text, Opts} ->
-            case proplists:get_value('conversation-type', Opts, ?NS_XABBER_CHAT) of
-                ?NS_XABBER_CHAT ->
-                    case search_iq_page(Server, User, Text, Opts) of
-                        {ok, IDs, Complete} ->
-                            case sql_search_archive(Server, User, IDs) of
-                                {ok, Rows} ->
-                                    send_search_results(IQ, Rows, IDs, Complete, From, To, QueryID);
-                                {error, _} -> xmpp:make_error(IQ, xmpp:err_internal_server_error())
-                            end;
-                        {error, not_found} -> xmpp:make_error(IQ, xmpp:err_item_not_found());
+        {ok, Text, Opts0} ->
+            Opts = case Mode of user -> Opts0; group -> proplists:delete(peer, Opts0) end,
+            search_archive(IQ, Mode, Server, User, Text, Opts, From, To, QueryID);
+        error -> xmpp:make_error(IQ, xmpp:err_bad_request(<<"Invalid search form or RSM">>, Lang))
+    end.
+
+search_archive(IQ, Mode, Server, User, Text, Opts, From, To, QueryID) ->
+    Type = proplists:get_value('conversation-type', Opts, ?NS_XABBER_CHAT),
+    case Type == ?NS_XABBER_CHAT orelse (Mode == group andalso Type == ?NS_GROUPS) of
+        true ->
+            case search_iq_page(Server, User, Text, Opts) of
+                {ok, IDs, Complete} ->
+                    case sql_search_archive(Server, User, IDs) of
+                        {ok, Rows} -> send_search_results(IQ, Rows, IDs, Complete, From, To, QueryID, Mode);
                         {error, _} -> xmpp:make_error(IQ, xmpp:err_internal_server_error())
                     end;
-                _ -> send_search_results(IQ, [], [], true, From, To, QueryID)
+                {error, not_found} -> xmpp:make_error(IQ, xmpp:err_item_not_found());
+                {error, _} -> xmpp:make_error(IQ, xmpp:err_internal_server_error())
             end;
-        error -> xmpp:make_error(IQ, xmpp:err_bad_request(<<"Invalid search form or RSM">>, Lang))
+        false -> send_search_results(IQ, [], [], true, From, To, QueryID, Mode)
     end.
 
 search_iq_page(Server, User, Text, Opts) ->
@@ -171,7 +192,7 @@ search_iq_page(Server, User, Text, Opts) ->
             end
     end.
 
-parse_search_query(#xdata{type = submit, fields = Fields}, RSM) ->
+parse_search_query(#xdata{type = submit, fields = Fields}, RSM, Mode) ->
     try
         #xdata_field{values = [?NS_MAM_2_SEARCH]} = lists:keyfind(<<"FORM_TYPE">>, #xdata_field.var, Fields),
         Form = mam_search_query:decode(Fields, [?NS_MAM_2_SEARCH], [<<"text">>]),
@@ -185,14 +206,14 @@ parse_search_query(#xdata{type = submit, fields = Fields}, RSM) ->
         true = StartUS =:= undefined orelse EndUS =:= undefined orelse StartUS =< EndUS,
         Peer = proplists:get_value(with, Form),
         case Peer of
-            #jid{lresource = Resource} when Resource /= <<>> -> unsupported_full_jid;
+            #jid{lresource = Resource} when Mode == user, Resource /= <<>> -> unsupported_full_jid;
             _ -> {ok, Text, [{limit, Limit}, {direction, Direction}, {cursor, Cursor},
                              {peer, Peer}, {start, StartUS}, {'end', EndUS},
                              {'conversation-type', proplists:get_value('conversation-type', Form, ?NS_XABBER_CHAT)}]}
         end
     catch _:_ -> error
     end;
-parse_search_query(_, _) -> error.
+parse_search_query(_, _, _) -> error.
 
 search_timestamp(undefined) -> undefined;
 search_timestamp(Timestamp) -> misc:now_to_usec(Timestamp).
@@ -212,12 +233,14 @@ search_cursor(ID) ->
     true = Value >= 0,
     Value.
 
-send_search_results(IQ, Rows, _IDs, Complete, From, To, QueryID) ->
+send_search_results(IQ, Rows, _IDs, Complete, From, To, QueryID, Mode) ->
     Archive = jid:remove_resource(To),
+    Requestor = case Mode of user -> From; group -> Archive end,
     Messages = lists:filtermap(fun({Timestamp, XML, Peer, Kind, Nick}) ->
         ID = integer_to_binary(Timestamp),
-        case mod_mam_sql:make_archive_el(ID, XML, Peer, Kind, Nick, chat, From, Archive) of
-            {ok, Forwarded} ->
+        case mod_mam_sql:make_archive_el(ID, XML, Peer, Kind, Nick, chat, Requestor, Archive) of
+            {ok, Forwarded0} ->
+                Forwarded = search_forwarded(Mode, Forwarded0, Archive),
                 Packet = #message{from = To, to = From,
                     sub_els = [#mam_result{xmlns = ?NS_MAM_2, id = ID,
                                            queryid = QueryID, sub_els = [Forwarded]}]},
@@ -235,6 +258,11 @@ send_search_results(IQ, Rows, _IDs, Complete, From, To, QueryID) ->
     end,
     xmpp:make_iq_result(IQ, #mam_fin{xmlns = ?NS_MAM_2, id = QueryID,
                                      rsm = RSM, complete = Complete}).
+
+search_forwarded(group, #forwarded{sub_els = [Message]} = Forwarded, Archive) ->
+    Forwarded#forwarded{sub_els = [xmpp:set_from_to(Message, Archive, Archive)]};
+search_forwarded(user, Forwarded, _Archive) ->
+    Forwarded.
 
 call(Host, Request) ->
     try gen_server:call(gen_mod:get_module_proc(Host, ?MODULE), Request, 30000)
@@ -280,6 +308,22 @@ retract_all_messages(_User, _Server, _Event) ->
 retract_archive(User, Server, #retract_archive{}) ->
     gen_server:cast(gen_mod:get_module_proc(Server, ?MODULE),
                     {retract_archive, User, Server}).
+
+groups_archive_changed(Server, Group, Change) ->
+    #jid{luser = User} = jid:decode(Group),
+    Request = case Change of
+        {replace, Timestamp, Peer, Message} ->
+            {replace_message, User, Server, jid:decode(Peer), Timestamp, Message};
+        {retract, Timestamp} -> {retract_message, Server, Timestamp};
+        {retract_sender, Peer} ->
+            BarePeer = jid:encode(jid:tolower(jid:remove_resource(jid:decode(Peer)))),
+            {retract_all_messages, User, Server, BarePeer};
+        retract_archive -> {retract_archive, User, Server}
+    end,
+    gen_server:cast(gen_mod:get_module_proc(Server, ?MODULE), Request).
+
+groups_group_removed(Server, Group) ->
+    groups_archive_changed(Server, Group, retract_archive).
 
 init([Host, Opts]) ->
     self() ! connect,
@@ -382,10 +426,7 @@ handle_cast({reload, Opts}, State) ->
     self() ! connect,
     {noreply, State1#state{opts = Opts}};
 handle_cast({store_message, User, Server, Peer, Timestamp, Pkt}, State) ->
-    case mod_xabber_entity:is_group(User, Server) of
-        true -> ok;
-        false -> store_message(User, Server, Peer, Timestamp, Pkt, State)
-    end,
+    store_message(User, Server, Peer, Timestamp, Pkt, State),
     {noreply, State};
 handle_cast({replace_message, User, Server, Peer, Timestamp, Pkt}, State) ->
     case fxml:get_subtag_cdata(xmpp:encode(Pkt), <<"body">>) of
@@ -519,8 +560,6 @@ sql_archive_batch(Host, After) ->
         "where a.server_host=%(Host)s and a.timestamp > %(After)d "
         "and a.conversation_type=%(ChatType)s "
         "and a.txt is not null and a.txt != '' "
-        "and a.username not in (select g.localpart from groupchats g "
-        "where g.server_host=%(Host)s) "
         "order by a.timestamp limit %(Limit)d")) of
         {selected, Rows} -> {ok, Rows};
         Error -> {error, Error}

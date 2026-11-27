@@ -110,7 +110,7 @@ do_send_presence(From, To, Type, GroupEl) ->
            _ -> chat
          end,
   DiscoInfo = groups_discovery:client_disco_info(
-    GroupEl#groups_group.privacy),
+    GroupEl#groups_group.privacy, From#jid.lserver),
   DiscoHash = mod_caps:compute_disco_hash(DiscoInfo, sha),
   Caps = #caps{hash = <<"sha-1">>, node = ?NS_GROUPS, version = DiscoHash},
   P = #presence{type = Type, id = randoms:get_string(),
